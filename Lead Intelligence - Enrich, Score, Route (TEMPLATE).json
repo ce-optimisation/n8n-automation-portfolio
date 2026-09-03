@@ -1,0 +1,407 @@
+{
+  "name": "Lead Intelligence - Enrich, Score, Route (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "<<EDIT_ME:webhook-path-per-client>>",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "90e7da9b-d9fb-4cb5-afcf-0d16a5d7a27f",
+      "name": "New Lead Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -3008,
+        -288
+      ],
+      "webhookId": "058adb61-5cf5-470b-b18b-eaaeb63fa169"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "enrichment_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:enrichment provider API, e.g. Apollo people/organizations enrich>>"
+            },
+            {
+              "name": "ai_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:Claude API endpoint>>"
+            },
+            {
+              "name": "qualification_criteria",
+              "type": "string",
+              "value": "<<EDIT_ME:client's ICP/qualification criteria - company size, industry, budget signal, etc, agreed at onboarding>>"
+            },
+            {
+              "name": "score_threshold",
+              "type": "number",
+              "value": 70
+            },
+            {
+              "name": "sales_notify_email",
+              "type": "string",
+              "value": "<<EDIT_ME:sales@client-domain.com>>"
+            },
+            {
+              "name": "crm_record_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:CRM/Supabase write endpoint for the lead record>>"
+            },
+            {
+              "name": "nurture_list_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:endpoint/list to add lower-scoring leads to for nurture sequence>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7269dc00-6f7d-4ec3-92a4-03af727b40fd",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2784,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "lead_email",
+              "type": "string",
+              "value": "={{$json.lead_email}}"
+            },
+            {
+              "name": "lead_name",
+              "type": "string",
+              "value": "={{$json.lead_name}}"
+            },
+            {
+              "name": "lead_company",
+              "type": "string",
+              "value": "={{$json.lead_company}}"
+            },
+            {
+              "name": "lead_source",
+              "type": "string",
+              "value": "={{$json.lead_source}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7cff214a-6fd0-4b7c-8bde-68a731096bce",
+      "name": "Map Lead Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2560,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.enrichment_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{$('Map Lead Fields').item.json.lead_email}}"
+            },
+            {
+              "name": "company",
+              "value": "={{$('Map Lead Fields').item.json.lead_company}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0a6d4640-3d15-4ee1-b55c-16824bc048a5",
+      "name": "Enrich Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2352,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.ai_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_data",
+              "value": "={{$json}}"
+            },
+            {
+              "name": "qualification_criteria",
+              "value": "={{$('Config').item.json.qualification_criteria}}"
+            },
+            {
+              "name": "instruction",
+              "value": "<<EDIT_ME:instruct model to return structured JSON: score (0-100), reasoning, recommended_next_action - scored strictly against qualification_criteria, do not invent data not present in the enrichment result>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4a7c367-8021-4aaa-871f-f540ed93c4b6",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2128,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.score}}",
+              "rightValue": "={{$('Config').item.json.score_threshold}}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "25038dec-0af8-4024-9b43-33b0311371fd",
+      "name": "IF Score Above Threshold",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1904,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sales_notify_email}}",
+        "toEmail": "={{$('Config').item.json.sales_notify_email}}",
+        "subject": "Hot lead - score {{$json.score}}",
+        "html": "{{$('Map Lead Fields').item.json.lead_name}} at {{$('Map Lead Fields').item.json.lead_company}} scored {{$json.score}}/100. Reasoning: {{$json.reasoning}}. Recommended action: {{$json.recommended_next_action}}.",
+        "options": {}
+      },
+      "id": "149d29d3-6464-47af-b91d-a684f667d339",
+      "name": "Notify Sales - Hot Lead",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1680,
+        -400
+      ],
+      "webhookId": "a2a51826-efe6-4941-afbb-5ad3148c4cf0"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.nurture_list_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_email",
+              "value": "={{$('Map Lead Fields').item.json.lead_email}}"
+            },
+            {
+              "name": "score",
+              "value": "={{$json.score}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "57d9aaef-2f60-46b9-8752-a9bc47cab60f",
+      "name": "Add to Nurture List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1680,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.crm_record_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_email",
+              "value": "={{$('Map Lead Fields').item.json.lead_email}}"
+            },
+            {
+              "name": "lead_company",
+              "value": "={{$('Map Lead Fields').item.json.lead_company}}"
+            },
+            {
+              "name": "lead_source",
+              "value": "={{$('Map Lead Fields').item.json.lead_source}}"
+            },
+            {
+              "name": "score",
+              "value": "={{$json.score}}"
+            },
+            {
+              "name": "reasoning",
+              "value": "={{$json.reasoning}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8ab57dcc-3ad8-4ba3-8adf-66d52c73ca5a",
+      "name": "Log Lead Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1472,
+        -288
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "New Lead Received": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Map Lead Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Lead Fields": {
+      "main": [
+        [
+          {
+            "node": "Enrich Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Lead": {
+      "main": [
+        [
+          {
+            "node": "Score Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Lead": {
+      "main": [
+        [
+          {
+            "node": "IF Score Above Threshold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Score Above Threshold": {
+      "main": [
+        [
+          {
+            "node": "Notify Sales - Hot Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add to Nurture List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Sales - Hot Lead": {
+      "main": [
+        [
+          {
+            "node": "Log Lead Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Nurture List": {
+      "main": [
+        [
+          {
+            "node": "Log Lead Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "0c8d43c3-3caf-4d0e-9dae-a584587c1d43",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "mKgn7XHsPDUsKcO7",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:35:11.722Z",
+      "createdAt": "2026-07-21T13:35:11.722Z",
+      "id": "dWK2M5RQ5KBcKvo3",
+      "name": "Outcome: Stop Losing Lea"
+    }
+  ]
+}

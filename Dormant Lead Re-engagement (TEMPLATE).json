@@ -1,0 +1,318 @@
+{
+  "name": "Dormant Lead Re-engagement (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "da9e8a21-c273-4ae9-9db8-97055157af4a",
+      "name": "Daily Inactivity Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:sales@client-domain.com>>"
+            },
+            {
+              "name": "dormant_after_days",
+              "type": "number",
+              "value": 30
+            },
+            {
+              "name": "archive_after_days",
+              "type": "number",
+              "value": 60
+            },
+            {
+              "name": "lead_source_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:CRM/Sheet endpoint returning leads with last_activity_date>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9366f61d-7e81-4d8a-ae57-3d1ab41f92c2",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.lead_source_endpoint}}",
+        "options": {}
+      },
+      "id": "783aa965-6ae5-4f5c-a7fe-eea6d7e07275",
+      "name": "Pull Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.days_since_last_activity}}",
+              "rightValue": "={{$('Config').item.json.dormant_after_days}}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "leftValue": "={{$json.reengaged}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f9158503-95af-4299-9b39-21774c201c15",
+      "name": "Filter - Dormant Not Yet Re-engaged",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$json.email}}",
+        "subject": "Still thinking it over?",
+        "html": "<<EDIT_ME:low-pressure re-engagement email body>>",
+        "options": {}
+      },
+      "id": "b76be0e0-930b-4fa9-8c8a-bacb3d0316be",
+      "name": "Send Re-engagement Message",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ],
+      "webhookId": "68f011b1-fcb6-4b29-a965-bb7d1f894979"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.lead_source_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{$json.lead_id}}"
+            },
+            {
+              "name": "reengaged",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "335d0381-ab52-4480-9947-8db5356186c0",
+      "name": "Mark Re-engaged Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1104,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.days_since_last_activity}}",
+              "rightValue": "={{$('Config').item.json.archive_after_days}}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "leftValue": "={{$json.reengaged}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1676ba55-3a6b-485b-8a87-99312bd69bc6",
+      "name": "Filter - Past Archive Threshold, No Response",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.lead_source_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{$json.lead_id}}"
+            },
+            {
+              "name": "status",
+              "value": "archived"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b976dbe4-56dd-4dc4-96b5-071c21f3d412",
+      "name": "Archive Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        208
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Inactivity Check": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Pull Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter - Dormant Not Yet Re-engaged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Dormant Not Yet Re-engaged": {
+      "main": [
+        [
+          {
+            "node": "Send Re-engagement Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Re-engagement Message": {
+      "main": [
+        [
+          {
+            "node": "Mark Re-engaged Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Past Archive Threshold, No Response": {
+      "main": [
+        [
+          {
+            "node": "Archive Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "1e5bc71d-5731-4bc1-bb17-0b00af4f1499",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "nmAqzBNVO9my8Axa",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}

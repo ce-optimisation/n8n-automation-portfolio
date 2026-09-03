@@ -1,0 +1,333 @@
+{
+  "name": "Complaint Escalation (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "<<EDIT_ME:webhook-path-per-client>>",
+        "options": {}
+      },
+      "id": "c9e861b4-304b-420d-a58a-ce1336b95a6c",
+      "name": "Issue Flagged",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -3232,
+        -288
+      ],
+      "webhookId": "795076fe-8984-4baa-960f-6619e54ade8c"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:support@client-domain.com>>"
+            },
+            {
+              "name": "manager_email",
+              "type": "string",
+              "value": "<<EDIT_ME:manager@client-domain.com>>"
+            },
+            {
+              "name": "owner_email",
+              "type": "string",
+              "value": "<<EDIT_ME:owner@client-domain.com>>"
+            },
+            {
+              "name": "sla_hours",
+              "type": "number",
+              "value": 24
+            },
+            {
+              "name": "complaint_status_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:endpoint returning complaint resolution status>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d77401fd-f9cb-45bd-80b0-a75b28ebef6a",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3008,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "complaint_id",
+              "type": "string",
+              "value": "={{$json.complaint_id}}"
+            },
+            {
+              "name": "customer_email",
+              "type": "string",
+              "value": "={{$json.customer_email}}"
+            },
+            {
+              "name": "complaint_summary",
+              "type": "string",
+              "value": "={{$json.complaint_summary}}"
+            },
+            {
+              "name": "severity",
+              "type": "string",
+              "value": "={{$json.severity}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8b16696c-1d57-40d0-a5bc-164631cf6998",
+      "name": "Map Complaint Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2784,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Config').item.json.manager_email}}",
+        "subject": "Complaint flagged — action needed",
+        "html": "={{$('Map Complaint Fields').item.json.complaint_summary}}",
+        "options": {}
+      },
+      "id": "1ceea3cd-f9ee-47c2-badc-99786e728398",
+      "name": "Route to Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -2560,
+        -288
+      ],
+      "webhookId": "5d264b84-b398-49cf-b054-3293895bd4b2"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Complaint Fields').item.json.customer_email}}",
+        "subject": "We've received your feedback",
+        "html": "<<EDIT_ME:acknowledgement email — sets expectation on response time>>",
+        "options": {}
+      },
+      "id": "c6e5d6b8-1ef2-426e-9e61-a9d007c7dba9",
+      "name": "Acknowledge to Customer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -2560,
+        -144
+      ],
+      "webhookId": "97b64e42-a9ad-452e-bdcf-64a10736513e"
+    },
+    {
+      "parameters": {
+        "amount": "={{$('Config').item.json.sla_hours}}",
+        "unit": "hours"
+      },
+      "id": "455fb59a-574f-481e-957d-f11df242cc7c",
+      "name": "SLA Timer",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2352,
+        -288
+      ],
+      "webhookId": "e0c58306-e5e6-4376-9a97-9cdd69948aec"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.complaint_status_endpoint}}",
+        "options": {}
+      },
+      "id": "4a15a74c-4d61-457c-9b27-deb4ac2e1d6e",
+      "name": "Check Resolution Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2128,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.resolved}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6a67d74f-adb4-4994-8569-5e593019cbeb",
+      "name": "IF Unresolved Past SLA",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1904,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Config').item.json.owner_email}}",
+        "subject": "SLA breached — complaint unresolved",
+        "html": "Complaint {{$('Map Complaint Fields').item.json.complaint_id}} is unresolved past the {{$('Config').item.json.sla_hours}}hr SLA. Severity: {{$('Map Complaint Fields').item.json.severity}}.",
+        "options": {}
+      },
+      "id": "98e882f7-d259-46e4-b55f-41442cb9e7e3",
+      "name": "Escalate to Owner",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1680,
+        -400
+      ],
+      "webhookId": "833f21b9-04e8-408c-8a0f-028bc236d502"
+    },
+    {
+      "parameters": {},
+      "id": "34be7df7-732f-48b7-844b-f674895e29cb",
+      "name": "End - Resolved",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -1680,
+        -192
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Issue Flagged": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Map Complaint Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Complaint Fields": {
+      "main": [
+        [
+          {
+            "node": "Route to Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route to Manager": {
+      "main": [
+        [
+          {
+            "node": "SLA Timer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SLA Timer": {
+      "main": [
+        [
+          {
+            "node": "Check Resolution Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Resolution Status": {
+      "main": [
+        [
+          {
+            "node": "IF Unresolved Past SLA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Unresolved Past SLA": {
+      "main": [
+        [
+          {
+            "node": "Escalate to Owner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "End - Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "42c11992-60f9-4cbb-b6ea-236c40813191",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "MiNh4DVaTDOF2KHX",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}

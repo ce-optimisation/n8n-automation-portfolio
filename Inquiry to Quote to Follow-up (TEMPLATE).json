@@ -1,0 +1,528 @@
+{
+  "name": "Inquiry to Quote to Follow-up (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "<<EDIT_ME:webhook-path-per-client>>",
+        "options": {}
+      },
+      "id": "12401816-7ce6-4c54-b2f4-773410fa9890",
+      "name": "Inquiry Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -5648,
+        -240
+      ],
+      "webhookId": "be610d18-03e7-4ccc-8d54-478ff33fb9ca"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:sender@client-domain.com>>"
+            },
+            {
+              "name": "internal_notify_email",
+              "type": "string",
+              "value": "<<EDIT_ME:owner@client-domain.com>>"
+            },
+            {
+              "name": "followup_1_delay_days",
+              "type": "number",
+              "value": 3
+            },
+            {
+              "name": "followup_2_delay_days",
+              "type": "number",
+              "value": 4
+            },
+            {
+              "name": "status_check_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:CRM or Sheet status-check URL>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e867fe5a-b949-4781-aec6-80055c494705",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -5424,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "contact_name",
+              "type": "string",
+              "value": "={{$json.name}}"
+            },
+            {
+              "name": "contact_email",
+              "type": "string",
+              "value": "={{$json.email}}"
+            },
+            {
+              "name": "service_requested",
+              "type": "string",
+              "value": "={{$json.service}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "190111e3-7b48-49bc-a9c3-dfff1d6c5095",
+      "name": "Map Inquiry Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -5200,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "<<EDIT_ME:quote-generator endpoint (reuse Diagnostic Report / PDF generator pattern)>>",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contact_name",
+              "value": "={{$json.contact_name}}"
+            },
+            {
+              "name": "service_requested",
+              "value": "={{$json.service_requested}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "36d0a4ca-3b5e-4b68-8705-9b8f48fdd523",
+      "name": "Generate Quote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4992,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Inquiry Fields').item.json.contact_email}}",
+        "subject": "Your quote from <<EDIT_ME:Client Business Name>>",
+        "html": "<<EDIT_ME:quote email HTML body, insert PDF/quote link>>",
+        "options": {}
+      },
+      "id": "010d5f0e-d087-49bb-81b9-7e2a8d475b32",
+      "name": "Send Quote Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -4768,
+        -240
+      ],
+      "webhookId": "55343f62-bf66-4261-b582-fd733063395b"
+    },
+    {
+      "parameters": {
+        "amount": "={{$('Config').item.json.followup_1_delay_days}}",
+        "unit": "days"
+      },
+      "id": "3200dfd7-935b-4e94-9dbe-2975af40614c",
+      "name": "Wait - Followup 1",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -4544,
+        -240
+      ],
+      "webhookId": "253b7c16-334e-4688-b876-7a517f087256"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.status_check_endpoint}}",
+        "options": {}
+      },
+      "id": "65e1c1f1-f46c-40cc-aec5-eee7c8522c0a",
+      "name": "Check Reply Status 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4320,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.status}}",
+              "rightValue": "replied",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "leftValue": "={{$json.status}}",
+              "rightValue": "booked",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6452f6df-d369-43e0-a24a-54d379529ab4",
+      "name": "IF Replied or Booked",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -4112,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Inquiry Fields').item.json.contact_email}}",
+        "subject": "Following up on your quote",
+        "html": "<<EDIT_ME:follow-up 1 email HTML body>>",
+        "options": {}
+      },
+      "id": "ffc24064-e71b-48ff-9562-bd6fb628318b",
+      "name": "Send Follow-up 1",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -3888,
+        -352
+      ],
+      "webhookId": "bbfb78d9-346b-4c91-a20d-8b14dcd641cb"
+    },
+    {
+      "parameters": {
+        "amount": "={{$('Config').item.json.followup_2_delay_days}}",
+        "unit": "days"
+      },
+      "id": "f3eaf9d9-6ce1-4f5f-8f41-75c1b732faca",
+      "name": "Wait - Followup 2",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -3664,
+        -352
+      ],
+      "webhookId": "150a56d3-10d6-40fa-9a25-c1e2c2d97f46"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.status_check_endpoint}}",
+        "options": {}
+      },
+      "id": "391d1bbd-8c26-4743-8e96-582efab448f6",
+      "name": "Check Reply Status 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3440,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.status}}",
+              "rightValue": "replied",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "leftValue": "={{$json.status}}",
+              "rightValue": "booked",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "adb4520a-9cc1-46e9-900c-9d8e8b513cb1",
+      "name": "IF Still No Reply",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -3232,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Inquiry Fields').item.json.contact_email}}",
+        "subject": "Last check-in on your quote",
+        "html": "<<EDIT_ME:final follow-up email HTML body, low-pressure close>>",
+        "options": {}
+      },
+      "id": "0dc53a7c-5291-49f5-914a-60f234d82ef6",
+      "name": "Send Follow-up 2 (Final)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -3008,
+        -448
+      ],
+      "webhookId": "6eb45731-bda3-48d7-a461-fbdfa62ebbf2"
+    },
+    {
+      "parameters": {},
+      "id": "6fddba85-d555-40fa-a856-5904b37cc866",
+      "name": "End - No Response",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -2784,
+        -448
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "d6fe4f4c-7592-4f66-b535-b6084f939219",
+      "name": "End - Replied/Booked (early exit 1)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -3888,
+        -144
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "916a5365-693f-484b-89b0-f10cd6e943c0",
+      "name": "End - Replied/Booked (early exit 2)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -3232,
+        -192
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Inquiry Received": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Map Inquiry Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Inquiry Fields": {
+      "main": [
+        [
+          {
+            "node": "Generate Quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Quote": {
+      "main": [
+        [
+          {
+            "node": "Send Quote Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Quote Email": {
+      "main": [
+        [
+          {
+            "node": "Wait - Followup 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait - Followup 1": {
+      "main": [
+        [
+          {
+            "node": "Check Reply Status 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Reply Status 1": {
+      "main": [
+        [
+          {
+            "node": "IF Replied or Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Replied or Booked": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-up 1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "End - Replied/Booked (early exit 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-up 1": {
+      "main": [
+        [
+          {
+            "node": "Wait - Followup 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait - Followup 2": {
+      "main": [
+        [
+          {
+            "node": "Check Reply Status 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Reply Status 2": {
+      "main": [
+        [
+          {
+            "node": "IF Still No Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Still No Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-up 2 (Final)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "End - Replied/Booked (early exit 2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-up 2 (Final)": {
+      "main": [
+        [
+          {
+            "node": "End - No Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "19caf34e-1736-4303-b0d3-cb74999a59ca",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "t6blWRKOzoghaiwO",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}

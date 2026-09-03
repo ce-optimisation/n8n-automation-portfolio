@@ -1,0 +1,410 @@
+{
+  "name": "Approval Routing (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "<<EDIT_ME:webhook-path-per-client>>",
+        "options": {}
+      },
+      "id": "710590e4-8bd5-40c5-8979-44d063e137cb",
+      "name": "Request Submitted",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -3888,
+        -288
+      ],
+      "webhookId": "5d702f3c-8193-4d45-9667-6c3b8feb6400"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:noreply@client-domain.com>>"
+            },
+            {
+              "name": "approver_lookup_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:endpoint mapping request_type to approver_email>>"
+            },
+            {
+              "name": "reminder_delay_hours",
+              "type": "number",
+              "value": 24
+            },
+            {
+              "name": "approval_status_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:endpoint returning approval decision>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "78fb5aec-a5ea-412e-babd-aa3e19d21bca",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3664,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "requester_email",
+              "type": "string",
+              "value": "={{$json.requester_email}}"
+            },
+            {
+              "name": "request_type",
+              "type": "string",
+              "value": "={{$json.request_type}}"
+            },
+            {
+              "name": "request_id",
+              "type": "string",
+              "value": "={{$json.request_id}}"
+            },
+            {
+              "name": "request_summary",
+              "type": "string",
+              "value": "={{$json.request_summary}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a2872aa2-2121-4401-9eec-f7018dbb4cde",
+      "name": "Map Request Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3440,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.approver_lookup_endpoint}}",
+        "options": {}
+      },
+      "id": "19b1fd5c-9435-4c45-9f55-d33a937fbfaa",
+      "name": "Lookup Approver",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3232,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$json.approver_email}}",
+        "subject": "Approval needed",
+        "html": "<<EDIT_ME:approval request email, include approve/reject links or reference request_id>>",
+        "options": {}
+      },
+      "id": "5c752ff1-e702-4ccb-95ff-906c908767dd",
+      "name": "Send for Approval",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -3008,
+        -288
+      ],
+      "webhookId": "8dc7bc20-fb83-404b-aed2-7504299d10cb"
+    },
+    {
+      "parameters": {
+        "amount": "={{$('Config').item.json.reminder_delay_hours}}",
+        "unit": "hours"
+      },
+      "id": "b3756dcc-9cab-4869-9fe1-38f126f99efe",
+      "name": "Wait - Reminder Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2784,
+        -288
+      ],
+      "webhookId": "315cfe42-47a4-49df-b5b4-950283cc52bc"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.approval_status_endpoint}}",
+        "options": {}
+      },
+      "id": "56cff2df-1d61-40d0-ba4d-bc8304656aaf",
+      "name": "Check Decision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2560,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.decision}}",
+              "rightValue": "pending",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "377e247b-052b-49b5-ab9f-330efe32b4e9",
+      "name": "IF Still Pending",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2352,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "<<EDIT_ME:re-derive approver_email or store from Lookup Approver step>>",
+        "subject": "Reminder: approval pending",
+        "html": "<<EDIT_ME:reminder email body>>",
+        "options": {}
+      },
+      "id": "b95e04d5-9757-4d57-b543-2e9ff11b6779",
+      "name": "Send Reminder to Approver",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -2128,
+        -400
+      ],
+      "webhookId": "02aee83b-b1ee-41b2-869e-384537015604"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.decision}}",
+              "rightValue": "approved",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "91744701-b1a2-43ef-92e6-a79cfffab8e8",
+      "name": "IF Approved",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2128,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Request Fields').item.json.requester_email}}",
+        "subject": "Your request was approved",
+        "html": "<<EDIT_ME:approval-confirmed email body>>",
+        "options": {}
+      },
+      "id": "53a69d93-b5a3-4275-9fb0-2056d4cb7d57",
+      "name": "Notify Requester - Approved",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1904,
+        -240
+      ],
+      "webhookId": "2d21bfe7-0aca-4132-ab1a-1b095aaa0ec0"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Request Fields').item.json.requester_email}}",
+        "subject": "Your request was not approved",
+        "html": "<<EDIT_ME:rejection email body>>",
+        "options": {}
+      },
+      "id": "28e9aa45-bb87-4c07-a085-9cf8a3035238",
+      "name": "Notify Requester - Rejected",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1904,
+        -144
+      ],
+      "webhookId": "c3632958-11fe-4399-980b-effb7a08601f"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Request Submitted": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Map Request Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Request Fields": {
+      "main": [
+        [
+          {
+            "node": "Lookup Approver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Approver": {
+      "main": [
+        [
+          {
+            "node": "Send for Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send for Approval": {
+      "main": [
+        [
+          {
+            "node": "Wait - Reminder Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait - Reminder Delay": {
+      "main": [
+        [
+          {
+            "node": "Check Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Decision": {
+      "main": [
+        [
+          {
+            "node": "IF Still Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Still Pending": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder to Approver",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Approved": {
+      "main": [
+        [
+          {
+            "node": "Notify Requester - Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Requester - Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "2bb64547-545b-479e-ba00-fe41021bfe27",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "qUDvOpjiefGX38Uj",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}

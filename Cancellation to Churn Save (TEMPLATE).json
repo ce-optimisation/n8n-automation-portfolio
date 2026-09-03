@@ -1,0 +1,384 @@
+{
+  "name": "Cancellation to Churn Save (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "<<EDIT_ME:webhook-path-per-client>>",
+        "options": {}
+      },
+      "id": "0fc3014e-b371-4873-9067-97df61344e6d",
+      "name": "Cancellation Requested",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1904,
+        -400
+      ],
+      "webhookId": "8db5264c-17cd-41ff-ac1c-b23ef41782bf"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:accounts@client-domain.com>>"
+            },
+            {
+              "name": "internal_notify_email",
+              "type": "string",
+              "value": "<<EDIT_ME:owner@client-domain.com>>"
+            },
+            {
+              "name": "retention_offer_text",
+              "type": "string",
+              "value": "<<EDIT_ME:the actual offer — discount, pause option, downgrade path>>"
+            },
+            {
+              "name": "response_wait_days",
+              "type": "number",
+              "value": 3
+            },
+            {
+              "name": "cancellation_status_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:endpoint returning whether client accepted retention offer>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "94dca73b-13f5-43fa-b0f3-64083f9e3e5d",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1680,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "client_email",
+              "type": "string",
+              "value": "={{$json.client_email}}"
+            },
+            {
+              "name": "client_name",
+              "type": "string",
+              "value": "={{$json.client_name}}"
+            },
+            {
+              "name": "cancellation_reason",
+              "type": "string",
+              "value": "={{$json.cancellation_reason}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "32ce595f-c9f1-443d-ae00-eb96fc7bb706",
+      "name": "Map Client Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1472,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Config').item.json.internal_notify_email}}",
+        "subject": "Cancellation request — retention offer sent",
+        "html": "={{$('Map Client Fields').item.json.client_name}} requested cancellation. Reason: {{$('Map Client Fields').item.json.cancellation_reason}}.",
+        "options": {}
+      },
+      "id": "85e6ef7d-fecb-4a3b-9618-98a19a240b44",
+      "name": "Notify Owner - Cancellation Flagged",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1248,
+        -400
+      ],
+      "webhookId": "6b5ed184-df54-4b1e-b5c6-fe56ce1eeff2"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Client Fields').item.json.client_email}}",
+        "subject": "Before you go",
+        "html": "={{$('Config').item.json.retention_offer_text}}",
+        "options": {}
+      },
+      "id": "708d8162-360b-4523-a5c3-191e9d967174",
+      "name": "Send Retention Offer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1248,
+        -240
+      ],
+      "webhookId": "154b3551-28c9-4eef-a8d4-87eac9fe267d"
+    },
+    {
+      "parameters": {
+        "amount": "={{$('Config').item.json.response_wait_days}}",
+        "unit": "days"
+      },
+      "id": "ca87a71b-650f-4f9a-9dfc-8ae357bccd7b",
+      "name": "Wait for Response",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -1024,
+        -240
+      ],
+      "webhookId": "6f9436d5-d187-4afc-8e2f-255ef113ba7f"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.cancellation_status_endpoint}}",
+        "options": {}
+      },
+      "id": "6412f786-62ab-46fd-812e-7dd69561284d",
+      "name": "Check Offer Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -800,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.accepted_offer}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4022470a-2aec-45ef-9c2a-5957894b0d53",
+      "name": "IF Accepted Offer",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -592,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.cancellation_status_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_email",
+              "value": "={{$('Map Client Fields').item.json.client_email}}"
+            },
+            {
+              "name": "status",
+              "value": "retained"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f983d76d-50f8-411c-a9a4-ae2628170ce2",
+      "name": "Confirm Retention - Update Records",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -368,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.cancellation_status_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_email",
+              "value": "={{$('Map Client Fields').item.json.client_email}}"
+            },
+            {
+              "name": "status",
+              "value": "cancelled"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "47e67f7c-8ed3-4c55-8ef5-75705ffc935e",
+      "name": "Process Cancellation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -368,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Config').item.json.internal_notify_email}}",
+        "subject": "Cancellation confirmed",
+        "html": "={{$('Map Client Fields').item.json.client_name}} did not accept the retention offer. Cancellation processed.",
+        "options": {}
+      },
+      "id": "160eaa14-e9d6-4160-b456-690bb3fa9859",
+      "name": "Notify Owner - Confirmed Cancelled",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -144,
+        -144
+      ],
+      "webhookId": "f0021c02-0241-431a-ab70-c90fc2992bc4"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cancellation Requested": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Map Client Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Client Fields": {
+      "main": [
+        [
+          {
+            "node": "Notify Owner - Cancellation Flagged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Retention Offer": {
+      "main": [
+        [
+          {
+            "node": "Wait for Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Response": {
+      "main": [
+        [
+          {
+            "node": "Check Offer Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Offer Response": {
+      "main": [
+        [
+          {
+            "node": "IF Accepted Offer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Accepted Offer": {
+      "main": [
+        [
+          {
+            "node": "Confirm Retention - Update Records",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Process Cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Cancellation": {
+      "main": [
+        [
+          {
+            "node": "Notify Owner - Confirmed Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "d773279c-82b4-4143-a13c-e71a49cd1bb5",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "0jlK2olGxKfMp6ia",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}

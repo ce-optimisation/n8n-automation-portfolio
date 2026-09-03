@@ -1,0 +1,263 @@
+{
+  "name": "Stock Reorder Trigger (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "id": "26181c06-67d4-4b73-9bb6-0cfc143b50a3",
+      "name": "Daily Stock Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1472,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:orders@client-domain.com>>"
+            },
+            {
+              "name": "internal_notify_email",
+              "type": "string",
+              "value": "<<EDIT_ME:owner@client-domain.com>>"
+            },
+            {
+              "name": "stock_source_endpoint",
+              "type": "string",
+              "value": "<<EDIT_ME:inventory system endpoint returning stock_level, reorder_threshold, supplier_email per item>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9380ce1e-153e-4137-8939-486c324f32a0",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1248,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config').item.json.stock_source_endpoint}}",
+        "options": {}
+      },
+      "id": "20ad0dc0-0537-4329-adf9-654a449a5d6d",
+      "name": "Pull Stock Levels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1024,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.stock_level}}",
+              "rightValue": "={{$json.reorder_threshold}}",
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            },
+            {
+              "leftValue": "={{$json.reorder_pending}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "178646c4-e26c-47e7-8e46-c612cfe8f3b9",
+      "name": "Filter - Below Threshold, Not Yet Ordered",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        -800,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$json.supplier_email}}",
+        "subject": "Reorder request",
+        "html": "<<EDIT_ME:reorder email body, include item name + reorder quantity>>",
+        "options": {}
+      },
+      "id": "6844f701-9f59-436c-bc65-ac24599335fc",
+      "name": "Send Reorder Email to Supplier",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -592,
+        -144
+      ],
+      "webhookId": "e648096e-9a15-41a7-973f-5210b2caa07d"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Config').item.json.stock_source_endpoint}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "item_id",
+              "value": "={{$json.item_id}}"
+            },
+            {
+              "name": "reorder_pending",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c6c5b583-279b-4bc6-b1ba-2b563a18d553",
+      "name": "Mark Reorder Pending",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -368,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Config').item.json.internal_notify_email}}",
+        "subject": "Reorder placed",
+        "html": "={{$json.item_name}} reordered from {{$json.supplier_email}}. Stock was at {{$json.stock_level}}.",
+        "options": {}
+      },
+      "id": "cf054302-bdf6-4366-97cb-5a3ced0790ff",
+      "name": "Log Confirmation Internally",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -144,
+        -144
+      ],
+      "webhookId": "5c31df6e-370a-447b-a4a2-a1b3e8fb6930"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Stock Check": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Pull Stock Levels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull Stock Levels": {
+      "main": [
+        [
+          {
+            "node": "Filter - Below Threshold, Not Yet Ordered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Below Threshold, Not Yet Ordered": {
+      "main": [
+        [
+          {
+            "node": "Send Reorder Email to Supplier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reorder Email to Supplier": {
+      "main": [
+        [
+          {
+            "node": "Mark Reorder Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Reorder Pending": {
+      "main": [
+        [
+          {
+            "node": "Log Confirmation Internally",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "b3b74dd8-92e1-4b20-9a77-756b45a071d9",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "to1WdJCNhV03vEbt",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}

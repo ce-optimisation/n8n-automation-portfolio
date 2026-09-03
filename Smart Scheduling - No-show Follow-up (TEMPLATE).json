@@ -1,0 +1,159 @@
+{
+  "name": "Smart Scheduling - No-show Follow-up (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "<<EDIT_ME:webhook-path-per-client>>",
+        "options": {}
+      },
+      "id": "cac524f9-84e4-464a-b6cc-9bef8634b52c",
+      "name": "No-show Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -144
+      ],
+      "webhookId": "06c4ae1b-1b34-4a51-9313-4be39e255358"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "sender_email",
+              "type": "string",
+              "value": "<<EDIT_ME:booking@client-domain.com>>"
+            },
+            {
+              "name": "rebooking_link",
+              "type": "string",
+              "value": "<<EDIT_ME:client's Cal.eu booking page URL>>"
+            },
+            {
+              "name": "internal_notify_email",
+              "type": "string",
+              "value": "<<EDIT_ME:owner@client-domain.com (optional - only if the owner wants no-show visibility)>>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8cb31dc9-23b5-4865-ba4b-22adc75ff9d7",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -592,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "attendee_email",
+              "type": "string",
+              "value": "={{$json.attendee_email}}"
+            },
+            {
+              "name": "attendee_name",
+              "type": "string",
+              "value": "={{$json.attendee_name}}"
+            },
+            {
+              "name": "event_type",
+              "type": "string",
+              "value": "={{$json.event_type}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a0947a2c-228d-4c32-b1cc-0818d72b9f94",
+      "name": "Map Booking Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -368,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$('Config').item.json.sender_email}}",
+        "toEmail": "={{$('Map Booking Fields').item.json.attendee_email}}",
+        "subject": "Sorry we missed you - let's find another time",
+        "html": "<<EDIT_ME:rebooking email body, insert rebooking_link, keep tone low-pressure per brand voice rules (Section 2)>>",
+        "options": {}
+      },
+      "id": "08360e28-402d-46a7-8c5a-48bd681bb96b",
+      "name": "Send Rebooking Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -144,
+        -144
+      ],
+      "webhookId": "5adb8930-eb81-4918-b9e0-ad99f6c993cd"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "No-show Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Map Booking Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Booking Fields": {
+      "main": [
+        [
+          {
+            "node": "Send Rebooking Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "258f6a06-48d5-42c8-9a27-f9717ccd953c",
+  "meta": {
+    "instanceId": "38d42d45ab9e682328654e8f0827dc33c5649553374fb665ce70708c8dcc103a"
+  },
+  "nodeGroups": [],
+  "id": "bKz0aIo4P2FtodvY",
+  "tags": [
+    {
+      "updatedAt": "2026-07-21T13:29:31.504Z",
+      "createdAt": "2026-07-21T13:29:31.504Z",
+      "id": "4t4MgX6imRU3QHko",
+      "name": "Outcome: Stop Losing Hou"
+    }
+  ]
+}
