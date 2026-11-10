@@ -1,6 +1,6 @@
 # Lenovo IdeaPad 530S: local AI hardware audit for Astro email generation
 
-**Date:** 2026-11-10 · **Status:** Partial. The physical laptop has not been inspected yet.
+**Date:** 2026-11-10 · **Status:** Partial. The physical laptop has not been inspected yet. RAM = **8 GB, as reported by the owner** (not yet confirmed by the script).
 
 ## 1. Where this audit ran
 
@@ -20,6 +20,9 @@
 ### Verified for your unit
 **None yet.** I could not reach your laptop from this session.
 
+### Reported by the owner
+- **RAM: 8 GB.** This rules out the 4 GB and 16 GB configurations. The RAM is probably soldered, so treat 8 GB as the permanent ceiling until PSREF or the script confirms otherwise.
+
 ### Published IdeaPad 530S configurations (not verified for your unit)
 These are the factory options Lenovo sold. I'm working from memory here, so check them against [Lenovo PSREF](https://psref.lenovo.com) using your machine type (MTM).
 
@@ -33,7 +36,7 @@ These are the factory options Lenovo sold. I'm working from memory here, so chec
 
 ### Couldn't be established (the script below collects these)
 - Your exact model and MTM, which variant you have, and the Windows version
-- Installed RAM, and whether it's soldered or upgradeable on your unit
+- Whether the 8 GB is soldered or upgradeable on your unit, and whether it runs in dual channel
 - Whether you have a discrete MX150 GPU, plus actual dedicated and shared GPU memory
 - Free disk space, and Thunderbolt/USB4 presence (eGPU feasibility)
 
@@ -65,15 +68,19 @@ These assume Q4_K_M quantisation, CPU only, and sustained (throttled) clocks.
 
 A 4 GB unit is limited to 1–3B models.
 
+**With 8 GB:** Windows plus a browser typically uses 3–4 GB, leaving about 4–5 GB for a model. **4B models are the sweet spot.** 8B models at Q4 (about 5.5–6.5 GB) will push the laptop into paging to disk, and speed collapses; they're not recommended.
+
 ## 4. Recommended models for natural British-English cold emails
 
 Check the current tags in the Ollama library before pulling anything; the model line-ups change quickly.
 
-1. **Gemma 3 4B (QAT, Q4)** is the best overall fit. Its prose is fluent and natural for its size, and it fits in 8 GB.
-2. **Llama 3.1 8B Instruct (Q4_K_M)** gives the best writing quality the laptop can run, but only with 16 GB RAM. It sounds human and is easy to steer with a British-English style guide.
-3. **Qwen3 4B, with thinking disabled,** follows structured instructions most reliably (word limits, using every personalisation field). Its prose is slightly stiffer, so add a style pass.
+Ranked for an 8 GB laptop:
 
-On a 4 GB unit, use **Llama 3.2 3B**.
+1. **Gemma 3 4B (QAT, Q4)** is the best overall fit. Its prose is fluent and natural for its size, and it needs about 3.5–4 GB.
+2. **Qwen3 4B, with thinking disabled,** follows structured instructions most reliably (word limits, using every personalisation field). Its prose is slightly stiffer, so add a style pass.
+3. **Llama 3.2 3B Instruct** is the fastest option and leaves the most memory free. Its writing is conversational and natural, but it's weaker at detailed personalisation.
+
+**Not recommended on 8 GB:** Llama 3.1 8B and other 7–8B models. They would only fit at Q3 or below with every other app closed, which costs both quality and stability.
 
 None of these produces British spelling reliably on its own. Put "Use British English spelling and conventions" in the system prompt, add two or three example emails, and run a cheap spelling check in n8n (for example, a find-and-replace list for -ize → -ise, color → colour).
 
@@ -85,7 +92,7 @@ Assumptions per email: about 800 prompt tokens (lead data, instructions and exam
 |---|---|---|---|
 | 3B | ~25–35 s | ~3.5–5 h | Comfortable overnight |
 | 4B (recommended) | ~45–60 s | **~6–8 h** | Feasible as an overnight batch |
-| 8B | ~90–130 s | **~12–18 h** | Only on 16 GB, and it ties up the laptop all day |
+| 8B | ~90–130 s+ | **~12–18 h or worse** | Not viable on 8 GB, because the laptop will page to disk |
 
 **Conclusion:** 500 emails a day is achievable with a 4B model as an overnight queue: n8n feeds Ollama one email at a time, with retries. The caveats:
 - The laptop runs at full load for hours. Keep it on mains power, on a hard surface, with sleep disabled for the run window.
@@ -95,7 +102,7 @@ Assumptions per email: about 800 prompt tokens (lead data, instructions and exam
 
 ## 6. Limitations, upgrades and alternatives
 
-**Limitations:** the CPU is limited to 15 W, there's no usable GPU, and RAM is probably soldered and capped at the factory amount.
+**Limitations:** the CPU is limited to 15 W, there's no usable GPU, and RAM is 8 GB (reported), probably soldered. That means 4B is the largest model size that's practical.
 
 **Upgrades:**
 - **RAM:** most likely impossible, because it's soldered. Confirm via PSREF using your MTM.
@@ -110,5 +117,5 @@ Assumptions per email: about 800 prompt tokens (lead data, instructions and exam
 
 ## 7. Recommended next steps
 1. Run `Get-LaptopAIAudit.ps1` on the laptop and share the output. I'll replace section 2 with verified figures and firm up the estimates.
-2. If it confirms 8 GB or more and Windows 10/11 64-bit, a small manual trial with a 4B model on 5–10 real leads would establish real speed and quality. That needs your go-ahead, because it involves installing Ollama and downloading a model.
+2. If it confirms 8 GB and Windows 10/11 64-bit, a small manual trial with a 4B model on 5–10 real leads would establish real speed and quality. That needs your go-ahead, because it involves installing Ollama and downloading a model.
 3. Compare the output quality and cost against a cloud API on the same 10 leads before committing to a local pipeline.
