@@ -36,6 +36,23 @@ def _add_nvidia_dll_dirs() -> None:
 _model_lock = threading.Lock()
 
 
+def load_wav_16k(path: Path):
+    """Read the 16 kHz mono PCM WAV produced by media.extract_audio into float32.
+
+    Passing samples directly avoids faster-whisper's PyAV decoding path, whose
+    keyword arguments are not stable across PyAV releases.
+    """
+    import wave
+
+    import numpy as np
+    with wave.open(str(path), "rb") as w:
+        if w.getframerate() != 16000 or w.getnchannels() != 1 or w.getsampwidth() != 2:
+            raise ValueError(f"expected 16 kHz mono 16-bit WAV, got {w.getframerate()} Hz/"
+                             f"{w.getnchannels()} ch/{w.getsampwidth() * 8} bit")
+        data = w.readframes(w.getnframes())
+    return np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+
+
 class Transcriber:
     name = "base"
     model_label = "unknown"
@@ -92,7 +109,7 @@ class WhisperTranscriber(Transcriber):
     def _transcribe(self, audio, duration, on_progress=None):
         model = self._load()
         segments, info = model.transcribe(
-            str(audio), language=self.settings.language or None, word_timestamps=True,
+            load_wav_16k(audio), language=self.settings.language or None, word_timestamps=True,
             vad_filter=self.settings.vad_filter, beam_size=5, condition_on_previous_text=False)
         out = []
         for seg in segments:  # generator: transcription happens while iterating
