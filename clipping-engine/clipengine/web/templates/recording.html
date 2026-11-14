@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ rec.title }}</h1>
+<section class="card">
+  <p><span class="badge {{ rec.status }}">{{ rec.status }}</span> {% if rec.error %}<span class="err">{{ rec.error }}</span>{% endif %}</p>
+  <dl class="meta">
+    <dt>Source</dt><dd>{% if rec.source_url %}<a href="{{ rec.source_url }}" rel="noopener noreferrer" target="_blank">{{ rec.source_url }}</a>{% else %}Uploaded file: {{ rec.original_filename }}{% endif %}</dd>
+    <dt>Duration</dt><dd>{{ rec.duration|mmss }} · {{ rec.width }}×{{ rec.height }} · {{ rec.fps }} fps</dd>
+    <dt>Imported</dt><dd>{{ rec.created_at|dt }}</dd>
+    <dt>SHA-256</dt><dd><code>{{ rec.sha256 }}</code></dd>
+    <dt>Transcription</dt><dd>{{ rec.whisper_model or '—' }} · language {{ rec.language or '—' }}</dd>
+    {% if rec.rights_attestation %}<dt>Rights note</dt><dd>{{ rec.rights_attestation }}</dd>{% endif %}
+  </dl>
+  <div class="buttons">
+    {% if segments %}<a class="btn" href="/recordings/{{ rec.id }}/transcript.txt">Download transcript</a>{% endif %}
+    <form method="post" action="/recordings/{{ rec.id }}/reanalyse"><button class="btn" title="Re-select excerpts from the stored transcript; approved and rejected clips are kept">Re-select excerpts</button></form>
+    <form method="post" action="/recordings/{{ rec.id }}/reanalyse"><input type="hidden" name="retranscribe" value="yes"><button class="btn ghost">Re-transcribe &amp; re-select</button></form>
+  </div>
+</section>
+<section class="card">
+  <h2>Jobs</h2>
+  <ul class="list">{% for j in jobs %}<li><a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind }}</a> <span class="badge {{ j.status }}">{{ j.status }}</span> <progress max="1" value="{{ j.progress }}"></progress> <small>{{ j.message or '' }}</small></li>{% endfor %}</ul>
+  {% if jobs and jobs[0].status in ('queued','running') %}<p class="muted">This page refreshes automatically. <meta http-equiv="refresh" content="5"></p>{% endif %}
+</section>
+<h2>Candidate clips ({{ clips|length }})</h2>
+{% for c in clips %}{% include "_clip_card.html" %}{% else %}<p class="muted card">No clips yet.</p>{% endfor %}
+<section class="card">
+  <h2>Full transcript</h2>
+  <div class="transcript">
+  {% for s in segments %}<p id="seg-{{ s.idx }}"><a class="ts" href="/recordings/{{ rec.id }}/media#t={{ s.start }}" target="_blank">{{ s.start|mmss }}</a>
+    {% for w in s.words %}<span class="{% if w.prob < 0.5 %}low{% endif %}">{{ w.word }}</span>{% else %}{{ s.text }}{% endfor %}</p>
+  {% else %}<p class="muted">No transcript yet.</p>{% endfor %}
+  </div>
+</section>
+<details class="card danger"><summary>Delete this recording</summary>
+  <form method="post" action="/recordings/{{ rec.id }}/delete"><p>This permanently deletes the original file, transcript and all clips. Type the exact title to confirm.</p>
+  <input name="confirm" placeholder="{{ rec.title }}"><button class="btn bad">Delete permanently</button></form>
+</details>
+{% endblock %}

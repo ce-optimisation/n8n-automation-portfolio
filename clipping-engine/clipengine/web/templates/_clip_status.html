@@ -1,0 +1,1 @@
+<span class="badge {{ c.status }}" {% if c.status in ('pending_render','rendering') %}hx-get="/partials/clip/{{ c.id }}/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>{{ c.status.replace('_',' ') }}</span>

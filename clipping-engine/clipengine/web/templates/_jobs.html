@@ -1,0 +1,19 @@
+<table class="jobs">
+<thead><tr><th>#</th><th>Task</th><th>Status</th><th>Progress</th><th></th></tr></thead>
+<tbody>
+{% for j in jobs %}
+<tr class="st-{{ j.status }}">
+  <td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td>
+  <td>{{ j.kind.replace('_',' ') }}{% if j.title %}<br><small>{{ j.title[:40] }}{% if j.clip_id %} · clip {{ j.clip_id }}{% endif %}</small>{% endif %}</td>
+  <td><span class="badge {{ j.status }}">{{ j.status }}</span>{% if j.error %}<br><small class="err">{{ j.error[:140] }}</small>{% endif %}</td>
+  <td><progress max="1" value="{{ j.progress }}"></progress><br><small>{{ j.message or '' }}</small></td>
+  <td>
+    {% if j.status in ('failed','cancelled') %}<form method="post" action="/jobs/{{ j.id }}/retry"><button class="btn sm">Retry</button></form>{% endif %}
+    {% if j.status in ('queued','running') %}<form method="post" action="/jobs/{{ j.id }}/cancel"><button class="btn sm ghost">Cancel</button></form>{% endif %}
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">No jobs yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>

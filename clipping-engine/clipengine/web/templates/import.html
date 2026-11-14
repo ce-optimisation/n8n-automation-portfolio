@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Analyse a video</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<div id="result"></div>
+
+<section class="card">
+  <h2>Upload a recording</h2>
+  <p class="muted">MP4 or MOV (MKV/WEBM also accepted). The original is kept unchanged with its provenance.</p>
+  <form id="upform" method="post" action="/import/upload" enctype="multipart/form-data">
+    <label>Video file <input type="file" name="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" required></label>
+    <label>Title (optional) <input name="title" placeholder="Defaults to the file name"></label>
+    <label>Rights / provenance note (optional) <input name="rights" placeholder="e.g. Our own recording; council livestream, open licence"></label>
+    {% include "_proc_settings.html" %}
+    <button class="btn primary">Analyse Video</button>
+    <progress id="upprog" max="1" value="0" hidden></progress> <span id="upmsg" class="muted"></span>
+  </form>
+</section>
+
+<section class="card">
+  <h2>From a URL</h2>
+  <p class="muted">Only for sources whose terms and rights holders permit automated retrieval. Allowed domains (ALLOWED_URL_DOMAINS):
+    <b>{{ s.allowed_url_domains|join(', ') or 'none configured' }}</b>.</p>
+  <details><summary>Platforms that are refused, and why</summary>
+    <p class="muted">{{ restricted|join(', ') }} — their terms prohibit automated downloading without permission. Use the platform's own download/export feature (e.g. YouTube Studio for your own uploads) or obtain the file from the rights holder, then upload it above. Nothing here bypasses logins, DRM, or rate limits.</p></details>
+  <form method="post" action="/import/url">
+    <label>Video URL <input name="url" type="url" required placeholder="https://"></label>
+    <label>Title (optional) <input name="title"></label>
+    {% include "_proc_settings.html" %}
+    <label class="check"><input type="checkbox" name="attest" value="yes" required> I confirm the site's terms and the rights holder permit me to download and process this video.</label>
+    <button class="btn primary">Analyse Video</button>
+  </form>
+</section>
+<script>
+document.getElementById('upform').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var f = e.target, xhr = new XMLHttpRequest(), p = document.getElementById('upprog'), m = document.getElementById('upmsg');
+  p.hidden = false; m.textContent = 'Uploading…';
+  xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) { p.value = ev.loaded / ev.total; m.textContent = 'Uploading ' + Math.round(100 * ev.loaded / ev.total) + '%'; } };
+  xhr.onload = function () {
+    var r = {}; try { r = JSON.parse(xhr.responseText); } catch (x) { r = {err: 'Upload failed (HTTP ' + xhr.status + ')'}; }
+    var box = document.getElementById('result');
+    if (r.err) { box.innerHTML = '<p class="err"></p>'; box.firstChild.textContent = r.err; m.textContent = ''; }
+    else { box.innerHTML = '<p class="ok"></p>'; box.firstChild.textContent = r.msg + ' You can leave this page; processing continues in the background.';
+      if (r.recording_id) { var a = document.createElement('a'); a.href = '/recordings/' + r.recording_id; a.textContent = ' View progress →'; box.firstChild.appendChild(a); }
+      m.textContent = 'Done'; f.reset(); }
+  };
+  xhr.onerror = function () { m.textContent = 'Network error during upload.'; };
+  xhr.open('POST', f.action); xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest'); xhr.send(new FormData(f));
+});
+</script>
+{% endblock %}

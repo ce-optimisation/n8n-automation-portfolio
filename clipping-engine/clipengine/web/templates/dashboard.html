@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+{% include "_counts.html" %}
+{% if storage.warning %}<p class="warn">Storage warning: {{ '%.1f'|format(storage.total_gb) }} GB used, {{ '%.1f'|format(storage.disk_free_gb) }} GB free on disk.</p>{% endif %}
+<div class="actions"><a class="btn primary" href="/import">+ Analyse a video</a> <a class="btn" href="/review">Open review queue</a></div>
+<section class="card">
+  <h2>Processing</h2>
+  <div hx-get="/partials/jobs?limit=8" hx-trigger="load, every 3s" hx-swap="innerHTML"><p class="muted">Loading…</p></div>
+</section>
+<section class="card">
+  <h2>Recent recordings</h2>
+  <ul class="list">
+  {% for r in recordings %}
+    <li><a href="/recordings/{{ r.id }}">{{ r.title }}</a> <span class="badge {{ r.status }}">{{ r.status }}</span>
+      <small class="muted">{{ r.duration|mmss }} · {{ r.created_at|dt }}</small></li>
+  {% else %}<li class="muted">Nothing imported yet.</li>{% endfor %}
+  </ul>
+</section>
+{% endblock %}

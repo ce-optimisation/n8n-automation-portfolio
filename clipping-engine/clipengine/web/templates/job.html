@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/jobs">← Jobs</a></p>
+<h1>Job #{{ job.id }} · {{ job.kind }}</h1>
+<p><span class="badge {{ job.status }}">{{ job.status }}</span> attempts {{ job.attempts }}/{{ job.max_attempts }} · {{ job.message or '' }}</p>
+{% if job.error %}<p class="err">{{ job.error }}</p>{% endif %}
+{% if job.status in ('failed','cancelled') %}<form method="post" action="/jobs/{{ job.id }}/retry"><button class="btn">Retry</button></form>{% endif %}
+<pre class="log">{% for l in logs %}{{ l.ts|dt }} {{ l.level }} {{ l.message }}
+{% endfor %}</pre>
+{% endblock %}

@@ -1,0 +1,8 @@
+<div class="stats" hx-get="/partials/counts" hx-trigger="every 5s" hx-swap="outerHTML">
+  <a class="stat" href="/recordings"><b>{{ counts.recordings }}</b><span>Recordings</span></a>
+  <a class="stat" href="/jobs"><b>{{ counts.jobs_running + counts.jobs_queued }}</b><span>Jobs active</span></a>
+  <a class="stat accent" href="/review?status=ready"><b>{{ counts.clips_ready }}</b><span>Awaiting review</span></a>
+  <a class="stat good" href="/review?status=approved"><b>{{ counts.clips_approved }}</b><span>Approved</span></a>
+  <a class="stat" href="/review?status=rejected"><b>{{ counts.clips_rejected }}</b><span>Rejected</span></a>
+  <a class="stat {% if counts.jobs_failed %}bad{% endif %}" href="/jobs"><b>{{ counts.jobs_failed }}</b><span>Failed jobs</span></a>
+</div>

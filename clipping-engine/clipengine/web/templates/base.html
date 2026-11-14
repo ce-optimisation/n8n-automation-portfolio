@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Clipping Engine{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">Clipping Engine</a>
+  {% if counts is not none %}
+  <nav>
+    <a href="/">Dashboard</a>
+    <a href="/import">Import</a>
+    <a href="/review">Review{% if counts and counts.clips_ready %} <span class="pill">{{ counts.clips_ready }}</span>{% endif %}</a>
+    <a href="/recordings">Recordings</a>
+    <a href="/jobs">Jobs{% if counts and counts.jobs_failed %} <span class="pill bad">{{ counts.jobs_failed }}</span>{% endif %}</a>
+    <a href="/search">Search</a>
+    <a href="/settings">Settings</a>
+  </nav>
+  {% endif %}
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">Local-only editorial tool · Nothing is published without explicit approval and confirmation.</footer>
+</body>
+</html>

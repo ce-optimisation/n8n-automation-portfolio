@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Jobs</h1>
+<div hx-get="/partials/jobs?limit=100" hx-trigger="load, every 3s" hx-swap="innerHTML"><p class="muted">Loading…</p></div>
+{% endblock %}

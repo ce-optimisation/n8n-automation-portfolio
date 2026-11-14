@@ -1,0 +1,34 @@
+<article class="card clip" id="clip-{{ c.id }}">
+  <div class="clip-media">
+    {% if c.video_path and c.status not in ('pending_render','rendering') %}
+      <video controls preload="metadata" playsinline {% if c.thumb_path %}poster="/clips/{{ c.id }}/thumb?r={{ c.render_rev }}"{% endif %} src="/clips/{{ c.id }}/video?r={{ c.render_rev }}"></video>
+    {% else %}
+      <div class="placeholder">{% if c.status == 'failed' %}Render failed{% else %}Rendering…{% endif %}</div>
+    {% endif %}
+  </div>
+  <div class="clip-body">
+    <header>
+      <a href="/clips/{{ c.id }}"><b>Clip #{{ c.id }}</b></a> {% include "_clip_status.html" %}
+      {% if c.safety_status == 'flagged' %}<span class="badge flagged" title="Needs editorial review">⚑ editorial review</span>{% elif c.safety_status == 'acknowledged' %}<span class="badge ack">flag reviewed</span>{% endif %}
+      {% if c.confidence is not none and c.confidence < 0.7 %}<span class="badge lowconf">low transcription confidence</span>{% endif %}
+    </header>
+    <p class="src"><a href="/recordings/{{ rec.id if rec else c.recording_id }}">{{ (rec.title if rec else c.title) }}</a>
+      {% set url = rec.source_url if rec else c.source_url %}{% if url %} · <a href="{{ url }}" rel="noopener noreferrer" target="_blank">source ↗</a>{% endif %}
+      <br><small>{{ c.start|mmss }} → {{ c.end|mmss }} ({{ (c.end - c.start)|round(1) }}s) · selected by {{ c.selection_method }} · rights: {{ c.rights_status.replace('_',' ') }}</small></p>
+    <details><summary>Context before</summary><p class="context">{{ c.context_before or '(start of recording)' }}</p></details>
+    <blockquote class="quote" title="Direct transcript of the excerpt">{{ c.transcript_text }}</blockquote>
+    <details><summary>Context after</summary><p class="context">{{ c.context_after or '(end of recording)' }}</p></details>
+    <details><summary>Suggested description</summary>
+      <pre class="desc" id="desc-{{ c.id }}">{{ c.description }}</pre>
+      <button class="btn sm" type="button" onclick="navigator.clipboard.writeText(document.getElementById('desc-{{ c.id }}').innerText).then(()=>{this.textContent='Copied ✓'})">Copy description</button>
+    </details>
+    {% if c.error %}<p class="err">{{ c.error[:300] }}</p>{% endif %}
+    <div class="buttons">
+      <form method="post" action="/clips/{{ c.id }}/approve"><button class="btn good">Approve</button></form>
+      <form method="post" action="/clips/{{ c.id }}/reject"><button class="btn bad">Reject</button></form>
+      <form method="post" action="/clips/{{ c.id }}/regenerate"><button class="btn">Regenerate</button></form>
+      {% if c.video_path %}<a class="btn" href="/clips/{{ c.id }}/download">Download MP4</a>{% endif %}
+      <a class="btn ghost" href="/clips/{{ c.id }}">Adjust / details</a>
+    </div>
+  </div>
+</article>

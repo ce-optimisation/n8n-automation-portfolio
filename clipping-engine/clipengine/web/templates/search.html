@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Search transcripts</h1>
+<form method="get" action="/search" class="inline"><input name="q" value="{{ q }}" placeholder="Words or phrases" autofocus><button class="btn primary">Search</button></form>
+<ul class="list">
+{% for r in results %}<li><a href="/recordings/{{ r.recording_id }}#seg-">{{ r.title }}</a> <small>at <a href="/recordings/{{ r.recording_id }}/media#t={{ r.start }}" target="_blank">{{ r.start|mmss }}</a></small><br>{{ r.snip }}</li>
+{% else %}{% if q %}<li class="muted">No matches.</li>{% endif %}{% endfor %}
+</ul>
+{% endblock %}

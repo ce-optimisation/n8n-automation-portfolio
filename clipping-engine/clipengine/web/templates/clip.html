@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/review">← Review queue</a></p>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+{% include "_clip_card.html" %}
+
+<section class="card">
+  <h2>Transcript with confidence</h2>
+  <p class="muted">Words underlined in orange were transcribed with low confidence — verify against the audio before quoting.</p>
+  <p class="words">{% for w in words %}<span class="{% if w.prob < 0.5 %}low{% endif %}" title="{{ w.start|round(2) }}s · p={{ w.prob }}">{{ w.word }}</span>{% endfor %}</p>
+  {% set flags = c.safety_flags|fromjson %}
+  {% if flags %}
+  <div class="flagbox">
+    <h3>⚑ Flagged for editorial review</h3>
+    <ul>{% for f in flags %}<li>{{ f.category.replace('_',' ') }}: “{{ f.match }}”</li>{% endfor %}</ul>
+    <p class="muted">A flag is a prompt for human judgement, not a verdict. Publishing is blocked until you record why and how this material will be presented (e.g. reporting with critical context).</p>
+    {% if c.safety_status == 'flagged' %}
+    <form method="post" action="/clips/{{ c.id }}/acknowledge">
+      <label>Editorial decision note <textarea name="note" required minlength="15" rows="2" placeholder="e.g. Used in a fact-check segment with presenter commentary; quote not endorsed."></textarea></label>
+      <button class="btn">Record editorial decision</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% if c.machine_summary %}<p><b>Automated summary (machine interpretation — not a quote):</b> {{ c.machine_summary }}</p>{% endif %}
+  {% if c.review_note %}<p><b>Review notes:</b> {{ c.review_note }}</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Source context</h2>
+  <p class="muted">Original recording at this excerpt, for verification. Provenance: {{ rec.source_type }}{% if rec.source_url %} · {{ rec.source_url }}{% endif %} · file {{ rec.original_filename }} · sha256 {{ (rec.sha256 or '')[:16] }}…</p>
+  {% if rec.file_path %}<video controls preload="none" playsinline class="source" src="/recordings/{{ rec.id }}/media#t={{ [c.start - 20, 0]|max }},{{ c.end + 20 }}"></video>{% else %}<p class="muted">Original removed by retention policy.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Adjust timestamps &amp; regenerate</h2>
+  <p class="muted">Uses the stored transcript — no re-transcription. Boundaries snap so words are never cut. Accepts seconds or m:ss.</p>
+  <form method="post" action="/clips/{{ c.id }}/regenerate" class="grid3">
+    <label>Start <input name="start" value="{{ '%.2f'|format(c.start) }}"></label>
+    <label>End <input name="end" value="{{ '%.2f'|format(c.end) }}"></label>
+    <button class="btn primary">Regenerate clip</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Description</h2>
+  <form method="post" action="/clips/{{ c.id }}/description">
+    <textarea name="description" rows="6">{{ c.description }}</textarea>
+    <button class="btn">Save description</button>
+    <a class="btn ghost" href="/clips/{{ c.id }}/description.txt">Download .txt</a>
+    {% if c.srt_path %}<a class="btn ghost" href="/clips/{{ c.id }}/captions.srt">Download captions (.srt)</a>{% endif %}
+  </form>
+</section>
+
+<section class="card">
+  <h2>Rights &amp; publishing</h2>
+  <form method="post" action="/clips/{{ c.id }}/rights" class="inline">
+    <label>Copyright / rights basis
+      <select name="rights_status">{% for k, label in RIGHTS_CHOICES %}<option value="{{ k }}" {% if c.rights_status == k %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    </label>
+    <button class="btn">Save</button>
+  </form>
+  {% if gate %}<ul class="muted">{% for g in gate %}<li>{{ g }}</li>{% endfor %}</ul>{% endif %}
+  <div class="pub">
+    <div>
+      <h3>TikTok — send to inbox (draft)</h3>
+      {% if not tiktok.configured %}<p class="muted">Not configured — see README “TikTok setup”. Download and post manually meanwhile.</p>
+      {% elif not tiktok.connected %}<p class="muted">Not connected. <a href="/settings">Connect in Settings</a>.</p>
+      {% else %}
+      <form method="post" action="/clips/{{ c.id }}/publish/tiktok"><button class="btn" {% if gate %}disabled{% endif %}>Send to my TikTok inbox</button></form>
+      <p class="muted">You finish and post it inside the TikTok app.</p>{% endif %}
+    </div>
+    <div>
+      <h3>Instagram — publish Reel</h3>
+      {% if not instagram.configured %}<p class="muted">Not configured — see README “Instagram setup”.</p>
+      {% elif not instagram.connected %}<p class="muted">Not connected. <a href="/settings">Connect in Settings</a>.</p>
+      {% else %}
+      <form method="post" action="/clips/{{ c.id }}/publish/instagram">
+        <p class="warn">Instagram's API cannot create drafts: this posts publicly to @{{ instagram.username }}.</p>
+        <label>Type PUBLISH to confirm <input name="confirm" autocomplete="off"></label>
+        <button class="btn bad" {% if gate %}disabled{% endif %}>Publish publicly</button>
+      </form>{% endif %}
+    </div>
+  </div>
+  {% if attempts %}
+  <h3>Publishing history</h3>
+  <ul class="list">{% for a in attempts %}<li>{{ a.created_at|dt }} · {{ a.platform }} · <span class="badge {{ a.status }}">{{ a.status }}</span> {{ a.detail }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endblock %}

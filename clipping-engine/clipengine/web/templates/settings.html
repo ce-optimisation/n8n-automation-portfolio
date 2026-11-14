@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Settings &amp; status</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="card">
+  <h2>This computer</h2>
+  <dl class="meta">
+    <dt>OS</dt><dd>{{ hw.os }}</dd>
+    <dt>CPU</dt><dd>{{ hw.cpu }} · {{ hw.cpu_cores }} threads</dd>
+    <dt>RAM</dt><dd>{{ hw.ram_gb }} GB</dd>
+    <dt>GPU</dt><dd>{% if hw.cuda_devices %}{{ hw.gpu_name or 'CUDA device' }} {{ hw.vram_gb }} GB{% else %}No CUDA GPU detected (CPU mode){% endif %}</dd>
+    <dt>FFmpeg</dt><dd>{{ hw.ffmpeg or 'NOT FOUND' }}</dd>
+    <dt>Whisper</dt><dd>{{ model[0] }} on {{ model[1] }} ({{ model[2] }}){% if s.whisper_model == 'auto' %} — chosen automatically{% endif %}</dd>
+    <dt>Local LLM</dt><dd>{{ llm }}</dd>
+  </dl>
+</section>
+<section class="card">
+  <h2>Storage</h2>
+  <p>Recordings {{ '%.2f'|format(storage.recordings_gb) }} GB · Clips {{ '%.2f'|format(storage.clips_gb) }} GB · Models {{ '%.2f'|format(storage.models_gb) }} GB · Free on disk {{ '%.1f'|format(storage.disk_free_gb) }} GB</p>
+  <p class="muted">Retention: rejected renders removed after {{ s.delete_rejected_renders_after_days }} days (0 = never).
+  Originals: {% if s.delete_originals_after_days %}deleted {{ s.delete_originals_after_days }} days after processing once no clip awaits review{% else %}never deleted automatically{% endif %}. Change in .env.</p>
+</section>
+<section class="card">
+  <h2>Publishing connections</h2>
+  <p class="muted">Tokens are stored in: {{ token_backend }}. Client credentials come from .env.</p>
+  <div class="pub">
+    <div><h3>TikTok (inbox upload)</h3>
+      <p>{% if not tiktok.configured %}Not configured.{% elif tiktok.connected %}Connected (scope: {{ tiktok.scope }}).{% else %}Configured, not connected.{% endif %}</p>
+      {% if tiktok.configured %}<a class="btn" href="/connect/tiktok">{% if tiktok.connected %}Reconnect{% else %}Connect TikTok{% endif %}</a>{% endif %}
+      {% if tiktok.connected %}<form method="post" action="/disconnect/tiktok"><button class="btn ghost sm">Disconnect</button></form>{% endif %}
+    </div>
+    <div><h3>Instagram (Reels)</h3>
+      <p>{% if not instagram.configured %}Not configured.{% elif instagram.connected %}Connected as @{{ instagram.username }}.{% else %}Configured, not connected.{% endif %}</p>
+      {% if instagram.configured %}<a class="btn" href="/connect/instagram">{% if instagram.connected %}Reconnect{% else %}Connect Instagram{% endif %}</a>{% endif %}
+      {% if instagram.connected %}<form method="post" action="/disconnect/instagram"><button class="btn ghost sm">Disconnect</button></form>{% endif %}
+    </div>
+  </div>
+  <p class="muted">Until a platform is connected, use Download MP4 and Copy description on each clip.</p>
+</section>
+{% endblock %}

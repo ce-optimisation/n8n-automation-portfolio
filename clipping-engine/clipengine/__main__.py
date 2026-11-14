@@ -1,0 +1,138 @@
+"""Entry point: ``python -m clipengine`` (used by Start-Clipping-Engine.cmd).
+
+Flags:
+  --check       validate dependencies and exit (0 = ready)
+  --no-browser  do not open the dashboard automatically
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import logging.handlers
+import os
+import shutil
+import socket
+import sys
+import threading
+import time
+import webbrowser
+from pathlib import Path
+
+from .config import PROJECT_ROOT, get_settings
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        d = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(record.created)), "level": record.levelname,
+             "logger": record.name, "msg": record.getMessage()}
+        if record.exc_info:
+            d["exc"] = self.formatException(record.exc_info)
+        return json.dumps(d)
+
+
+def setup_logging(data_dir: Path) -> None:
+    (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    fh = logging.handlers.RotatingFileHandler(data_dir / "logs" / "clipengine.jsonl", maxBytes=5_000_000,
+                                              backupCount=5, encoding="utf-8")
+    fh.setFormatter(JsonFormatter())
+    sh = logging.StreamHandler()
+    sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(fh)
+    root.addHandler(sh)
+
+
+def add_bundled_ffmpeg_to_path() -> None:
+    cands = [PROJECT_ROOT / "tools" / "ffmpeg" / "bin", PROJECT_ROOT / "tools" / "ffmpeg"]
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        cands.append(Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "WinGet" / "Links")  # winget installs
+    for cand in cands:
+        if (cand / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")).exists():
+            os.environ["PATH"] = str(cand) + os.pathsep + os.environ.get("PATH", "")
+            return
+
+
+def check(settings) -> list[str]:
+    problems = []
+    if sys.version_info < (3, 10):
+        problems.append(f"Python 3.10+ required (found {sys.version.split()[0]}).")
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            problems.append(f"{tool} not found. Windows: run 'winget install Gyan.FFmpeg' then reopen the launcher, "
+                            f"or extract an FFmpeg build into clipping-engine\\tools\\ffmpeg\\bin.")
+    for mod, pkg in (("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("jinja2", "jinja2"),
+                     ("multipart", "python-multipart"), ("faster_whisper", "faster-whisper"), ("httpx", "httpx")):
+        try:
+            __import__(mod)
+        except ImportError:
+            problems.append(f"Python package '{pkg}' missing: run pip install -r requirements.txt")
+    if settings.host not in ("127.0.0.1", "localhost", "::1") and not settings.dashboard_password:
+        problems.append("CLIPENGINE_HOST exposes the dashboard to your network but DASHBOARD_PASSWORD is empty. "
+                        "Set a password in .env.")
+    try:
+        settings.ensure_dirs()
+        probe = settings.data_dir / ".write_test"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as e:
+        problems.append(f"Data directory {settings.data_dir} is not writable: {e}")
+    return problems
+
+
+def port_free(host: str, port: int) -> bool:
+    """True unless something is already listening on the port."""
+    target = "127.0.0.1" if host in ("0.0.0.0", "localhost") else host
+    with socket.socket() as s:
+        s.settimeout(1.0)
+        return s.connect_ex((target, port)) != 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="clipengine")
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--no-browser", action="store_true")
+    args = ap.parse_args(argv)
+    add_bundled_ffmpeg_to_path()
+    settings = get_settings()
+    problems = check(settings)
+    if problems:
+        print("\nThe Clipping Engine cannot start yet:\n")
+        for p in problems:
+            print("  - " + p)
+        return 2
+    if args.check:
+        from . import hardware
+        hw = hardware.detect()
+        print("All dependencies present.")
+        print(json.dumps({"hardware": hw.as_dict(), "whisper": hardware.choose_whisper(
+            hw, settings.whisper_model, settings.whisper_device, settings.whisper_compute_type,
+            settings.language)}, indent=2))
+        return 0
+    setup_logging(settings.data_dir)
+    url = settings.base_url()
+    if not port_free(settings.host, settings.port):
+        print(f"Port {settings.port} is busy — the engine may already be running. Opening {url}")
+        if settings.open_browser and not args.no_browser:
+            webbrowser.open(url)
+        return 0
+    import uvicorn
+    from .web.app import create_app
+    app = create_app(settings)
+    if settings.open_browser and not args.no_browser:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    print(f"\n  Clipping Engine running at {url}")
+    if settings.host == "0.0.0.0":
+        try:
+            lan = socket.gethostbyname(socket.gethostname())
+            print(f"  On your phone (same network): http://{lan}:{settings.port}")
+        except OSError:
+            pass
+    print("  Close this window or press Ctrl+C to stop. Jobs resume automatically next time.\n")
+    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

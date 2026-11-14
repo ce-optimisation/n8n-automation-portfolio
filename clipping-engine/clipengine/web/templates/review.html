@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Review queue</h1>
+<nav class="tabs">
+  {% for st, label in [('ready','Awaiting review'),('approved','Approved'),('rejected','Rejected'),('rendering','Rendering'),('pending_render','Queued'),('failed','Failed'),('all','All')] %}
+  <a href="/review?status={{ st }}" class="{% if status == st %}active{% endif %}">{{ label }}</a>
+  {% endfor %}
+</nav>
+{% for c in clips %}{% set rec = None %}{% include "_clip_card.html" %}
+{% else %}<p class="muted card">No clips in this list.</p>{% endfor %}
+{% endblock %}

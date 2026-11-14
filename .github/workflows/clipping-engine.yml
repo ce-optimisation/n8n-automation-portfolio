@@ -1,0 +1,73 @@
+name: clipping-engine
+
+on:
+  push:
+    paths: ["clipping-engine/**", ".github/workflows/clipping-engine.yml"]
+  pull_request:
+    paths: ["clipping-engine/**", ".github/workflows/clipping-engine.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests + real end-to-end (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: clipping-engine
+    env:
+      CLIPENGINE_REAL_WHISPER: "1"
+      WHISPER_MODEL: base.en
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: clipping-engine/requirements.txt
+
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install FFmpeg full build incl. libflite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg-full -y --no-progress
+          ffmpeg -hide_banner -filters | Select-String flite
+
+      - name: Windows launcher dependency check (Start-Clipping-Engine.cmd --check)
+        if: runner.os == 'Windows'
+        shell: cmd
+        env:
+          CLIPENGINE_NONINTERACTIVE: "1"
+        run: call Start-Clipping-Engine.cmd --check
+
+      - name: Install Python packages
+        run: |
+          python -m pip install -r requirements.txt playwright
+          python -m playwright install chromium
+
+      - name: Unit and integration tests (includes REAL Whisper transcription test)
+        run: python -m pytest -v -rs
+
+      - name: Acceptance test - real app, real faster-whisper, upload -> review -> download -> restart
+        run: python scripts/acceptance_test.py --keep acceptance-artifacts
+
+      - name: Upload acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ matrix.os }}
+          path: clipping-engine/acceptance-artifacts
+          if-no-files-found: ignore
