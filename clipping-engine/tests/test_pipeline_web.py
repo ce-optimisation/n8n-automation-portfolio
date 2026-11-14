@@ -75,6 +75,16 @@ def test_regenerate_with_new_timestamps_reuses_transcript(processed, monkeypatch
         p.adjust_and_regenerate(c["id"], 50, 10)
 
 
+def test_plain_regenerate_preserves_owner_description(processed):
+    s, db, q, p, rid = processed
+    cid = db.query("SELECT id FROM clips ORDER BY id")[0]["id"]
+    db.update("clips", cid, description="Owner-edited description")
+    p.adjust_and_regenerate(cid)
+    q.drain(600)
+    c = db.clip(cid)
+    assert c["description"] == "Owner-edited description" and c["status"] == "ready" and c["render_rev"] == 1
+
+
 def test_web_review_flow_and_persistence(processed):
     s, db, q, p, rid = processed
     app = create_app(s, start_worker=False)

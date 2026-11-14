@@ -270,16 +270,19 @@ class Pipeline:
             raise ValueError("Timestamps must satisfy 0 ≤ start < end ≤ recording length.")
         if end - start < 3 or end - start > 180:
             raise ValueError("Clip length must be between 3 and 180 seconds.")
-        segs = self.db.segments(rec["id"])
-        words = all_words(segs)
-        sents = segment.build_sentences(segs)
+        fields: dict = {}
         if (start, end) != (clip["start"], clip["end"]):
+            # New boundaries: recompute quote, context, flags and description from the stored transcript.
+            segs = self.db.segments(rec["id"])
+            words = all_words(segs)
             start, end = snap_bounds(words, start, end)
-        fields = self.clip_text_fields(rec, start, end, words, sents, self.settings, None)
+            fields = self.clip_text_fields(rec, start, end, words, segment.build_sentences(segs), self.settings)
+            method = clip["selection_method"] or ""
+            fields.update(machine_summary=None, selection_method=method if "owner-adjusted" in method
+                          else method + "+owner-adjusted")
+        # Unchanged boundaries: re-render only; owner edits to the description are preserved.
         self.db.update("clips", clip_id, start=start, end=end, render_rev=clip["render_rev"] + 1,
-                       status="pending_render", reviewed_at=None, machine_summary=None,
-                       selection_method=(clip["selection_method"] or "") + "+owner-adjusted"
-                       if (start, end) != (clip["start"], clip["end"]) else clip["selection_method"], **fields)
+                       status="pending_render", reviewed_at=None, **fields)
         return self.enqueue_render(clip_id)
 
     def import_upload(self, path: Path, original_name: str, title: str | None, overrides: dict,
