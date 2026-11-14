@@ -35,6 +35,38 @@ CLAIM_MARKERS = [
 ]
 
 
+PROCEDURAL_MARKERS = [
+    r"\bthank you\b", r"\bthanks\b", r"\bwelcome\b", r"\bgood (morning|afternoon|evening)\b",
+    r"\bcan (everyone|you all) hear\b", r"\bmicrophone\b", r"\bnext (item|slide|question)\b",
+    r"\b(short|quick) break\b", r"\bhousekeeping\b", r"\bminutes of the (last|previous)\b",
+    r"\bany other business\b", r"\bapologies\b", r"\bmove on\b", r"\bshall we (start|begin)\b",
+    r"\bfire exits?\b", r"\bphones? (on silent|switched off)\b", r"\blet'?s get started\b",
+]
+TOPIC_START_MARKERS = [
+    r"^(let me|i want to|i'?d like to) (turn|explain|talk|start|address)", r"^(the|our) (next|main|first|second|third|final) (issue|question|point|item|topic)",
+    r"^on the (question|issue|matter|subject) of", r"^(first|second|third|finally)[, ]", r"^so what does",
+    r"^the (question|issue|problem) (is|here)", r"\?$",
+]
+
+
+@dataclass
+class SelectionProfile:
+    """Tunable selection behaviour. 'v1' reproduces the original release for comparison."""
+    name: str = "v2"
+    procedural_weight: float = 0.6
+    topic_bonus: float = 0.05
+    min_gap: float = 5.0
+    relative_floor: float = 0.6   # drop candidates scoring below this fraction of the best
+    absolute_floor: float = 0.25
+
+
+PROFILES = {
+    "v1": SelectionProfile("v1", procedural_weight=0.0, topic_bonus=0.0, min_gap=1.0, relative_floor=0.0,
+                           absolute_floor=-9.0),
+    "v2": SelectionProfile(),
+}
+
+
 @dataclass
 class Sentence:
     start: float
@@ -116,7 +148,9 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def score_window(sents: list[Sentence], i: int, j: int, target: float) -> tuple[float, list[str]]:
+def score_window(sents: list[Sentence], i: int, j: int, target: float,
+                 profile: SelectionProfile | None = None) -> tuple[float, list[str]]:
+    profile = profile or PROFILES["v2"]
     win = sents[i:j + 1]
     text = " ".join(s.text for s in win)
     toks = re.findall(r"[a-z']+", text.lower())
@@ -147,14 +181,27 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float) -> tuple[
     dur = win[-1].end - win[0].start
     fit = max(0.0, 1 - abs(dur - target) / target)
     end_clean = 1.0 if win[-1].terminal else 0.0
+    procedural = 0.0
+    if profile.procedural_weight:
+        hits = sum(len(re.findall(p_, text.lower())) for p_ in PROCEDURAL_MARKERS)
+        procedural = min(1.0, hits / max(1.0, len(win) * 0.6))
+        if procedural >= 0.3:
+            reasons.append("mostly procedural/housekeeping talk")
+    topic = 0.0
+    if profile.topic_bonus:
+        first_text = win[0].text.lower().strip()
+        if any(re.search(p_, first_text) for p_ in TOPIC_START_MARKERS) or pause_before >= 0.9:
+            topic = profile.topic_bonus
+            reasons.append("opens at the start of a topic")
     score = (0.36 * substance + 0.10 * qa + 0.22 * clarity + 0.10 * pauses + 0.12 * fit + 0.10 * end_clean
-             - start_pen - 1.5 * filler)
+             - start_pen - 1.5 * filler - profile.procedural_weight * procedural + topic)
     if pauses > 0.8:
         reasons.append("natural pauses at both ends")
     return round(score, 4), reasons
 
 
-def generate_candidates(sents: list[Sentence], min_s: float, max_s: float, target: float) -> list[Candidate]:
+def generate_candidates(sents: list[Sentence], min_s: float, max_s: float, target: float,
+                        profile: SelectionProfile | None = None) -> list[Candidate]:
     cands = []
     for i in range(len(sents)):
         for j in range(i, len(sents)):
@@ -163,7 +210,7 @@ def generate_candidates(sents: list[Sentence], min_s: float, max_s: float, targe
                 break
             if dur < min_s or not sents[j].terminal:
                 continue
-            score, reasons = score_window(sents, i, j, target)
+            score, reasons = score_window(sents, i, j, target, profile)
             words = [w for s in sents[i:j + 1] for w in s.words]
             cands.append(Candidate(i, j, sents[i].start, sents[j].end,
                                    " ".join(s.text for s in sents[i:j + 1]), words, score, reasons))
@@ -171,13 +218,13 @@ def generate_candidates(sents: list[Sentence], min_s: float, max_s: float, targe
 
 
 def pick_diverse(cands: list[Candidate], n: int, max_similarity: float = 0.45,
-                 already: list[Candidate] | None = None) -> list[Candidate]:
+                 already: list[Candidate] | None = None, min_gap: float = 1.0) -> list[Candidate]:
     chosen: list[Candidate] = list(already or [])
     toks = {id(c): _content_tokens(c.text) for c in cands + chosen}
     for c in cands:
         if len(chosen) >= n:
             break
-        if any(c.start < o.end + 1.0 and o.start < c.end + 1.0 for o in chosen):
+        if any(c.start < o.end + min_gap and o.start < c.end + min_gap for o in chosen):
             continue
         if any(_jaccard(toks[id(c)], toks[id(o)]) > max_similarity for o in chosen):
             continue
@@ -195,30 +242,52 @@ def effective_bounds(duration: float, min_s: float, max_s: float, target: float)
 
 
 def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: float,
-           duration: float = 0.0, reranker=None) -> list[Candidate]:
+           duration: float = 0.0, reranker=None, profile: str | SelectionProfile = "v2",
+           report: dict | None = None) -> list[Candidate]:
+    """Choose up to n diverse, self-contained excerpts. If `report` is a dict it is
+    filled with an explanation of how many candidates were found and why."""
+    prof = PROFILES[profile] if isinstance(profile, str) else profile
+    rep = report if report is not None else {}
     sents = build_sentences(segments)
+    rep.update(sentences=len(sents), profile=prof.name)
     if not sents:
+        rep["note"] = "No sentences in the transcript."
         return []
     min_s, max_s, target = effective_bounds(duration or sents[-1].end, min_s, max_s, target)
-    cands = generate_candidates(sents, min_s, max_s, target)
+    rep["bounds"] = [round(min_s, 1), round(max_s, 1), round(target, 1)]
+    cands = generate_candidates(sents, min_s, max_s, target, prof)
     if not cands:
         # Fallback: allow shorter windows rather than producing nothing.
-        cands = generate_candidates(sents, max(5.0, min_s / 2), max_s, target)
+        cands = generate_candidates(sents, max(5.0, min_s / 2), max_s, target, prof)
+        rep["relaxed_min"] = True
+    rep["windows_scored"] = len(cands)
     cands.sort(key=lambda c: c.score, reverse=True)
-    if reranker is not None:
-        pool = pick_diverse(cands, n * 3, max_similarity=0.6)
+    if cands:
+        floor = max(prof.absolute_floor, cands[0].score * prof.relative_floor)
+        strong = [c for c in cands if c.score >= floor]
+        rep["floor"] = round(floor, 3)
+    else:
+        strong = []
+    chosen: list[Candidate] = []
+    if reranker is not None and strong:
+        pool = pick_diverse(strong, n * 3, max_similarity=0.6, min_gap=prof.min_gap)
         try:
             ranked = reranker(pool, n)
         except Exception as e:  # noqa: BLE001
             log.warning("LLM re-ranking failed, using heuristic ranking: %s", e)
+            rep["llm"] = f"failed: {e}"
             ranked = None
         if ranked:
             for c in ranked:
                 c.method = "llm+heuristic"
-            chosen = pick_diverse(ranked, n)
-            chosen = pick_diverse(cands, n, already=chosen)
-            return sorted(chosen, key=lambda c: c.start)
-    return sorted(pick_diverse(cands, n), key=lambda c: c.start)
+            chosen = pick_diverse(ranked, n, min_gap=prof.min_gap)
+            rep["llm"] = "re-ranked"
+    chosen = pick_diverse(strong, n, already=chosen, min_gap=prof.min_gap)
+    rep["selected"] = len(chosen)
+    if len(chosen) < n:
+        rep["note"] = (f"Selected {len(chosen)} of the requested {n}: the remaining passages were too similar, "
+                       "overlapping, or scored well below the strongest material (not padded with weak clips).")
+    return sorted(chosen, key=lambda c: c.start)
 
 
 def context_for(sents: list[Sentence], start: float, end: float, seconds: float) -> tuple[str, str]:

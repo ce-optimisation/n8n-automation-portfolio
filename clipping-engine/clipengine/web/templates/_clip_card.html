@@ -22,6 +22,8 @@
       <pre class="desc" id="desc-{{ c.id }}">{{ c.description }}</pre>
       <button class="btn sm" type="button" onclick="navigator.clipboard.writeText(document.getElementById('desc-{{ c.id }}').innerText).then(()=>{this.textContent='Copied ✓'})">Copy description</button>
     </details>
+    {% set pubsum = (pubs or {}).get(c.id) %}
+    {% if pubsum %}<p class="pubrow">{% for plat, st in pubsum.items() %}<span class="badge pub-{{ st.status }}" title="{{ st.detail or '' }}">{{ 'TikTok' if plat == 'tiktok' else 'Instagram' }}: {{ st.label }}</span> {% endfor %}</p>{% endif %}
     {% if c.error %}<p class="err">{{ c.error[:300] }}</p>{% endif %}
     <div class="buttons">
       <form method="post" action="/clips/{{ c.id }}/approve"><button class="btn good">Approve</button></form>

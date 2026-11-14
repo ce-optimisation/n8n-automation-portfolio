@@ -19,11 +19,13 @@
 </section>
 
 <section class="card">
-  <h2>From a URL</h2>
-  <p class="muted">Only for sources whose terms and rights holders permit automated retrieval. Allowed domains (ALLOWED_URL_DOMAINS):
-    <b>{{ s.allowed_url_domains|join(', ') or 'none configured' }}</b>.</p>
-  <details><summary>Platforms that are refused, and why</summary>
-    <p class="muted">{{ restricted|join(', ') }} — their terms prohibit automated downloading without permission. Use the platform's own download/export feature (e.g. YouTube Studio for your own uploads) or obtain the file from the rights holder, then upload it above. Nothing here bypasses logins, DRM, or rate limits.</p></details>
+  <h2>From a link</h2>
+  <ul class="muted small-list">
+    <li><b>Direct video file links</b> (ending in .mp4, .mov, .webm…, e.g. a council or parliament publishing its meeting video) are downloaded automatically, with resume on interruption.</li>
+    <li><b>Web pages</b> are fetched only for sites in ALLOWED_URL_DOMAINS (<b>{{ s.allowed_url_domains|join(', ') or 'none configured' }}</b>) or with a recorded written permission.</li>
+    <li><b>Rumble, YouTube, TikTok, Instagram, Facebook, X and similar</b> forbid automated access without their permission. Their links are saved as <b>pending sources</b>: the link is kept as provenance and you attach the file you obtained from the creator/rights holder. If the platform grants you written permission, record it in Settings and these links download automatically.</li>
+  </ul>
+  <details><summary>Restricted platforms</summary><p class="muted">{{ restricted|join(', ') }}. Nothing here bypasses logins, DRM, paywalls or rate limits.</p></details>
   <form method="post" action="/import/url">
     <label>Video URL <input name="url" type="url" required placeholder="https://"></label>
     <label>Title (optional) <input name="title"></label>
@@ -50,4 +52,21 @@ document.getElementById('upform').addEventListener('submit', function (e) {
   xhr.open('POST', f.action); xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest'); xhr.send(new FormData(f));
 });
 </script>
+
+<section class="card" id="pending">
+  <h2>Pending sources — awaiting a file ({{ pending|length }})</h2>
+  <p class="muted">Inbox folder (files saved here are imported automatically within ~20 s): <code>{{ s.inbox }}</code>. Put <code>src-NUMBER</code> in a file's name to attach it to that pending source.</p>
+  {% for p in pending %}
+  <div class="pending">
+    <p><b>#{{ p.id }}</b> <a href="{{ p.url }}" rel="noopener noreferrer" target="_blank">{{ p.url }}</a>{% if p.title %} — {{ p.title }}{% endif %}<br><small class="muted">{{ p.reason }}</small></p>
+    <form method="post" action="/import/upload" enctype="multipart/form-data" class="inline">
+      <input type="hidden" name="pending_id" value="{{ p.id }}">
+      <label>File for this link <input type="file" name="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" required></label>
+      <label>Rights note <input name="rights" placeholder="e.g. File supplied by the creator on 12 May"></label>
+      <button class="btn primary">Attach &amp; analyse</button>
+    </form>
+    <form method="post" action="/sources/{{ p.id }}/cancel"><button class="btn ghost sm">Remove</button></form>
+  </div>
+  {% else %}<p class="muted">None.</p>{% endfor %}
+</section>
 {% endblock %}

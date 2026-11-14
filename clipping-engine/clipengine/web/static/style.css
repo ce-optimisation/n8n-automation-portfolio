@@ -79,3 +79,13 @@ dl.meta { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; margin
   dl.meta { grid-template-columns: 1fr; } dl.meta dt { font-weight: 600; margin-top: 6px; }
   table.jobs th:nth-child(4), table.jobs td:nth-child(4) { display: none; }
 }
+.small-list li { margin: 4px 0; }
+.pending { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+.pubrow { margin: 6px 0; }
+.badge.pub-delivered_inbox, .badge.pub-published, .badge.st-ready, .badge.st-connected { color: var(--good); border-color: var(--good); }
+.badge.pub-failed, .badge.st-failed { color: var(--bad); border-color: var(--bad); }
+.badge.pub-queued, .badge.pub-uploading, .badge.pub-processing, .badge.pub-retrying, .badge.st-untested { color: var(--warn); }
+.badge.pub-awaiting_connection, .badge.st-owner-action-required, .badge.st-awaiting-platform-approval, .badge.st-not-configured { color: var(--accent); }
+table.checklist td:last-child { white-space: nowrap; width: 1%; }
+code, dd, .src, .pending p, .checklist small { overflow-wrap: anywhere; word-break: break-word; }
+main { overflow-x: hidden; }

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -123,17 +123,74 @@ CREATE TABLE IF NOT EXISTS job_logs (
 );
 CREATE INDEX IF NOT EXISTS ix_job_logs_job ON job_logs(job_id);
 
+CREATE TABLE IF NOT EXISTS transcript_chunks (
+    recording_id INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+    chunk_idx INTEGER NOT NULL,
+    start REAL NOT NULL,
+    end REAL NOT NULL,
+    segments_json TEXT NOT NULL,
+    language TEXT,
+    model_label TEXT,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (recording_id, chunk_idx)
+);
+
+CREATE TABLE IF NOT EXISTS pending_sources (
+    id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL,
+    title TEXT,
+    note TEXT,
+    reason TEXT,
+    status TEXT NOT NULL DEFAULT 'awaiting_file',   -- awaiting_file | attached | cancelled
+    recording_id INTEGER,
+    settings_json TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_permissions (
+    id INTEGER PRIMARY KEY,
+    domain TEXT NOT NULL UNIQUE,
+    granted_by TEXT NOT NULL,
+    granted_on TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    scope TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public_media_tokens (
+    token TEXT PRIMARY KEY,
+    clip_id INTEGER NOT NULL,
+    expires_at REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS publish_attempts (
     id INTEGER PRIMARY KEY,
     clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
     platform TEXT NOT NULL,
-    status TEXT NOT NULL,          -- started | uploaded | confirmed | failed
+    status TEXT NOT NULL,          -- see publishing.base.STATES
     remote_id TEXT,
     detail TEXT,
+    stage TEXT,
+    container_id TEXT,
+    job_id INTEGER,
+    confirmed_at REAL,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
 """
+
+
+# Columns added after the first release: (table, column, declaration). Applied idempotently.
+MIGRATIONS = [
+    ("publish_attempts", "stage", "TEXT"),
+    ("publish_attempts", "container_id", "TEXT"),
+    ("publish_attempts", "job_id", "INTEGER"),
+    ("publish_attempts", "confirmed_at", "REAL"),
+    ("recordings", "selection_note", "TEXT"),
+]
 
 
 class Database:
@@ -163,12 +220,22 @@ class Database:
         finally:
             conn.close()
 
+    def _columns(self, table: str) -> set[str]:
+        cache = self.__dict__.setdefault("_colcache", {})
+        if table not in cache:
+            cache[table] = {r["name"] for r in self.query(f"PRAGMA table_info({table})")}
+        return cache[table]
+
     def init(self) -> None:
         conn = self.connect()
         try:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(SCHEMA)
-            conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
+            for table, col, decl in MIGRATIONS:
+                cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
                          (str(SCHEMA_VERSION),))
         finally:
             conn.close()
@@ -202,12 +269,21 @@ class Database:
 
     def insert(self, table: str, **fields: Any) -> int:
         now = time.time()
-        if table != "job_logs":
-            fields.setdefault("created_at", now)
-            fields.setdefault("updated_at", now)
+        cols = self._columns(table)
+        for key in ("created_at", "updated_at"):
+            if key in cols:
+                fields.setdefault(key, now)
         cols = ", ".join(fields)
         qs = ", ".join("?" for _ in fields)
         return self.execute(f"INSERT INTO {table} ({cols}) VALUES ({qs})", tuple(fields.values()))
+
+    # ---- key/value state (setup checklist, last OAuth errors, ...) --------
+    def get_kv(self, key: str, default: str | None = None) -> str | None:
+        row = self.one("SELECT value FROM meta WHERE key = ?", (key,))
+        return row["value"] if row else default
+
+    def set_kv(self, key: str, value: str) -> None:
+        self.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", (key, value))
 
     # ---- domain helpers --------------------------------------------------
     def recording(self, rid: int) -> sqlite3.Row | None:

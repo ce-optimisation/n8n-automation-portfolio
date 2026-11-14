@@ -65,6 +65,9 @@ class Settings:
     whisper_compute_type: str = "auto"
     language: str = ""                   # "" = auto-detect, e.g. "en"
     vad_filter: bool = True
+    whisper_cpu_threads: int = 0         # 0 = automatic
+    whisper_beam_size: int = 5
+    transcribe_chunk_seconds: int = 1200 # long recordings are transcribed in checkpointed chunks
 
     # Candidate selection
     clips_per_recording: int = 6
@@ -88,6 +91,8 @@ class Settings:
     # Ingestion
     allowed_url_domains: list[str] = field(default_factory=list)
     max_upload_mb: int = 8192
+    inbox_dir: Path | None = None        # watch folder; default data/inbox
+    allow_private_urls: bool = False     # TEST-ONLY: permits localhost/private URLs
 
     # Jobs / retention
     max_attempts: int = 3
@@ -99,10 +104,16 @@ class Settings:
     tiktok_client_key: str = ""
     tiktok_client_secret: str = ""
     tiktok_redirect_uri: str = ""
+    tiktok_app_type: str = "desktop"     # desktop (PKCE, hex S256) | web (no PKCE)
     meta_app_id: str = ""
     meta_app_secret: str = ""
     meta_redirect_uri: str = ""
     meta_graph_version: str = "v23.0"
+    instagram_auth_mode: str = "facebook"   # facebook (Facebook Login for Business) | instagram (Instagram Login)
+    instagram_app_id: str = ""
+    instagram_app_secret: str = ""
+    instagram_redirect_uri: str = ""
+    public_media_base_url: str = ""         # https base reachable by Meta, required for instagram mode
 
     # Testing hook: name of a transcriber backend ("whisper" or "stub").
     transcriber_backend: str = "whisper"
@@ -131,9 +142,13 @@ class Settings:
     def secrets_dir(self) -> Path:
         return self.data_dir / "secrets"
 
+    @property
+    def inbox(self) -> Path:
+        return Path(self.inbox_dir) if self.inbox_dir else self.data_dir / "inbox"
+
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.recordings_dir, self.clips_dir, self.work_dir,
-                  self.models_dir, self.secrets_dir, self.data_dir / "logs"):
+                  self.models_dir, self.secrets_dir, self.data_dir / "logs", self.inbox):
             d.mkdir(parents=True, exist_ok=True)
 
     def base_url(self) -> str:
@@ -155,6 +170,9 @@ def get_settings(**overrides) -> Settings:
         whisper_compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "auto") or "auto",
         language=os.environ.get("TRANSCRIBE_LANGUAGE", ""),
         vad_filter=_bool("VAD_FILTER", True),
+        whisper_cpu_threads=_int("WHISPER_CPU_THREADS", 0),
+        whisper_beam_size=_int("WHISPER_BEAM_SIZE", 5),
+        transcribe_chunk_seconds=_int("TRANSCRIBE_CHUNK_SECONDS", 1200),
         clips_per_recording=_int("CLIPS_PER_RECORDING", 6),
         clip_min_seconds=_float("CLIP_MIN_SECONDS", 30.0),
         clip_max_seconds=_float("CLIP_MAX_SECONDS", 90.0),
@@ -169,6 +187,8 @@ def get_settings(**overrides) -> Settings:
         caption_font_size=_int("CAPTION_FONT_SIZE", 64),
         allowed_url_domains=_list("ALLOWED_URL_DOMAINS", ""),
         max_upload_mb=_int("MAX_UPLOAD_MB", 8192),
+        inbox_dir=Path(os.environ["INBOX_DIR"]) if os.environ.get("INBOX_DIR") else None,
+        allow_private_urls=_bool("ALLOW_PRIVATE_URLS", False),
         max_attempts=_int("JOB_MAX_ATTEMPTS", 3),
         delete_rejected_renders_after_days=_int("DELETE_REJECTED_RENDERS_AFTER_DAYS", 14),
         delete_originals_after_days=_int("DELETE_ORIGINALS_AFTER_DAYS", 0),
@@ -176,10 +196,16 @@ def get_settings(**overrides) -> Settings:
         tiktok_client_key=os.environ.get("TIKTOK_CLIENT_KEY", ""),
         tiktok_client_secret=os.environ.get("TIKTOK_CLIENT_SECRET", ""),
         tiktok_redirect_uri=os.environ.get("TIKTOK_REDIRECT_URI", ""),
+        tiktok_app_type=(os.environ.get("TIKTOK_APP_TYPE", "desktop") or "desktop").lower(),
         meta_app_id=os.environ.get("META_APP_ID", ""),
         meta_app_secret=os.environ.get("META_APP_SECRET", ""),
         meta_redirect_uri=os.environ.get("META_REDIRECT_URI", ""),
         meta_graph_version=os.environ.get("META_GRAPH_VERSION", "v23.0"),
+        instagram_auth_mode=(os.environ.get("INSTAGRAM_AUTH_MODE", "facebook") or "facebook").lower(),
+        instagram_app_id=os.environ.get("INSTAGRAM_APP_ID", ""),
+        instagram_app_secret=os.environ.get("INSTAGRAM_APP_SECRET", ""),
+        instagram_redirect_uri=os.environ.get("INSTAGRAM_REDIRECT_URI", ""),
+        public_media_base_url=os.environ.get("PUBLIC_MEDIA_BASE_URL", "").rstrip("/"),
         transcriber_backend=os.environ.get("CLIPENGINE_TRANSCRIBER", "whisper"),
     )
     for k, v in overrides.items():

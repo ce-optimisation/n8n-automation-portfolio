@@ -4,6 +4,17 @@
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 <section class="card">
+  <h2>Setup checklist</h2>
+  <table class="jobs checklist">
+  {% for it in checklist %}
+    <tr><td><b>{{ loop.index }}. {{ it.title }}</b><br><small class="muted">{{ it.detail }}</small>{% if it.action %}<br><small><b>Next:</b> {{ it.action }}</small>{% endif %}</td>
+      <td><span class="badge st-{{ it.status|lower|replace(' ', '-') }}">{{ it.status }}</span></td></tr>
+  {% endfor %}
+  </table>
+  <form method="post" action="/settings/download-model" class="inline"><button class="btn sm">Download Whisper model now</button></form>
+</section>
+
+<section class="card">
   <h2>This computer</h2>
   <dl class="meta">
     <dt>OS</dt><dd>{{ hw.os }}</dd>
@@ -11,7 +22,10 @@
     <dt>RAM</dt><dd>{{ hw.ram_gb }} GB</dd>
     <dt>GPU</dt><dd>{% if hw.cuda_devices %}{{ hw.gpu_name or 'CUDA device' }} {{ hw.vram_gb }} GB{% else %}No CUDA GPU detected (CPU mode){% endif %}</dd>
     <dt>FFmpeg</dt><dd>{{ hw.ffmpeg or 'NOT FOUND' }}</dd>
-    <dt>Whisper</dt><dd>{{ model[0] }} on {{ model[1] }} ({{ model[2] }}){% if s.whisper_model == 'auto' %} — chosen automatically{% endif %}</dd>
+    <dt>Whisper</dt><dd>{{ model[0] }} on {{ model[1] }} ({{ model[2] }}){% if s.whisper_model == 'auto' %} — chosen automatically{% endif %}, {{ s.whisper_cpu_threads or threads }} CPU threads, beam {{ s.whisper_beam_size }}
+      <br><small class="muted">{% if model[1] == 'cpu' %}CPU mode. Rough guide: a 1-hour recording takes about {{ {'tiny':'5–10','tiny.en':'5–10','base':'8–15','base.en':'8–15','small':'20–40','small.en':'20–40','medium':'45–90','medium.en':'45–90'}.get(model[0], '30–90') }} minutes on a typical 4–8 core PC. Faster: WHISPER_MODEL=base.en; more accurate: small.en. NVIDIA GPU: set INSTALL_CUDA_LIBS=1 and restart the launcher.{% else %}GPU mode — fastest option.{% endif %}</small></dd>
+    <dt>Data folder</dt><dd>{{ s.data_dir }}{% if 'onedrive' in (s.data_dir|string|lower) %} <span class="warn">— inside OneDrive: syncing large videos can slow things down; consider CLIPENGINE_DATA_DIR on a local drive.</span>{% endif %}</dd>
+    <dt>Inbox folder</dt><dd>{{ s.inbox }}</dd>
     <dt>Local LLM</dt><dd>{{ llm }}</dd>
   </dl>
 </section>
@@ -23,6 +37,8 @@
 </section>
 <section class="card">
   <h2>Publishing connections</h2>
+  <p class="muted">TikTok app type: <b>{{ s.tiktok_app_type }}</b> · redirect URI: <code>{{ s.tiktok_redirect_uri or 'not set' }}</code><br>
+  Instagram mode: <b>{{ instagram.mode }}</b> ({{ 'Facebook Login for Business — needs a linked Facebook Page; uploads the file directly' if instagram.mode == 'facebook' else 'Instagram Login — no Facebook Page; Meta fetches each clip from a one-time link under ' ~ (s.public_media_base_url or 'PUBLIC_MEDIA_BASE_URL (not set)') }})</p>
   <p class="muted">Tokens are stored in: {{ token_backend }}. Client credentials come from .env.</p>
   <div class="pub">
     <div><h3>TikTok (inbox upload)</h3>
@@ -37,5 +53,32 @@
     </div>
   </div>
   <p class="muted">Until a platform is connected, use Download MP4 and Copy description on each clip.</p>
+</section>
+
+<section class="card">
+  <h2>Source permissions</h2>
+  <p class="muted">Some platforms (e.g. {{ restricted[:6]|join(', ') }}) forbid automated access unless <b>the platform</b> grants written permission. Record such permission here only if you actually hold it; it is cited in each import's provenance. Without it, links from these platforms are saved as pending sources and you attach the file yourself.</p>
+  <ul class="list">{% for p in perms %}<li><b>{{ p.domain }}</b> — granted by {{ p.granted_by }} on {{ p.granted_on }}, ref {{ p.reference }}{% if p.scope %} ({{ p.scope }}){% endif %}
+    <form method="post" action="/settings/permissions/{{ p.id }}/delete" style="display:inline"><button class="btn ghost sm">Remove</button></form></li>{% else %}<li class="muted">None recorded.</li>{% endfor %}</ul>
+  <details><summary>Record a written permission</summary>
+    <form method="post" action="/settings/permissions" class="grid3">
+      <label>Domain <input name="domain" placeholder="rumble.com" required></label>
+      <label>Granted by <input name="granted_by" placeholder="Organisation and person" required></label>
+      <label>Date <input name="granted_on" type="date" required></label>
+      <label>Reference <input name="reference" placeholder="Email/contract reference" required></label>
+      <label>Scope <input name="scope" placeholder="e.g. our channel's videos only"></label>
+      <label class="check"><input type="checkbox" name="confirm" value="yes" required> I hold this written permission.</label>
+      <button class="btn">Save</button>
+    </form></details>
+</section>
+
+<section class="card">
+  <h2>Using the dashboard from your phone (securely)</h2>
+  <ol class="small-list">
+    <li>Set a strong <code>DASHBOARD_PASSWORD</code> in <code>.env</code> and restart. Without a password the dashboard only answers on this PC.</li>
+    <li><b>Recommended — Tailscale (free):</b> install Tailscale on this PC and your phone, sign in to both with the same account, then on the PC run <code>tailscale serve --bg 8765</code>. Open the <code>https://&lt;pc-name&gt;.&lt;tailnet&gt;.ts.net</code> address on your phone. Traffic is encrypted, nothing is exposed to the internet, and the app can stay bound to 127.0.0.1.</li>
+    <li><b>Home Wi-Fi only (simpler, unencrypted):</b> set <code>CLIPENGINE_HOST=0.0.0.0</code>, allow the Windows Firewall prompt for <i>Private networks</i> only, and open the address printed in the console. Only do this on a network you trust.</li>
+  </ol>
+  <p class="muted">Never port-forward this dashboard on your router or expose it on a public network.</p>
 </section>
 {% endblock %}

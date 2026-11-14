@@ -36,17 +36,18 @@ def test_layout_places_captions_below_landscape_video(settings):
     assert render.layout(settings, 1080, 1920)["align"] == 2
 
 
-def test_url_policy(settings):
-    ok, why = ingest.check_url_policy("https://rumble.com/v123-video.html", settings)
-    assert not ok and "rumble" in why.lower()
-    ok, why = ingest.check_url_policy("https://www.youtube.com/watch?v=x", settings)
-    assert not ok
-    ok, why = ingest.check_url_policy("https://example.org/a.mp4", settings)
-    assert not ok and "ALLOWED_URL_DOMAINS" in why
+def test_url_policy(settings, monkeypatch):
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["93.184.216.34"])
+    d = ingest.classify_url("https://rumble.com/v123-video.html", settings)
+    assert d.method == "link_only" and d.code == "restricted_platform" and "rumble" in d.message.lower()
+    assert ingest.classify_url("https://www.youtube.com/watch?v=x", settings).method == "link_only"
+    assert ingest.classify_url("https://example.org/a.mp4", settings).method == "direct"
+    d = ingest.classify_url("https://example.org/watch/123", settings)
+    assert d.method == "link_only" and "ALLOWED_URL_DOMAINS" in d.message
     settings.allowed_url_domains = ["example.org"]
-    assert ingest.check_url_policy("https://media.example.org/a.mp4", settings)[0]
-    assert not ingest.check_url_policy("ftp://example.org/a.mp4", settings)[0]
-    assert not ingest.check_url_policy("https://notexample.org/a.mp4", settings)[0]
+    assert ingest.classify_url("https://media.example.org/page", settings).method == "ytdlp"
+    assert ingest.classify_url("ftp://example.org/a.mp4", settings).code == "unsupported_scheme"
+    assert ingest.classify_url("https://notexample.org/page", settings).method == "link_only"
 
 
 def test_safe_filename():

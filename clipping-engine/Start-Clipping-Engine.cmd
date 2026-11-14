@@ -14,7 +14,10 @@ echo.
 
 rem ---- 1. Python 3.10+ ---------------------------------------------------------
 set "PY="
-py -3 -c "import sys; sys.exit(0 if (3,10)<=sys.version_info[:2]<=(3,13) else 1)" >nul 2>nul && set "PY=py -3"
+rem Prefer specific versions: the speech-recognition libraries publish wheels for 3.10-3.13.
+for %%V in (3.12 3.13 3.11 3.10) do (
+  if not defined PY py -%%V -c "import sys" >nul 2>nul && set "PY=py -%%V"
+)
 if not defined PY (
   python -c "import sys; sys.exit(0 if (3,10)<=sys.version_info[:2]<=(3,13) else 1)" >nul 2>nul && set "PY=python"
 )
@@ -34,6 +37,12 @@ if not defined PY (
 echo  [ok] Python: %PY%
 
 rem ---- 2. Virtual environment & packages ----------------------------------------
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" -c "import sys; sys.exit(0 if (3,10)<=sys.version_info[:2]<=(3,13) else 1)" >nul 2>nul || (
+    echo  Existing .venv uses an unsupported Python version; recreating it ...
+    rmdir /s /q ".venv"
+  )
+)
 if not exist ".venv\Scripts\python.exe" (
   echo  Creating private Python environment in .venv ...
   %PY% -m venv .venv || goto :fail
@@ -79,5 +88,7 @@ set "RC=1"
 :fail_rc
 echo.
 echo  The Clipping Engine did not start (code %RC%). Read the messages above.
+echo  Detailed log: %~dp0data\logs\clipengine.jsonl
+echo  Help: README.md, section "Troubleshooting".
 if not "%CLIPENGINE_NONINTERACTIVE%"=="1" pause
 exit /b %RC%

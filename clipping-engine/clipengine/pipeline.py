@@ -94,27 +94,82 @@ class Pipeline:
         job = self.db.one("SELECT error FROM jobs WHERE id = ?", (ctx.id,))
         self.db.update("recordings", rid, status="failed", error=job["error"] if job else "failed")
 
+    def _record_stats(self, rid: int, **stats) -> None:
+        rec = self.db.recording(rid)
+        meta = json.loads(rec["metadata_json"] or "{}")
+        meta.setdefault("processing", {}).update(stats)
+        self.db.update("recordings", rid, metadata_json=json.dumps(meta, default=str))
+
     def transcribe_recording(self, ctx: JobContext, rec, s: Settings) -> None:
-        self.db.update("recordings", rec["id"], status="transcribing", stage="transcribing", error=None)
-        wav = self.settings.work_dir / f"rec{rec['id']}_job{ctx.id}.wav"
-        try:
+        """Extract audio once, then transcribe in checkpointed chunks. A crash or restart
+        resumes at the first unfinished chunk instead of starting over."""
+        from . import media, transcribe
+        rid = rec["id"]
+        self.db.update("recordings", rid, status="transcribing", stage="transcribing", error=None)
+        if ctx.payload.get("retranscribe") and not ctx.payload.get("_chunks_cleared"):
+            self.db.execute("DELETE FROM transcript_chunks WHERE recording_id = ?", (rid,))
+        wav = self.settings.work_dir / f"rec{rid:05d}_audio.wav"
+        t0 = time.time()
+        if not wav.exists():
             ctx.progress(0.02, "Extracting audio", force=True)
-            from . import media
-            media.extract_audio(Path(rec["file_path"]), wav, duration=rec["duration"],
-                                on_progress=lambda f: ctx.progress(0.02 + 0.08 * f, "Extracting audio"))
-            transcriber = get_transcriber(s)
-            ctx.log(f"Transcribing with {transcriber.model_label}")
-            ctx.progress(0.1, f"Loading model ({transcriber.model_label})", force=True)
-            segs, lang = transcriber.transcribe(
-                wav, rec["duration"], on_progress=lambda f: ctx.progress(0.1 + 0.75 * f, "Transcribing"))
-        finally:
-            wav.unlink(missing_ok=True)  # disposable intermediate
+            tmp = wav.with_suffix(".tmp.wav")
+            media.extract_audio(Path(rec["file_path"]), tmp, duration=rec["duration"],
+                                on_progress=lambda f: ctx.progress(0.02 + 0.06 * f, "Extracting audio"))
+            tmp.replace(wav)
+            extract_s = time.time() - t0
+        else:
+            extract_s = 0.0
+            ctx.log("Reusing extracted audio from an interrupted run")
+        chunks = transcribe.plan_chunks(wav, s.transcribe_chunk_seconds)
+        done = {r["chunk_idx"]: r for r in self.db.query(
+            "SELECT * FROM transcript_chunks WHERE recording_id = ? ORDER BY chunk_idx", (rid,))}
+        if any(abs(done[i]["start"] - chunks[i][0]) > 0.05 for i in done if i < len(chunks)) or \
+                any(i >= len(chunks) for i in done):
+            ctx.log("Chunk plan changed since the last run; discarding old checkpoints", "WARNING")
+            self.db.execute("DELETE FROM transcript_chunks WHERE recording_id = ?", (rid,))
+            done = {}
+        transcriber = get_transcriber(s)
+        ctx.progress(0.08, f"Loading model ({transcriber.model_label})", force=True)
+        load_s = transcriber.prepare()
+        ctx.log(f"Transcribing with {transcriber.model_label} in {len(chunks)} chunk(s); model ready in "
+                f"{load_s:.1f}s" + (f"; resuming after {len(done)} completed chunk(s)" if done else ""))
+        total = sum(b - a for a, b in chunks) or 1.0
+        lang = s.language or next((r["language"] for r in done.values() if r["language"]), None)
+        t1 = time.time()
+        for i, (a, b) in enumerate(chunks):
+            if i in done:
+                continue
+            base = sum(y - x for x, y in chunks[:i]) / total
+            frac = (b - a) / total
+            tc = time.time()
+            segs, lang = transcriber.transcribe_range(
+                wav, a, b, lang, on_progress=lambda f, base=base, frac=frac: ctx.progress(
+                    0.1 + 0.75 * (base + frac * f), f"Transcribing chunk {i + 1}/{len(chunks)}"))
+            self.db.insert("transcript_chunks", recording_id=rid, chunk_idx=i, start=a, end=b,
+                           segments_json=json.dumps(segs), language=lang, model_label=transcriber.model_label)
+            el = time.time() - tc
+            ctx.log(f"Chunk {i + 1}/{len(chunks)} ({a:.0f}-{b:.0f}s): {len(segs)} segments in {el:.1f}s "
+                    f"({(b - a) / max(el, 1e-6):.1f}x real time)")
+            if ctx.cancelled():
+                return
+        rows = self.db.query("SELECT * FROM transcript_chunks WHERE recording_id = ? ORDER BY chunk_idx", (rid,))
+        segs = [sg for r in rows for sg in json.loads(r["segments_json"])]
         if not segs:
             raise PermanentError("No speech was detected in this recording.")
-        self.db.replace_transcript(rec["id"], segs)
-        self.db.update("recordings", rec["id"], language=lang, whisper_model=transcriber.model_label,
+        self.db.replace_transcript(rid, segs)
+        self.db.execute("DELETE FROM transcript_chunks WHERE recording_id = ?", (rid,))
+        wav.unlink(missing_ok=True)  # disposable intermediate
+        transcribe_s = time.time() - t1
+        self.db.update("recordings", rid, language=lang, whisper_model=transcriber.model_label,
                        status="transcribed", stage="transcribed")
-        ctx.log(f"Transcript stored: {len(segs)} segments, language={lang}")
+        self._record_stats(rid, extract_audio_s=round(extract_s, 1), model_load_s=round(load_s, 1),
+                           transcribe_s=round(transcribe_s, 1), chunks=len(chunks),
+                           speed_x_realtime=round((rec["duration"] or 0) / max(transcribe_s, 1e-6), 2),
+                           transcriber=transcriber.model_label)
+        if transcriber.name == "whisper":
+            self.db.set_kv("verified.transcription", json.dumps({"recording_id": rid, "at": time.time(),
+                                                                 "model": transcriber.model_label}))
+        ctx.log(f"Transcript stored: {len(segs)} segments, language={lang}, {transcribe_s:.0f}s")
 
     def make_reranker(self, s: Settings, ctx: JobContext | None = None):
         if s.llm_provider == "none":
@@ -158,9 +213,14 @@ class Pipeline:
                     self.db.execute("DELETE FROM clips WHERE id = ?", (c["id"],))
         self.db.update("recordings", rid, status="analysing", stage="selecting")
         ctx.progress(0.88, "Selecting candidate excerpts", force=True)
+        report: dict = {}
+        ts = time.time()
         cands = segment.select(segs, n=s.clips_per_recording, min_s=s.clip_min_seconds,
                                max_s=s.clip_max_seconds, target=s.clip_target_seconds,
-                               duration=rec["duration"], reranker=self.make_reranker(s, ctx))
+                               duration=rec["duration"], reranker=self.make_reranker(s, ctx), report=report)
+        self._record_stats(rid, selection_s=round(time.time() - ts, 2), selection=report)
+        self.db.update("recordings", rid, selection_note=report.get("note"))
+        ctx.log(f"Selection: {report}")
         if not cands:
             raise PermanentError("No suitable self-contained passages were found (transcript too short or "
                                  "no complete sentences).")

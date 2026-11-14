@@ -10,29 +10,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clipengine.config import get_settings  # noqa: E402
+from clipengine.testsupport import stub_transcript_from_timing  # noqa: E402,F401
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
-
-
-def stub_transcript_from_timing(timing_path: Path) -> dict:
-    """TEST-ONLY: build a word-timed transcript from the sample generator's exact
-    paragraph timings (words spread proportionally to their length). Used where the
-    real Whisper model cannot be downloaded; never used by the application itself."""
-    data = json.loads(Path(timing_path).read_text(encoding="utf-8"))
-    segments = []
-    for p in data["paragraphs"]:
-        toks = p["text"].split()
-        total = sum(len(t) + 1 for t in toks)
-        t = p["start"]
-        span = p["end"] - p["start"]
-        words = []
-        for tok in toks:
-            d = span * (len(tok) + 1) / total
-            words.append({"start": round(t, 3), "end": round(t + d * 0.92, 3), "word": " " + tok, "prob": 0.93})
-            t += d
-        segments.append({"start": p["start"], "end": p["end"], "text": p["text"], "avg_logprob": -0.2,
-                         "no_speech_prob": 0.01, "words": words})
-    return {"language": "en", "segments": segments}
 
 
 @pytest.fixture(scope="session")

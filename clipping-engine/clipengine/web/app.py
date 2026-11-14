@@ -10,21 +10,21 @@ import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import hardware, ingest, maintenance, render, segment
+from .. import hardware, inbox, ingest, maintenance, render, segment, setup_status
 from ..config import Settings
 from ..db import Database
 from ..jobs import JobQueue, PermanentError
 from ..pipeline import Pipeline
-from ..publishing import (InstagramClient, NotConfigured, PublishError, TikTokClient, TokenStore,
+from ..publishing import (STATES, InstagramClient, NotConfigured, PublishError, TikTokClient, TokenStore,
                           editorial_gate)
-from ..publishing.base import RIGHTS_OK
+from ..publishing.service import PublishService
 
 log = logging.getLogger("clipengine.web")
 HERE = Path(__file__).resolve().parent
@@ -50,15 +50,31 @@ class App:
         self.pipeline = Pipeline(settings, self.db, self.queue)
         self.tokens = TokenStore(settings.secrets_dir)
         self.tiktok = TikTokClient(settings.tiktok_client_key, settings.tiktok_client_secret,
-                                   settings.tiktok_redirect_uri, self.tokens)
-        self.instagram = InstagramClient(settings.meta_app_id, settings.meta_app_secret,
-                                         settings.meta_redirect_uri, self.tokens, settings.meta_graph_version)
+                                   settings.tiktok_redirect_uri, self.tokens, app_type=settings.tiktok_app_type)
+        if settings.instagram_auth_mode == "instagram":
+            self.instagram = InstagramClient(settings.instagram_app_id, settings.instagram_app_secret,
+                                             settings.instagram_redirect_uri, self.tokens, settings.meta_graph_version,
+                                             mode="instagram", public_base_url=settings.public_media_base_url)
+        else:
+            self.instagram = InstagramClient(settings.meta_app_id, settings.meta_app_secret,
+                                             settings.meta_redirect_uri, self.tokens, settings.meta_graph_version)
+        self.publisher = PublishService(settings, self.db, self.queue, self.tiktok, self.instagram)
+        self.queue.register("download_model", self._download_model)
         self.maintenance = maintenance.Maintenance(settings, self.db)
+        self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
+        self.login_failures: dict[str, list[float]] = {}
         self.oauth_state: dict[str, dict] = {}
         key_file = settings.secrets_dir / "session_key"
         if not key_file.exists():
             key_file.write_text(secrets.token_hex(32))
         self.session_key = key_file.read_text().strip().encode()
+
+    def _download_model(self, ctx) -> None:
+        from ..transcribe import WhisperTranscriber
+        t = WhisperTranscriber(self.settings)
+        ctx.progress(0.1, f"Downloading/loading {t.model_label} (one-time, may take several minutes)", force=True)
+        secs = t.prepare()
+        ctx.log(f"Model {t.model_label} ready in {secs:.0f}s")
 
 
 def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
@@ -69,11 +85,13 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         if start_worker:
             core.queue.start()
             core.maintenance.start()
+            core.inbox.start()
         try:
             yield
         finally:
             core.queue.stop()
             core.maintenance.stop()
+            core.inbox.stop()
 
     app = FastAPI(title="Local Clipping Engine", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.core = core
@@ -82,6 +100,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     templates.env.filters["fromjson"] = lambda s: json.loads(s) if s else []
     templates.env.filters["dt"] = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if t else ""
     templates.env.globals["RIGHTS_CHOICES"] = RIGHTS_CHOICES
+    templates.env.globals["PUB_STATES"] = STATES
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     def page(request: Request, name: str, **ctx):
@@ -92,9 +111,21 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     def _auth_token() -> str:
         return hmac.new(core.session_key, settings.dashboard_password.encode(), hashlib.sha256).hexdigest()
 
+    LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
+
     @app.middleware("http")
     async def security(request: Request, call_next):
         path = request.url.path
+        if path.startswith("/public/media/"):
+            return await call_next(request)      # one-time tokenised clip links only (see route)
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower() if not \
+            (request.headers.get("host") or "").startswith("[") else (request.headers.get("host") or "").split("]")[0] + "]"
+        if not settings.dashboard_password and host not in LOCAL_HOSTS and host != "testserver":
+            # Without a password the dashboard only answers to localhost names. This also blocks
+            # DNS-rebinding attacks from web pages open in the owner's browser.
+            return PlainTextResponse("This dashboard has no password, so it only accepts connections addressed "
+                                     "to localhost. Set DASHBOARD_PASSWORD in .env to use it from another device.",
+                                     status_code=403)
         if request.method == "POST":
             origin = request.headers.get("origin") or request.headers.get("referer")
             if origin and urlparse(origin).netloc != request.headers.get("host"):
@@ -110,17 +141,26 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return templates.TemplateResponse(request, "login.html", {"error": error, "counts": None})
 
     @app.post("/login")
-    def login(password: str = Form(...)):
-        if settings.dashboard_password and hmac.compare_digest(password, settings.dashboard_password):
+    def login(request: Request, password: str = Form(...)):
+        ip = request.client.host if request.client else "?"
+        now = time.time()
+        recent = [t for t in core.login_failures.get(ip, []) if now - t < 600]
+        if len(recent) >= 5:
+            return PlainTextResponse("Too many failed sign-in attempts. Wait 10 minutes.", status_code=429)
+        if settings.dashboard_password and hmac.compare_digest(password.encode(), settings.dashboard_password.encode()):
+            core.login_failures.pop(ip, None)
             resp = RedirectResponse("/", status_code=303)
-            resp.set_cookie("ce_auth", _auth_token(), httponly=True, samesite="strict", max_age=30 * 86400)
+            https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+            resp.set_cookie("ce_auth", _auth_token(), httponly=True, samesite="strict", max_age=30 * 86400,
+                            secure=https)
             return resp
+        core.login_failures[ip] = recent + [now]
         time.sleep(1)
         return RedirectResponse("/login?error=1", status_code=303)
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "worker_alive": bool(core.queue._thread and core.queue._thread.is_alive())}
+        return {"ok": True, "app": "clipengine", "worker_alive": bool(core.queue._thread and core.queue._thread.is_alive())}
 
     # ---- dashboard -------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -142,7 +182,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     # ---- import ----------------------------------------------------------
     @app.get("/import", response_class=HTMLResponse)
     def import_form(request: Request, msg: str = "", err: str = ""):
-        return page(request, "import.html", msg=msg, err=err, s=settings,
+        pending = core.db.query("SELECT * FROM pending_sources WHERE status='awaiting_file' ORDER BY id DESC")
+        return page(request, "import.html", msg=msg, err=err, s=settings, pending=pending,
                     restricted=sorted(ingest.RESTRICTED_PLATFORMS))
 
     def _overrides(clips, min_s, max_s, language) -> dict:
@@ -152,7 +193,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.post("/import/upload")
     async def import_upload(request: Request, file: UploadFile = File(...), title: str = Form(""),
                             clips: str = Form(""), min_s: str = Form(""), max_s: str = Form(""),
-                            language: str = Form(""), rights: str = Form("")):
+                            language: str = Form(""), rights: str = Form(""), pending_id: str = Form("")):
         name = ingest.safe_filename(file.filename or "upload.mp4")
         if Path(name).suffix.lower() not in ingest.VIDEO_EXTS:
             return _import_result(request, err=f"Unsupported file type: {file.filename}")
@@ -168,9 +209,17 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                     return _import_result(request, err=f"File exceeds MAX_UPLOAD_MB ({settings.max_upload_mb} MB)")
                 out.write(chunk)
         try:
-            rid, dup, _ = core.pipeline.import_upload(tmp, file.filename or name, title or None,
-                                                      _overrides(clips, min_s, max_s, language), rights or None)
-        except PermanentError as e:
+            if pending_id.strip():
+                rid, dup = ingest.attach_file_to_pending(settings, core.db, int(pending_id), tmp,
+                                                         original_name=file.filename or name, title=title or None,
+                                                         attestation=rights or None)
+                if not dup:
+                    core.queue.enqueue("process_recording", recording_id=rid, dedupe_key=f"process:{rid}",
+                                       payload={"settings": {}})
+            else:
+                rid, dup, _ = core.pipeline.import_upload(tmp, file.filename or name, title or None,
+                                                          _overrides(clips, min_s, max_s, language), rights or None)
+        except (PermanentError, ValueError) as e:
             tmp.unlink(missing_ok=True)
             return _import_result(request, err=str(e))
         if dup:
@@ -181,16 +230,23 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     def _import_result(request: Request, msg: str = "", err: str = "", rid: int | None = None):
         if request.headers.get("hx-request") or request.headers.get("x-requested-with"):
             return JSONResponse({"msg": msg, "err": err, "recording_id": rid}, status_code=400 if err else 200)
-        q = f"msg={msg}" if msg else f"err={err}"
-        return RedirectResponse(f"/import?{q}", status_code=303)
+        return RedirectResponse("/import?" + urlencode({"msg": msg} if msg else {"err": err}), status_code=303)
 
     @app.post("/import/url")
     def import_url(request: Request, url: str = Form(...), title: str = Form(""), clips: str = Form(""),
                    min_s: str = Form(""), max_s: str = Form(""), language: str = Form(""),
                    attest: str = Form("")):
-        ok, reason = ingest.check_url_policy(url, settings)
-        if not ok:
-            return _import_result(request, err=reason)
+        decision = ingest.classify_url(url, settings, core.db)
+        overrides = _overrides(clips, min_s, max_s, language)
+        if decision.method == "link_only":
+            pid, existed = ingest.create_pending_source(core.db, url, title=title or None, reason=decision.message,
+                                                        settings_json=overrides)
+            return _import_result(request, msg=(
+                f"Saved as pending source #{pid}{' (already saved)' if existed else ''}. {decision.message} "
+                f"To finish, upload the file under 'Pending sources' below, or save it into the inbox folder with "
+                f"'src-{pid}' in its file name. The link is kept as the recording's provenance."))
+        if not decision.ok:
+            return _import_result(request, err=decision.message)
         if attest != "yes":
             return _import_result(request, err="Confirm that you are authorised to retrieve this video.")
         dup = ingest.find_duplicate(core.db, url=url)
@@ -200,7 +256,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         core.queue.enqueue("download_url", payload={
             "url": url.strip(), "title": title, "settings": _overrides(clips, min_s, max_s, language),
             "rights_attestation": f"Owner attested authorisation to retrieve {url} at {time.ctime()}"},
-            dedupe_key=f"download:{ingest.normalize_url(url)}")
+            dedupe_key=f"download:{ingest.normalize_url(url)}", max_attempts=6)
         return _import_result(request, msg="Download queued. It will be analysed automatically when complete.")
 
     # ---- recordings ------------------------------------------------------
@@ -222,7 +278,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         clips = core.db.query("SELECT * FROM clips WHERE recording_id = ? ORDER BY start", (rid,))
         segs = core.db.segments(rid)
         jobs = core.db.query("SELECT * FROM jobs WHERE recording_id = ? ORDER BY id DESC LIMIT 20", (rid,))
-        return page(request, "recording.html", rec=rec, clips=clips, segments=segs, jobs=jobs,
+        conn = core.publisher.connections()
+        pubs = {c["id"]: core.publisher.summary(c, conn) for c in clips if c["status"] == "approved"}
+        return page(request, "recording.html", rec=rec, clips=clips, segments=segs, jobs=jobs, pubs=pubs,
                     meta=json.loads(rec["metadata_json"] or "{}"))
 
     @app.get("/recordings/{rid}/media")
@@ -270,7 +328,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         clips = core.db.query(f"SELECT c.*, r.title, r.source_url, r.original_filename FROM clips c "
                               f"JOIN recordings r ON r.id = c.recording_id {where} ORDER BY c.id DESC LIMIT 200",
                               params)
-        return page(request, "review.html", clips=clips, status=status)
+        conn = core.publisher.connections()
+        pubs = {c["id"]: core.publisher.summary(c, conn) for c in clips if c["status"] == "approved"}
+        return page(request, "review.html", clips=clips, status=status, pubs=pubs)
 
     def _clip(cid: int):
         c = core.db.clip(cid)
@@ -286,7 +346,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         words = [w for s in core.db.segments(rec["id"]) for w in s["words"]
                  if w["start"] >= c["start"] - 0.05 and w["end"] <= c["end"] + 0.05]
         return page(request, "clip.html", c=c, rec=rec, words=words, attempts=attempts, err=err, msg=msg,
-                    gate=editorial_gate(c), tiktok=core.tiktok.status(), instagram=core.instagram.status())
+                    gate=editorial_gate(c), tiktok=core.tiktok.status(), instagram=core.instagram.status(),
+                    pub=core.publisher.summary(c))
 
     @app.get("/partials/clip/{cid}/status", response_class=HTMLResponse)
     def clip_status_partial(request: Request, cid: int):
@@ -450,9 +511,51 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         llm = "disabled" if settings.llm_provider == "none" else (
             f"Ollama reachable ({settings.ollama_model})" if segment.ollama_available(settings.ollama_url)
             else "not detected — deterministic selection in use")
+        perms = core.db.query("SELECT * FROM source_permissions ORDER BY domain")
         return page(request, "settings.html", hw=hw, model=model, llm=llm, s=settings,
                     storage=maintenance.storage_report(settings), tiktok=core.tiktok.status(),
-                    instagram=core.instagram.status(), token_backend=core.tokens.backend, msg=msg, err=err)
+                    instagram=core.instagram.status(), token_backend=core.tokens.backend, msg=msg, err=err,
+                    checklist=setup_status.checklist(core), perms=perms,
+                    restricted=sorted(ingest.RESTRICTED_PLATFORMS), threads=__import__(
+                        "clipengine.transcribe", fromlist=["auto_cpu_threads"]).auto_cpu_threads())
+
+    def _settings_redirect(**q):
+        return RedirectResponse("/settings?" + urlencode(q), status_code=303)
+
+    @app.post("/settings/download-model")
+    def download_model():
+        core.queue.enqueue("download_model", dedupe_key="download_model", max_attempts=4)
+        return _settings_redirect(msg="Model download queued; progress is shown on the Jobs page.")
+
+    @app.post("/settings/permissions")
+    def add_permission(domain: str = Form(...), granted_by: str = Form(...), granted_on: str = Form(...),
+                       reference: str = Form(...), scope: str = Form(""), confirm: str = Form("")):
+        domain = domain.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        if confirm != "yes" or not (domain and granted_by.strip() and reference.strip()):
+            return _settings_redirect(err="Fill in every field and confirm you hold this written permission.")
+        core.db.execute("INSERT OR REPLACE INTO source_permissions(domain, granted_by, granted_on, reference, scope, "
+                        "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                        (domain, granted_by.strip(), granted_on.strip(), reference.strip(), scope.strip(),
+                         time.time(), time.time()))
+        return _settings_redirect(msg=f"Written permission recorded for {domain}. It is cited in each import's provenance.")
+
+    @app.post("/settings/permissions/{pid}/delete")
+    def delete_permission(pid: int):
+        core.db.execute("DELETE FROM source_permissions WHERE id = ?", (pid,))
+        return _settings_redirect(msg="Permission removed.")
+
+    @app.post("/sources/{pid}/cancel")
+    def cancel_pending(pid: int):
+        core.db.update("pending_sources", pid, status="cancelled")
+        return RedirectResponse("/import?" + urlencode({"msg": f"Pending source #{pid} removed."}), status_code=303)
+
+    @app.get("/public/media/{token}.mp4")
+    def public_media(token: str):
+        row = core.db.one("SELECT * FROM public_media_tokens WHERE token = ? AND expires_at > ?", (token, time.time()))
+        clip = core.db.clip(row["clip_id"]) if row else None
+        if not clip or not clip["video_path"] or not Path(clip["video_path"]).is_file():
+            raise HTTPException(404)
+        return FileResponse(clip["video_path"], media_type="video/mp4")
 
     @app.get("/connect/{platform}")
     def connect(platform: str):
@@ -462,7 +565,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         try:
             url, state = client.authorize_url()
         except NotConfigured as e:
-            return RedirectResponse(f"/settings?err={e}", status_code=303)
+            return _settings_redirect(err=str(e))
         core.oauth_state[state["state"]] = {"platform": platform, "ts": time.time(), **state}
         return RedirectResponse(url, status_code=303)
 
@@ -477,8 +580,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                        error_description: str = ""):
         st = core.oauth_state.pop(state, None)
         if error:
-            return RedirectResponse(f"/settings?err=Authorisation declined: {error_description or error}",
-                                    status_code=303)
+            msg = f"Authorisation declined or refused by {platform}: {error_description or error}"
+            core.db.set_kv(f"oauth_error.{platform}", msg)
+            return _settings_redirect(err=msg)
         if not st or st["platform"] != platform or time.time() - st["ts"] > 900:
             return RedirectResponse("/settings?err=Invalid or expired OAuth state; try connecting again.",
                                     status_code=303)
@@ -487,30 +591,25 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                 core.tiktok.exchange_code(code, st.get("verifier"))
             else:
                 core.instagram.exchange_code(code)
-        except (PublishError, NotConfigured) as e:
-            return RedirectResponse(f"/settings?err={e}", status_code=303)
-        return RedirectResponse(f"/settings?msg={platform} connected", status_code=303)
+        except (PublishError, NotConfigured, PermanentError) as e:
+            core.db.set_kv(f"oauth_error.{platform}", str(e))
+            return _settings_redirect(err=str(e))
+        except Exception as e:  # noqa: BLE001 - network problems etc. are shown, not crashed on
+            core.db.set_kv(f"oauth_error.{platform}", f"{type(e).__name__}: {e}")
+            return _settings_redirect(err=f"Could not complete sign-in: {e}")
+        core.db.execute("DELETE FROM meta WHERE key = ?", (f"oauth_error.{platform}",))
+        return _settings_redirect(msg=f"{platform} connected")
 
     @app.post("/clips/{cid}/publish/{platform}")
-    def publish(request: Request, cid: int, platform: str, confirm: str = Form("")):
-        c = _clip(cid)
-        problems = editorial_gate(c)
-        if problems:
-            return _back(request, cid, err=" ".join(problems))
+    def publish(request: Request, cid: int, platform: str, confirm: str = Form(""), again: str = Form("")):
+        _clip(cid)
         if platform == "instagram" and confirm != "PUBLISH":
             return _back(request, cid, err="Instagram's API publishes publicly (no drafts). Type PUBLISH to confirm.")
-        aid = core.db.insert("publish_attempts", clip_id=cid, platform=platform, status="started")
         try:
-            if platform == "tiktok":
-                res = core.tiktok.upload_to_inbox(Path(c["video_path"]))
-            elif platform == "instagram":
-                res = core.instagram.publish_reel(Path(c["video_path"]), c["description"] or "")
-            else:
-                raise HTTPException(404)
+            core.publisher.request(cid, platform, again=again == "yes")
         except (PublishError, NotConfigured) as e:
-            core.db.update("publish_attempts", aid, status="failed", detail=str(e))
             return _back(request, cid, err=f"{platform}: {e}")
-        core.db.update("publish_attempts", aid, status=res.status, remote_id=res.remote_id, detail=res.detail)
-        return _back(request, cid, msg=f"{platform}: {res.detail}")
+        return _back(request, cid, msg=f"{platform}: upload queued. Progress appears below; it continues in the "
+                                       "background and resumes after a restart.")
 
     return app

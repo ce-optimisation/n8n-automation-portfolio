@@ -1,28 +1,37 @@
-"""Video ingestion: local files and authorised URLs.
+"""Video ingestion: local files, direct media URLs, permitted extractor sources,
+and "link + file" pending sources for platforms that forbid automated access.
 
-URL ingestion policy
---------------------
-Automated retrieval is only attempted when:
-  1. the host is NOT on the restricted-platform list below (their terms of
-     service prohibit automated downloading without permission), and
-  2. the host is listed in ALLOWED_URL_DOMAINS (configured by the owner), and
-  3. the owner attests, per import, that they are authorised to retrieve it.
+URL ingestion policy (see classify_url)
+---------------------------------------
+* Only http(s) on standard ports; no credentials in URLs; every hop of every
+  redirect must resolve to a public (globally routable) address, and the peer
+  address is re-checked after connecting (defeats DNS rebinding).
+* Direct media files (e.g. https://example.gov/meeting.mp4) are fetched over plain
+  HTTP(S) with resume support, after the owner attests they may use the file.
+* Web pages are only handed to yt-dlp when the host is in ALLOWED_URL_DOMAINS or
+  the owner has recorded written permission for that domain.
+* Platforms whose terms forbid automated access without permission (Rumble,
+  YouTube, TikTok, Instagram, Facebook, X, ...) are never fetched unless the owner
+  has recorded the platform's written permission (Settings → Source permissions).
+  Otherwise the link is saved as a *pending source*: provenance is kept and the
+  owner attaches the file obtained through an authorised route.
 
 Nothing here passes cookies, logs in, bypasses DRM, geo-blocks or rate limits.
-For restricted platforms, the owner should obtain the file through an
-authorised route (the platform's own download/export feature, or directly from
-the rights holder) and use the file upload instead.
 """
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 import shutil
+import socket
 import time
 import unicodedata
+from dataclasses import dataclass
+from email.message import Message
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from .config import Settings
 from .db import Database
@@ -30,13 +39,17 @@ from .jobs import JobContext, PermanentError, TransientError
 from . import media
 
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+CONTENT_TYPE_EXT = {"video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+                    "video/x-matroska": ".mkv", "video/x-m4v": ".m4v", "video/x-msvideo": ".avi"}
+BINARY_TYPES = {"application/octet-stream", "binary/octet-stream", "application/mp4"}
+USER_AGENT = "LocalClippingEngine/1.1 (local editorial review tool)"
 
-# Platforms whose terms prohibit automated downloading by third-party tools
-# without permission. Retrieval from these is refused outright.
+# Platforms whose terms prohibit automated access/downloading without the platform's
+# permission. Never fetched unless a written permission is recorded for the domain.
 RESTRICTED_PLATFORMS = {
-    "youtube.com": "YouTube's Terms of Service prohibit downloading content except via a download feature YouTube provides. Creators can download their own uploads from YouTube Studio.",
-    "youtu.be": "YouTube's Terms of Service prohibit downloading content except via a download feature YouTube provides.",
-    "rumble.com": "Rumble's terms do not grant permission for automated downloading. Obtain the file from the rights holder or Rumble's own download option where the uploader enabled it, then upload it here.",
+    "youtube.com": "YouTube's Terms of Service prohibit downloading except through a feature YouTube provides. Creators can download their own uploads from YouTube Studio.",
+    "youtu.be": "YouTube's Terms of Service prohibit downloading except through a feature YouTube provides.",
+    "rumble.com": "Rumble's Terms of Use prohibit automated access to the site without Rumble's prior written permission. Obtain the original file from the creator/rights holder, or record Rumble's written permission in Settings.",
     "tiktok.com": "TikTok's terms prohibit automated scraping/downloading.",
     "instagram.com": "Instagram's terms prohibit automated collection of content.",
     "facebook.com": "Meta's terms prohibit automated collection of content.",
@@ -75,22 +88,6 @@ def host_matches(host: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
-def check_url_policy(url: str, settings: Settings) -> tuple[bool, str]:
-    p = urlparse(url.strip())
-    if p.scheme not in ("http", "https") or not p.netloc:
-        return False, "Enter a full http(s) URL."
-    host = p.netloc.lower()
-    for dom, reason in RESTRICTED_PLATFORMS.items():
-        if host_matches(host, dom):
-            return False, (f"Automated retrieval from {dom} is not supported: {reason} "
-                           "Use 'Upload a recording' with a file you are authorised to use.")
-    if not any(host_matches(host, d) for d in settings.allowed_url_domains):
-        allowed = ", ".join(settings.allowed_url_domains) or "(none configured)"
-        return False, (f"{host} is not in ALLOWED_URL_DOMAINS ({allowed}). Add it to .env only if the "
-                       "site's terms and the rights holder permit automated downloading, or upload the file instead.")
-    return True, "ok"
-
-
 def _new_recording_dir(settings: Settings, title: str) -> Path:
     d = settings.recordings_dir / f"{time.strftime('%Y%m%d-%H%M%S')}_{safe_filename(title, 40)}"
     i = 1
@@ -127,7 +124,7 @@ def register_file(settings: Settings, db: Database, src: Path, *, title: str | N
     digest = sha256_file(src)
     dup = find_duplicate(db, sha256=digest, url=source_url)
     if dup:
-        if move and src.exists() and settings.data_dir in src.resolve().parents:
+        if move and src.exists() and settings.work_dir.resolve() in src.resolve().parents:  # temp copies only
             src.unlink(missing_ok=True)
         return dup["id"], True
     info = media.probe(src)
@@ -160,18 +157,234 @@ def register_file(settings: Settings, db: Database, src: Path, *, title: str | N
     return rid, False
 
 
-def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext) -> None:
-    """Job handler: retrieve an authorised URL with yt-dlp, then queue analysis."""
-    url = ctx.payload["url"]
-    ok, reason = check_url_policy(url, settings)
-    if not ok:
-        raise PermanentError(reason)
+class SourceError(PermanentError):
+    """A permanent, explained ingestion failure. `code` is machine-readable."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass
+class UrlDecision:
+    method: str      # direct | ytdlp | link_only | refused
+    code: str
+    message: str
+    host: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.method in ("direct", "ytdlp")
+
+
+def resolve_host(host: str) -> list[str]:
+    """Resolve a hostname to IP strings (module-level so tests can replace it)."""
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    return sorted({i[4][0] for i in infos})
+
+
+def is_public_ip(ip: str) -> bool:
+    addr = ipaddress.ip_address(ip.split("%")[0])
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    return addr.is_global and not addr.is_multicast
+
+
+def permission_for(db: Database | None, host: str):
+    if db is None:
+        return None
+    for row in db.query("SELECT * FROM source_permissions"):
+        if host_matches(host, row["domain"]):
+            return row
+    return None
+
+
+def restricted_reason(host: str) -> tuple[str, str] | None:
+    for dom, reason in RESTRICTED_PLATFORMS.items():
+        if host_matches(host, dom):
+            return dom, reason
+    return None
+
+
+def check_network_target(url: str, settings: Settings) -> str:
+    """Validate scheme/port/credentials and that the host resolves only to public IPs.
+    Returns the hostname. Raises SourceError."""
+    p = urlparse(url.strip())
+    if p.scheme not in ("http", "https") or not p.hostname:
+        raise SourceError("unsupported_scheme", "Only http:// and https:// links are supported.")
+    if p.username or p.password:
+        raise SourceError("credentials_in_url", "Links containing usernames or passwords are not accepted.")
+    if p.port not in (None, 80, 443) and not settings.allow_private_urls:
+        raise SourceError("unsupported_port", f"Port {p.port} is not allowed; use a standard http(s) link.")
+    host = p.hostname.lower()
+    if settings.allow_private_urls:      # TEST-ONLY switch (ALLOW_PRIVATE_URLS=1)
+        return host
+    try:
+        ips = [host] if _is_ip(host) else resolve_host(host)
+    except OSError as e:
+        raise SourceError("unresolvable", f"Could not resolve {host} ({e}). Check the link and your "
+                                          "internet connection.") from e
+    bad = [ip for ip in ips if not is_public_ip(ip)]
+    if bad or not ips:
+        raise SourceError("private_address", f"{host} points to a private or local network address "
+                                             f"({', '.join(bad) or 'none'}); refused for security.")
+    return host
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def classify_url(url: str, settings: Settings, db: Database | None = None) -> UrlDecision:
+    """Decide how (and whether) a URL may be ingested. Never touches the network
+    except for DNS resolution of the host."""
+    p = urlparse((url or "").strip())
+    host = (p.hostname or "").lower()
+    restricted = restricted_reason(host) if host else None
+    perm = permission_for(db, host) if host else None
+    if restricted and not perm:
+        dom, reason = restricted
+        return UrlDecision("link_only", "restricted_platform",
+                           f"Automated retrieval from {dom} is not permitted: {reason}", host)
+    try:
+        check_network_target(url, settings)
+    except SourceError as e:
+        return UrlDecision("refused", e.code, str(e), host)
+    if Path(p.path).suffix.lower() in VIDEO_EXTS and not restricted:
+        return UrlDecision("direct", "direct_media", "Direct video file link.", host)
+    if perm:
+        return UrlDecision("ytdlp", "permission_recorded",
+                           f"Written permission recorded for {perm['domain']} ({perm['reference']}).", host)
+    if any(host_matches(host, d) for d in settings.allowed_url_domains):
+        return UrlDecision("ytdlp", "allowlisted", f"{host} is in ALLOWED_URL_DOMAINS.", host)
+    return UrlDecision("link_only", "not_allowed",
+                       f"{host} is a web page that is not in ALLOWED_URL_DOMAINS, so it will not be fetched "
+                       "automatically. Use a direct link to the video file (ending in .mp4/.mov/.webm), add the "
+                       "site to ALLOWED_URL_DOMAINS only if its terms and the rights holder permit automated "
+                       "downloading, or attach the file yourself.", host)
+
+
+def check_url_policy(url: str, settings: Settings, db: Database | None = None) -> tuple[bool, str]:
+    d = classify_url(url, settings, db)
+    return d.ok, d.message
+
+
+# ---- direct HTTP(S) download with resume -------------------------------------
+
+def _filename_from_disposition(value: str | None) -> str | None:
+    if not value:
+        return None
+    m = Message()
+    m["content-disposition"] = value
+    name = m.get_filename()
+    return Path(name).name if name else None
+
+
+def _peer_is_public(response) -> bool:
+    try:
+        stream = response.extensions.get("network_stream")
+        addr = stream.get_extra_info("server_addr") if stream else None
+        return addr is None or is_public_ip(addr[0])
+    except Exception:  # noqa: BLE001 - if unknown, fall back to the DNS check already done
+        return True
+
+
+def download_direct(url: str, part: Path, settings: Settings, *, on_progress=None, cancelled=None,
+                    client=None) -> dict:
+    """Download a direct media URL to `part`, resuming a previous partial download.
+
+    Transient problems raise TransientError (the job is retried later and resumes);
+    permanent ones raise SourceError with a specific code.
+    """
+    import httpx
+
+    limit = settings.max_upload_mb * 1024 * 1024
+    own = client is None
+    client = client or httpx.Client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False,
+                                    headers={"User-Agent": USER_AGENT})
+    try:
+        current, hops = url, 0
+        while True:
+            check_network_target(current, settings)
+            have = part.stat().st_size if part.exists() else 0
+            headers = {"Range": f"bytes={have}-"} if have else {}
+            try:
+                with client.stream("GET", current, headers=headers) as r:
+                    if not settings.allow_private_urls and not _peer_is_public(r):
+                        raise SourceError("private_address", "Connection reached a private address; refused.")
+                    if r.status_code in (301, 302, 303, 307, 308):
+                        hops += 1
+                        if hops > 5:
+                            raise SourceError("too_many_redirects", "The link redirects too many times.")
+                        current = urljoin(current, r.headers.get("location", ""))
+                        continue
+                    if r.status_code == 416 and have:
+                        part.unlink(missing_ok=True)   # stale partial file; start again
+                        continue
+                    if r.status_code in (429,) or r.status_code >= 500:
+                        raise TransientError(f"Server returned HTTP {r.status_code}; will retry.")
+                    if r.status_code in (401, 403):
+                        raise SourceError("access_denied", f"The server refused access (HTTP {r.status_code}). "
+                                          "The file may require a login, which this tool will not bypass.")
+                    if r.status_code == 404:
+                        raise SourceError("not_found", "The file was not found (HTTP 404).")
+                    if r.status_code not in (200, 206):
+                        raise SourceError("http_error", f"Unexpected HTTP {r.status_code} from the server.")
+                    ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+                    if not (ctype.startswith("video/") or ctype in BINARY_TYPES or ctype == ""):
+                        raise SourceError("not_video", f"The link returned '{ctype}', not a video file. "
+                                          "If it is a web page, use the video's direct file link or upload the file.")
+                    if r.status_code == 206:
+                        cr = r.headers.get("content-range", "")
+                        m = re.match(r"bytes (\d+)-\d+/(\d+|\*)", cr)
+                        if not m or int(m.group(1)) != have:
+                            part.unlink(missing_ok=True)
+                            continue
+                        total = int(m.group(2)) if m.group(2) != "*" else 0
+                        mode = "ab"
+                    else:
+                        total = int(r.headers.get("content-length") or 0)
+                        have, mode = 0, "wb"
+                    if total and total > limit:
+                        raise SourceError("too_large", f"The file is {total / 1e9:.1f} GB, above MAX_UPLOAD_MB.")
+                    size = have
+                    with open(part, mode) as f:
+                        for chunk in r.iter_bytes():
+                            if cancelled and cancelled():
+                                raise TransientError("cancelled")
+                            f.write(chunk)
+                            size += len(chunk)
+                            if size > limit:
+                                raise SourceError("too_large", "The file exceeds MAX_UPLOAD_MB.")
+                            if on_progress and total:
+                                on_progress(size / total)
+                    if total and size < total:
+                        raise TransientError(f"Download interrupted at {size}/{total} bytes; will resume.")
+                    return {"final_url": current, "content_type": ctype, "bytes": size,
+                            "etag": r.headers.get("etag"), "last_modified": r.headers.get("last-modified"),
+                            "filename": _filename_from_disposition(r.headers.get("content-disposition"))}
+            except httpx.TransportError as e:
+                raise TransientError(f"Network error while downloading ({type(e).__name__}: {e}); "
+                                     "the download will resume.") from e
+    finally:
+        if own:
+            client.close()
+
+
+def _part_path(settings: Settings, url: str) -> Path:
+    return settings.work_dir / f"dl_{hashlib.sha1(normalize_url(url).encode()).hexdigest()[:16]}.part"
+
+
+def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple[Path, dict]:
     try:
         import yt_dlp
     except ImportError as e:  # pragma: no cover
         raise PermanentError("yt-dlp is not installed (pip install -r requirements.txt)") from e
-
-    tmp = settings.work_dir / f"download_{ctx.id}"
+    tmp = settings.work_dir / f"ytdlp_{hashlib.sha1(normalize_url(url).encode()).hexdigest()[:16]}"
     tmp.mkdir(parents=True, exist_ok=True)
 
     def hook(d):
@@ -183,45 +396,119 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
                 ctx.progress(0.9 * d.get("downloaded_bytes", 0) / total, "Downloading")
 
     opts = {
-        "outtmpl": str(tmp / "download.%(ext)s"),
-        "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "progress_hooks": [hook],
-        "restrictfilenames": True,
-        "retries": 3,
-        "sleep_interval_requests": 1,
+        "outtmpl": str(tmp / "download.%(ext)s"), "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
+        "merge_output_format": "mp4", "noplaylist": True, "quiet": True, "no_warnings": True,
+        "progress_hooks": [hook], "restrictfilenames": True, "retries": 5, "fragment_retries": 5,
+        "continuedl": True, "socket_timeout": 30, "sleep_interval_requests": 1,
+        "max_filesize": settings.max_upload_mb * 1024 * 1024, "http_headers": {"User-Agent": USER_AGENT},
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
-    except yt_dlp.utils.DownloadCancelled:
-        return
+    except yt_dlp.utils.DownloadCancelled as e:
+        raise TransientError("cancelled") from e
     except yt_dlp.utils.DownloadError as e:
         msg = str(e)
-        if any(k in msg.lower() for k in ("timed out", "temporary", "connection", "http error 5")):
+        low = msg.lower()
+        if "drm" in low:
+            raise SourceError("drm", "This video is DRM-protected; it will not be downloaded.") from e
+        if "unsupported url" in low:
+            raise SourceError("unsupported_source", "No supported video was found at this page. Use a direct "
+                              "video file link or upload the file.") from e
+        if any(k in low for k in ("sign in", "login", "private video", "members-only", "age")):
+            raise SourceError("access_restricted", "This video requires a login or is restricted; it will not "
+                              "be retrieved. Obtain the file from the rights holder.") from e
+        if any(k in low for k in ("timed out", "temporar", "connection", "http error 5", "429")):
             raise TransientError(msg) from e
-        if "drm" in msg.lower():
-            raise PermanentError("This video is DRM-protected; it will not be downloaded.") from e
-        raise PermanentError(msg) from e
+        raise SourceError("extractor_error", msg[:500]) from e
     files = [p for p in tmp.iterdir() if p.suffix.lower() in VIDEO_EXTS]
     if not files:
-        raise PermanentError("Download finished but no video file was produced.")
+        raise SourceError("no_video", "Download finished but no video file was produced.")
     meta = {k: info.get(k) for k in ("title", "uploader", "channel", "upload_date", "webpage_url",
-                                     "extractor_key", "id", "duration", "license", "description")}
-    ctx.progress(0.95, "Registering download")
-    rid, dup = register_file(settings, db, files[0], title=ctx.payload.get("title") or info.get("title"),
-                             original_name=files[0].name, source_type="url", source_url=url,
-                             source_site=info.get("extractor_key"), source_media_id=str(info.get("id")),
-                             extra_meta={"source_info": meta}, move=True,
-                             rights_attestation=ctx.payload.get("rights_attestation"),
+                                     "extractor_key", "id", "duration", "license")}
+    return files[0], meta
+
+
+def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext) -> None:
+    """Job handler: retrieve a permitted URL (direct file or extractor), then queue analysis."""
+    url = ctx.payload["url"]
+    decision = classify_url(url, settings, db)
+    if not decision.ok:
+        raise SourceError(decision.code, decision.message)
+    extra: dict = {"retrieval": {"method": decision.method, "policy": decision.code, "reason": decision.message,
+                                 "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}}
+    title = ctx.payload.get("title") or None
+    source_media_id = None
+    site = decision.host
+    if decision.method == "direct":
+        part = _part_path(settings, url)
+        ctx.log(f"Direct download{' (resuming)' if part.exists() else ''}: {url}")
+        meta = download_direct(url, part, settings, cancelled=ctx.cancelled,
+                               on_progress=lambda f: ctx.progress(0.9 * f, "Downloading"))
+        ext = Path(urlparse(meta["final_url"]).path).suffix.lower()
+        if ext not in VIDEO_EXTS:
+            ext = CONTENT_TYPE_EXT.get(meta["content_type"], ".mp4")
+        file = part.with_suffix(ext)
+        part.replace(file)
+        extra["retrieval"].update({k: meta[k] for k in ("final_url", "content_type", "bytes", "etag",
+                                                        "last_modified")})
+        title = title or (Path(meta["filename"]).stem if meta.get("filename") else
+                          Path(urlparse(url).path).stem or decision.host)
+        original_name = meta.get("filename") or Path(urlparse(url).path).name or file.name
+    else:
+        ctx.log(f"Retrieving with yt-dlp ({decision.code}): {url}")
+        file, info = _download_with_ytdlp(settings, url, ctx)
+        extra["source_info"] = info
+        title = title or info.get("title")
+        source_media_id = str(info.get("id")) if info.get("id") else None
+        site = info.get("extractor_key") or site
+        original_name = file.name
+    ctx.progress(0.95, "Registering download", force=True)
+    perm = permission_for(db, decision.host)
+    attestation = ctx.payload.get("rights_attestation") or ""
+    if perm:
+        attestation += f" | Written permission on record: {perm['granted_by']}, {perm['granted_on']}, ref {perm['reference']}"
+    rid, dup = register_file(settings, db, file, title=title, original_name=original_name, source_type="url",
+                             source_url=url, source_site=site, source_media_id=source_media_id, extra_meta=extra,
+                             move=True, rights_attestation=attestation.strip(" |") or None,
                              settings_json=ctx.payload.get("settings"))
-    shutil.rmtree(tmp, ignore_errors=True)
+    if file.parent.name.startswith("ytdlp_"):
+        shutil.rmtree(file.parent, ignore_errors=True)
     db.update("jobs", ctx.id, recording_id=rid)
     if dup:
         ctx.log(f"Duplicate of existing recording #{rid}; not re-processing", "WARNING")
         return
     queue.enqueue("process_recording", recording_id=rid, dedupe_key=f"process:{rid}",
                   payload={"settings": ctx.payload.get("settings") or {}})
+
+
+# ---- pending sources ("link + file") -----------------------------------------
+
+def create_pending_source(db: Database, url: str, *, title: str | None, reason: str,
+                          settings_json: dict | None = None) -> tuple[int, bool]:
+    """Record a link whose file the owner will supply. Returns (id, already_existed)."""
+    norm = normalize_url(url)
+    row = db.one("SELECT id FROM pending_sources WHERE url = ? AND status = 'awaiting_file'", (norm,))
+    if row:
+        return row["id"], True
+    pid = db.insert("pending_sources", url=norm, title=title or None, reason=reason,
+                    settings_json=json.dumps(settings_json or {}), status="awaiting_file")
+    return pid, False
+
+
+def attach_file_to_pending(settings: Settings, db: Database, pending_id: int, path: Path, *,
+                           original_name: str, title: str | None = None,
+                           attestation: str | None = None) -> tuple[int, bool]:
+    src = db.one("SELECT * FROM pending_sources WHERE id = ?", (pending_id,))
+    if not src or src["status"] != "awaiting_file":
+        raise SourceError("pending_not_found", "That pending source no longer exists or already has a file.")
+    note = (f"Owner-supplied file for {src['url']} (not downloaded by this tool). "
+            + (attestation or "")).strip()
+    rid, dup = register_file(settings, db, path, title=title or src["title"], original_name=original_name,
+                             source_type="linked_file", source_url=src["url"],
+                             source_site=urlparse(src["url"]).hostname,
+                             extra_meta={"retrieval": {"method": "owner_supplied_file", "pending_source_id": pending_id}},
+                             move=True, rights_attestation=note,
+                             settings_json=json.loads(src["settings_json"] or "{}"))
+    db.update("pending_sources", pending_id, status="attached", recording_id=rid)
+    return rid, dup

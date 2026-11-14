@@ -65,27 +65,36 @@
   <div class="pub">
     <div>
       <h3>TikTok — send to inbox (draft)</h3>
-      {% if not tiktok.configured %}<p class="muted">Not configured — see README “TikTok setup”. Download and post manually meanwhile.</p>
+      <p><span class="badge pub-{{ pub.tiktok.status }}">{{ pub.tiktok.label }}</span></p>
+      {% if pub.tiktok.detail %}<p class="muted">{{ pub.tiktok.detail }}</p>{% endif %}
+      {% if not tiktok.configured %}<p class="muted">Not configured — see Settings → Setup checklist. Download and post manually meanwhile.</p>
       {% elif not tiktok.connected %}<p class="muted">Not connected. <a href="/settings">Connect in Settings</a>.</p>
-      {% else %}
-      <form method="post" action="/clips/{{ c.id }}/publish/tiktok"><button class="btn" {% if gate %}disabled{% endif %}>Send to my TikTok inbox</button></form>
-      <p class="muted">You finish and post it inside the TikTok app.</p>{% endif %}
+      {% elif pub.tiktok.status not in ('queued','uploading','processing','retrying') %}
+      <form method="post" action="/clips/{{ c.id }}/publish/tiktok">
+        {% if pub.tiktok.status in ('delivered_inbox','published') %}<input type="hidden" name="again" value="yes"><button class="btn" {% if gate %}disabled{% endif %}>Send again (second copy)</button>
+        {% else %}<button class="btn primary" {% if gate %}disabled{% endif %}>Send to my TikTok inbox</button>{% endif %}
+      </form>
+      <p class="muted">The video arrives as a draft notification; you edit and post it inside the TikTok app.</p>{% endif %}
     </div>
     <div>
       <h3>Instagram — publish Reel</h3>
-      {% if not instagram.configured %}<p class="muted">Not configured — see README “Instagram setup”.</p>
+      <p><span class="badge pub-{{ pub.instagram.status }}">{{ pub.instagram.label }}</span></p>
+      {% if pub.instagram.detail %}<p class="muted">{{ pub.instagram.detail }}</p>{% endif %}
+      {% if not instagram.configured %}<p class="muted">Not configured — see Settings → Setup checklist.</p>
       {% elif not instagram.connected %}<p class="muted">Not connected. <a href="/settings">Connect in Settings</a>.</p>
-      {% else %}
+      {% elif pub.instagram.status not in ('queued','uploading','processing','retrying') %}
       <form method="post" action="/clips/{{ c.id }}/publish/instagram">
-        <p class="warn">Instagram's API cannot create drafts: this posts publicly to @{{ instagram.username }}.</p>
+        <p class="warn">Instagram's API cannot create drafts: this posts <b>publicly</b> to @{{ instagram.username }}.</p>
+        {% if pub.instagram.status == 'published' %}<input type="hidden" name="again" value="yes">{% endif %}
         <label>Type PUBLISH to confirm <input name="confirm" autocomplete="off"></label>
-        <button class="btn bad" {% if gate %}disabled{% endif %}>Publish publicly</button>
+        <button class="btn bad" {% if gate %}disabled{% endif %}>{% if pub.instagram.status == 'published' %}Publish again{% else %}Publish publicly{% endif %}</button>
       </form>{% endif %}
     </div>
   </div>
+  {% if pub.tiktok.status in ('queued','uploading','processing','retrying') or pub.instagram.status in ('queued','uploading','processing','retrying') %}<meta http-equiv="refresh" content="6">{% endif %}
   {% if attempts %}
   <h3>Publishing history</h3>
-  <ul class="list">{% for a in attempts %}<li>{{ a.created_at|dt }} · {{ a.platform }} · <span class="badge {{ a.status }}">{{ a.status }}</span> {{ a.detail }}</li>{% endfor %}</ul>
+  <ul class="list">{% for a in attempts %}<li>{{ a.created_at|dt }} · {{ a.platform }} · <span class="badge pub-{{ a.status }}">{{ PUB_STATES.get(a.status, a.status) }}</span>{% if a.remote_id %} · id {{ a.remote_id }}{% endif %}<br><small class="muted">{{ a.detail }}</small></li>{% endfor %}</ul>
   {% endif %}
 </section>
 {% endblock %}

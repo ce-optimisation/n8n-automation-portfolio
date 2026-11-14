@@ -141,7 +141,9 @@ def test_upload_endpoint_and_duplicate(stub_settings, sample_video):
         assert r.status_code == 400
         r = client.post("/import/url", data={"url": "https://rumble.com/v1-x.html", "attest": "yes"},
                         headers={"X-Requested-With": "XMLHttpRequest"})
-        assert r.status_code == 400 and "rumble" in r.json()["err"].lower()
+        # Rumble forbids automated access: the link is kept as a pending source, nothing is fetched.
+        assert r.status_code == 200 and "pending source" in r.json()["msg"].lower()
+        assert "rumble" in r.json()["msg"].lower()
 
 
 def test_password_protects_dashboard(settings):

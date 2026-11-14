@@ -6,6 +6,10 @@ on:
   pull_request:
     paths: ["clipping-engine/**", ".github/workflows/clipping-engine.yml"]
   workflow_dispatch:
+    inputs:
+      longform_minutes:
+        description: "Run the long-form benchmark (real Whisper) for this many minutes (0 = skip)"
+        default: "0"
 
 permissions:
   contents: read
@@ -24,6 +28,7 @@ jobs:
         working-directory: clipping-engine
     env:
       CLIPENGINE_REAL_WHISPER: "1"
+      CLIPENGINE_LIVE_NET: "1"
       WHISPER_MODEL: base.en
       PYTHONUNBUFFERED: "1"
     steps:
@@ -70,4 +75,45 @@ jobs:
         with:
           name: acceptance-${{ matrix.os }}
           path: clipping-engine/acceptance-artifacts
+          if-no-files-found: ignore
+
+  longform:
+    name: long-form benchmark + crash recovery (real Whisper)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.longform_minutes != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: clipping-engine
+    env:
+      WHISPER_MODEL: base.en
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: clipping-engine/requirements.txt
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Python packages
+        run: python -m pip install -r requirements.txt
+      - name: Runner hardware
+        run: nproc && free -g && df -h .
+      - name: Long-form benchmark with hard-kill crash test (REAL faster-whisper)
+        run: python scripts/longform_benchmark.py --minutes ${{ github.event.inputs.longform_minutes }} --crash-test --out longform-artifacts
+      - name: Selection evaluation on the real transcript
+        if: always()
+        run: |
+          python scripts/evaluate_selection.py longform-artifacts/longform_*min.timing.json --transcript longform-artifacts/transcript_segments.json --json longform-artifacts/selection_eval_real.json
+          python scripts/evaluate_selection.py longform-artifacts/longform_*min.timing.json --json longform-artifacts/selection_eval_stub.json
+      - name: Upload long-form report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: longform-report
+          path: |
+            clipping-engine/longform-artifacts/*.json
+            clipping-engine/longform-artifacts/data/logs/*
           if-no-files-found: ignore

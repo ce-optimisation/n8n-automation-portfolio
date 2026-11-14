@@ -89,10 +89,40 @@ def port_free(host: str, port: int) -> bool:
         return s.connect_ex((target, port)) != 0
 
 
+def is_our_engine(port: int) -> bool:
+    try:
+        import httpx
+        r = httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=2)
+        return r.status_code == 200 and r.json().get("app") == "clipengine"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def hardware_report(settings) -> list[str]:
+    from . import hardware
+    from .transcribe import auto_cpu_threads
+    hw = hardware.detect()
+    model, device, ctype = hardware.choose_whisper(hw, settings.whisper_model, settings.whisper_device,
+                                                   settings.whisper_compute_type, settings.language)
+    lines = [f"Computer: {hw.os}, {hw.cpu_cores} CPU threads, {hw.ram_gb} GB RAM, "
+             + (f"GPU {hw.gpu_name or 'CUDA'} {hw.vram_gb} GB" if hw.cuda_devices else "no CUDA GPU detected"),
+             f"Speech model: {model} on {device} ({ctype}), {settings.whisper_cpu_threads or auto_cpu_threads()} threads"]
+    if not hw.cuda_devices and hw.gpu_name:
+        lines.append("Tip: an NVIDIA GPU is present but not usable yet — set INSTALL_CUDA_LIBS=1 in .env and "
+                     "restart the launcher for much faster transcription.")
+    if hw.ram_gb and hw.ram_gb < 6:
+        lines.append("Tip: less than 6 GB RAM — WHISPER_MODEL=tiny.en or base.en is recommended.")
+    if "onedrive" in str(settings.data_dir).lower():
+        lines.append("Warning: the data folder is inside OneDrive. Large videos will be uploaded to the cloud "
+                     "by OneDrive; set CLIPENGINE_DATA_DIR to a local folder (e.g. C:\\ClippingEngineData).")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="clipengine")
-    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--check", action="store_true", help="validate dependencies and exit")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--download-model", action="store_true", help="download the Whisper model now and exit")
     args = ap.parse_args(argv)
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
@@ -106,29 +136,53 @@ def main(argv: list[str] | None = None) -> int:
         from . import hardware
         hw = hardware.detect()
         print("All dependencies present.")
+        for ln in hardware_report(settings):
+            print("  " + ln)
         print(json.dumps({"hardware": hw.as_dict(), "whisper": hardware.choose_whisper(
             hw, settings.whisper_model, settings.whisper_device, settings.whisper_compute_type,
             settings.language)}, indent=2))
         return 0
-    setup_logging(settings.data_dir)
-    url = settings.base_url()
-    if not port_free(settings.host, settings.port):
-        print(f"Port {settings.port} is busy — the engine may already be running. Opening {url}")
-        if settings.open_browser and not args.no_browser:
-            webbrowser.open(url)
+    if args.download_model:
+        from .transcribe import WhisperTranscriber
+        t = WhisperTranscriber(settings)
+        print(f"Downloading/loading {t.model_label} into {settings.models_dir} ...")
+        print(f"Ready in {t.prepare():.0f}s")
         return 0
+    setup_logging(settings.data_dir)
+    if not port_free(settings.host, settings.port):
+        if is_our_engine(settings.port):
+            print(f"The Clipping Engine is already running. Opening {settings.base_url()}")
+            if settings.open_browser and not args.no_browser:
+                webbrowser.open(settings.base_url())
+            return 0
+        busy = settings.port
+        for cand in range(busy + 1, busy + 20):
+            if port_free(settings.host, cand):
+                settings.port = cand
+                break
+        else:
+            print(f"Port {busy} and the next 19 ports are in use by other programs. Set CLIPENGINE_PORT in .env.")
+            return 3
+        print(f"Port {busy} is used by another program; using port {settings.port} instead. "
+              f"(TikTok/Instagram sign-in redirect addresses use port {busy}; set CLIPENGINE_PORT to a free port "
+              "and update them if you rely on publishing.)")
+    url = settings.base_url()
     import uvicorn
     from .web.app import create_app
     app = create_app(settings)
     if settings.open_browser and not args.no_browser:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     print(f"\n  Clipping Engine running at {url}")
+    for ln in hardware_report(settings):
+        print("  " + ln)
     if settings.host == "0.0.0.0":
         try:
             lan = socket.gethostbyname(socket.gethostname())
             print(f"  On your phone (same network): http://{lan}:{settings.port}")
         except OSError:
             pass
+    print(f"  Inbox folder (drop videos here to import): {settings.inbox}")
+    print(f"  Logs: {settings.data_dir / 'logs' / 'clipengine.jsonl'}")
     print("  Close this window or press Ctrl+C to stop. Jobs resume automatically next time.\n")
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning")
     return 0

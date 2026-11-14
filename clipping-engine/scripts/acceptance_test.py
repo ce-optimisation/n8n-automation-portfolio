@@ -30,7 +30,7 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT))
 
 
 def log(msg):
@@ -83,7 +83,7 @@ def main() -> int:
     env.setdefault("WHISPER_MODEL", "base.en")
     mode = "REAL faster-whisper transcription"
     if args.stub:
-        from conftest import stub_transcript_from_timing
+        from clipengine.testsupport import stub_transcript_from_timing
         stub = work / "stub.json"
         stub.write_text(json.dumps(stub_transcript_from_timing(sample.with_suffix(".timing.json"))))
         env.update(CLIPENGINE_TRANSCRIBER="stub", CLIPENGINE_STUB_TRANSCRIPT=str(stub))
