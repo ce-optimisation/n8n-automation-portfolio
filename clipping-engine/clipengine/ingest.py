@@ -305,7 +305,7 @@ def download_direct(url: str, part: Path, settings: Settings, *, on_progress=Non
     limit = settings.max_upload_mb * 1024 * 1024
     own = client is None
     client = client or httpx.Client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False,
-                                    headers={"User-Agent": USER_AGENT})
+                                    headers={"User-Agent": settings.http_user_agent or USER_AGENT})
     try:
         current, hops = url, 0
         while True:
@@ -329,7 +329,9 @@ def download_direct(url: str, part: Path, settings: Settings, *, on_progress=Non
                         raise TransientError(f"Server returned HTTP {r.status_code}; will retry.")
                     if r.status_code in (401, 403):
                         raise SourceError("access_denied", f"The server refused access (HTTP {r.status_code}). "
-                                          "The file may require a login, which this tool will not bypass.")
+                                          "The file may require a login (which this tool will not bypass), or the "
+                                          "site may block automated clients; some sites ask for an informative "
+                                          "HTTP_USER_AGENT with contact details (set it in .env).")
                     if r.status_code == 404:
                         raise SourceError("not_found", "The file was not found (HTTP 404).")
                     if r.status_code not in (200, 206):
@@ -400,7 +402,7 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
         "merge_output_format": "mp4", "noplaylist": True, "quiet": True, "no_warnings": True,
         "progress_hooks": [hook], "restrictfilenames": True, "retries": 5, "fragment_retries": 5,
         "continuedl": True, "socket_timeout": 30, "sleep_interval_requests": 1,
-        "max_filesize": settings.max_upload_mb * 1024 * 1024, "http_headers": {"User-Agent": USER_AGENT},
+        "max_filesize": settings.max_upload_mb * 1024 * 1024, "http_headers": {"User-Agent": settings.http_user_agent or USER_AGENT},
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:

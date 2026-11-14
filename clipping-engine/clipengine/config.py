@@ -93,6 +93,7 @@ class Settings:
     max_upload_mb: int = 8192
     inbox_dir: Path | None = None        # watch folder; default data/inbox
     allow_private_urls: bool = False     # TEST-ONLY: permits localhost/private URLs
+    http_user_agent: str = "LocalClippingEngine/1.1 (self-hosted editorial review tool)"
 
     # Jobs / retention
     max_attempts: int = 3
@@ -189,6 +190,7 @@ def get_settings(**overrides) -> Settings:
         max_upload_mb=_int("MAX_UPLOAD_MB", 8192),
         inbox_dir=Path(os.environ["INBOX_DIR"]) if os.environ.get("INBOX_DIR") else None,
         allow_private_urls=_bool("ALLOW_PRIVATE_URLS", False),
+        http_user_agent=os.environ.get("HTTP_USER_AGENT") or "LocalClippingEngine/1.1 (self-hosted editorial review tool)",
         max_attempts=_int("JOB_MAX_ATTEMPTS", 3),
         delete_rejected_renders_after_days=_int("DELETE_REJECTED_RENDERS_AFTER_DAYS", 14),
         delete_originals_after_days=_int("DELETE_ORIGINALS_AFTER_DAYS", 0),
