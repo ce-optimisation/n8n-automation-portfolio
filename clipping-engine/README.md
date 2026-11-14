@@ -117,14 +117,15 @@ both by normalised URL and by SHA-256 of the file.
   after 24 hours.
 - **Processing times** for each recording (audio, model load, transcription speed and selection) are shown on its
   page.
-- Measurements in this sandbox with a 58-minute recording, excluding transcription (a TEST-ONLY stub transcript
-  was used):
-  - selection took 5.9 s across 13,398 candidate windows
-  - each 55 s clip rendered in 12–16 s on 4 CPU threads
-  - peak memory was 123 MB (excluding the Whisper model)
-
-  Real-Whisper long-form figures come from the CI benchmark (`scripts/longform_benchmark.py`; see HANDOFF.md for
-  the latest numbers).
+- **Measured with real Whisper** (`base.en`, CPU int8, GitHub-hosted runner with 4 vCPU and 16 GB) on a
+  **114-minute** recording, with the worker **hard-killed** after the first checkpoint and then restarted:
+  - The restarted run resumed at chunk 2 of 6 and reused the extracted audio. Nothing was lost or repeated.
+  - Transcription ran at about **18× real time**, so roughly 3–4 minutes per recorded hour on that machine.
+    Expect a similar order on a modern 4–8 core PC with `base`; `small` is about 3× slower.
+  - Peak memory was **1.6 GB**, including the model. Peak temporary disk use was 0.22 GB, and all of it was
+    cleaned up afterwards.
+  - Selection took 3.2 s. Six clips rendered in 8–13 s each, and no jobs failed.
+  - 97.7% of the spoken vocabulary appeared in the transcript.
 
 ## 5. How excerpts are chosen (profile v2)
 
@@ -152,8 +153,10 @@ original, the speech is synthesised locally, and each paragraph is tagged substa
 
 | Sample | Profile | Substantive share | Procedural share | Topic diversity |
 |---|---|---|---|---|
-| 58 min | v1 | 0.81 | 0.115 | 0.83 |
-| 58 min | v2 | **0.94** | **0.00** | 0.83 |
+| 114 min, **real Whisper transcript** | v1 | 0.80 | 0.118 | 0.83 |
+| 114 min, **real Whisper transcript** | v2 | **0.94** | **0.00** | 0.83 |
+| 58 min, exact-timing stub | v1 | 0.81 | 0.115 | 0.83 |
+| 58 min, exact-timing stub | v2 | **0.94** | **0.00** | 0.83 |
 | 9 min | v1 | 0.77 | 0.15 | 0.83 |
 | 9 min | v2 | **0.92** | **0.02** | **1.0** |
 

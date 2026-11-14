@@ -136,9 +136,11 @@ class Pipeline:
         total = sum(b - a for a, b in chunks) or 1.0
         lang = s.language or next((r["language"] for r in done.values() if r["language"]), None)
         t1 = time.time()
+        audio_done_now = 0.0
         for i, (a, b) in enumerate(chunks):
             if i in done:
                 continue
+            audio_done_now += b - a
             base = sum(y - x for x, y in chunks[:i]) / total
             frac = (b - a) / total
             tc = time.time()
@@ -164,7 +166,8 @@ class Pipeline:
                        status="transcribed", stage="transcribed")
         self._record_stats(rid, extract_audio_s=round(extract_s, 1), model_load_s=round(load_s, 1),
                            transcribe_s=round(transcribe_s, 1), chunks=len(chunks),
-                           speed_x_realtime=round((rec["duration"] or 0) / max(transcribe_s, 1e-6), 2),
+                           chunks_resumed=len(done), audio_transcribed_this_run_s=round(audio_done_now, 1),
+                           speed_x_realtime=round(audio_done_now / max(transcribe_s, 1e-6), 2),
                            transcriber=transcriber.model_label)
         if transcriber.name == "whisper":
             self.db.set_kv("verified.transcription", json.dumps({"recording_id": rid, "at": time.time(),
