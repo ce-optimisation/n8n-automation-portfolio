@@ -25,9 +25,9 @@ def test_phrases_wrap_and_time_relative_to_clip():
 def test_srt_and_ass_output(tmp_path, settings):
     ph = render.build_phrases(words("Hello world. {Braces} are escaped."), 0, 5)
     render.write_srt(ph, tmp_path / "c.srt")
-    assert (tmp_path / "c.srt").read_text().startswith("1\n00:00:00,000 --> ")
+    assert (tmp_path / "c.srt").read_text(encoding="utf-8").startswith("1\n00:00:00,000 --> ")
     render.write_ass(ph, tmp_path / "c.ass", settings, 1920, 1080, "Excerpt · Test")
-    ass = (tmp_path / "c.ass").read_text()
+    ass = (tmp_path / "c.ass").read_text(encoding="utf-8")
     assert "PlayResY: 1920" in ass and "{Braces}" not in ass and "Excerpt · Test" in ass
 
 
@@ -67,7 +67,7 @@ def test_register_file_and_duplicate_detection(settings, sample_video):
     rec = db.recording(rid)
     assert rec["duration"] > 60 and rec["width"] == 1280 and rec["sha256"]
     prov = json.loads((settings.recordings_dir / next(p.name for p in settings.recordings_dir.iterdir())
-                       / "provenance.json").read_text())
+                       / "provenance.json").read_text(encoding="utf-8"))
     assert prov["sha256"] == rec["sha256"]
     b = settings.work_dir / "b.mp4"
     shutil.copy(sample_video, b)
@@ -94,4 +94,4 @@ def test_render_vertical_clip(settings, sample_video, tmp_path):
     p = res["probe"]
     assert (p["width"], p["height"], p["video_codec"], p["audio_codec"]) == (1080, 1920, "h264", "aac")
     assert 6.5 < p["duration"] < 7.5
-    assert res["thumb"].stat().st_size > 1000 and res["srt"].read_text().strip()
+    assert res["thumb"].stat().st_size > 1000 and res["srt"].read_text(encoding="utf-8").strip()
