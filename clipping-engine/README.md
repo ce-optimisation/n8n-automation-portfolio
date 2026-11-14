@@ -14,7 +14,9 @@ provenance kept throughout. It is not a growth or promotion engine.
 | UI | Server-rendered HTML, HTMX and responsive CSS; works on a phone |
 | Media | FFmpeg / FFprobe: x264 + AAC, libass captions, EBU R128 loudness |
 | Speech | faster-whisper with Silero VAD, word timestamps, CPU or NVIDIA GPU; long recordings are transcribed in checkpointed chunks |
-| Selection | Deterministic scorer (profile v2), optionally re-ranked by a local Ollama model, which can only choose among real candidates |
+| Selection | Content-led scorer (profile v3): clip length follows natural topic boundaries; optional local Ollama re-ranking among real candidates only |
+| Captions | Approved minimalist style: bundled **Anton** font, sentence case, white with a black outline, compact, lower-middle |
+| Automation | Authorised source monitoring (feeds, live HLS streams, permitted channels) → automatic import, clipping and an email when clips are ready |
 | Publishing | Official TikTok Content Posting API (upload to inbox) and Instagram Graph API (Reels), run as resumable background jobs |
 
 There is no Docker, Redis, Postgres, cloud service, paid API or subscription.
@@ -106,6 +108,67 @@ redirect hop must resolve to a public address, and the connected peer is re-chec
 rebinding. Nothing passes cookies or logins, or bypasses DRM, paywalls or rate limits. Duplicates are detected
 both by normalised URL and by SHA-256 of the file.
 
+## 3b. Automatic source monitoring (Sources page)
+
+The target flow is: a new recording becomes available, then it is imported, transcribed and clipped, it lands in
+Ready to Review, and an email tells you it is there. This works only for sources you are **authorised** to retrieve
+from automatically.
+
+| Source type | What it watches | What happens |
+|---|---|---|
+| **Feed** | RSS/Atom feed whose items carry videos (councils, parliaments, podcasts) | Each new item is downloaded (resumable), imported and clipped |
+| **Live stream (.m3u8)** | A direct HLS live stream | When it goes live, it is recorded. See below. |
+| **Channel/page** | A channel listed by yt-dlp (permitted sites only) | New uploads are downloaded; live broadcasts are recorded |
+
+**Live recordings:**
+
+- The stream is recorded in crash-safe segments, and the recorder restarts automatically if it drops while the
+  broadcast is still live.
+- When the broadcast ends, the segments are joined and integrity-checked (streams, duration, and a decode test of
+  the final 10 s).
+- The result goes into the inbox with a provenance sidecar file, so the normal pipeline takes over.
+
+**Safeguards:**
+
+- On first check, existing items are recorded as a baseline and **not** downloaded, unless you set a backfill
+  count.
+- Each broadcast or item is recorded once, identified by item IDs and segment fingerprints.
+- After a restart, recordings resume, or finalise if the broadcast has ended.
+
+**Authorisation:** a source is enabled only if both of these hold:
+
+- its site is in `ALLOWED_URL_DOMAINS`, or a written permission is recorded in Settings → Source permissions.
+- the site resolves to a public address.
+
+Each source also stores your note on who authorises the retrieval. Nothing logs in, uses cookies, or bypasses
+paywalls, DRM or rate limits.
+
+**Status of the sources you asked about:**
+
+- **Rumble (America First / Nicholas J. Fuentes):**
+  - Rumble's Terms of Use prohibit automated access without Rumble's *prior written permission*. A speaker
+    inviting people to clip his show doesn't override the hosting platform's terms.
+  - So a Rumble channel source is saved **disabled**, with this explanation, until you record Rumble's written
+    permission.
+  - Meanwhile, paste individual episode links on the Import page. They are saved as pending sources; attach the
+    file you obtained from the rights holder, and it is processed automatically.
+  - The exact Rumble channel address could not be verified from the build environment, because rumble.com isn't
+    reachable there. Copy it from an episode page's channel link.
+- **America First Plus (americafirst.plus):** couldn't be reached from the build environment either. If it is a
+  subscription or login service, automated retrieval would bypass a paywall and is not supported. Use files you
+  are authorised to download.
+
+**Other recorders:** I evaluated [Multi-Stream-Recorder](https://github.com/ManletPride/Multi-Stream-Recorder):
+
+- MIT licence; Python/Tkinter desktop app, Windows-first.
+- Polls channels, records via yt-dlp/streamlink, and writes MP4 plus a JSON sidecar.
+- It uses the same underlying tools as the built-in monitor, but it is a separate GUI with its own environment, and
+  it doesn't enforce these permission checks. **The built-in monitor is the default.**
+- If you prefer Multi-Stream-Recorder, point its output folder at the inbox: MP4s are imported automatically and
+  its JSON sidecar is read for provenance. That path is untested against its real output.
+
+Rekordly (rekordly.in) couldn't be reached or found during evaluation, so it is not recommended.
+
 ## 4. Long recordings
 
 - **Checkpointed transcription.** Audio is extracted once to 16 kHz mono (about 115 MB per hour), then
@@ -127,41 +190,72 @@ both by normalised URL and by SHA-256 of the file.
   - Selection took 3.2 s. Six clips rendered in 8–13 s each, and no jobs failed.
   - 97.7% of the spoken vocabulary appeared in the transcript.
 
-## 5. How excerpts are chosen (profile v2)
+## 5. How excerpts are chosen (profile v3, content-led)
+
+There is **no preferred clip length.** A clip runs from a natural beginning to a natural end, which might be 15 s,
+40 s or two minutes. `CLIP_MIN_SECONDS` (15) and `CLIP_MAX_SECONDS` (150) are only safety limits.
 
 1. Whisper word timings are grouped into sentences, splitting on punctuation and on pauses over 1.6 s.
-2. Every window of whole sentences between `CLIP_MIN_SECONDS` and `CLIP_MAX_SECONDS` that ends on a full stop
-   is scored. It gains points for:
-   - **substance:** content density, claims, figures and reasoning
-   - **questions with their answers**
-   - **clarity:** word confidence
-   - **natural pauses** at both ends
-   - **opening at the start of a topic**
-   - **closeness to the target length**
+2. **Boundary detection** (TextTiling-style, adapted to each recording): every gap between sentences gets a
+   strength score. It combines how much the vocabulary changes across the gap with the pause length, both ranked
+   against that recording's own distribution. A gap followed by "And…" or "But…", or one that separates a
+   question from its answer, counts as weak.
+3. Every window of whole sentences ending on a full stop is scored. It gains points for:
+   - substance: claims, figures and reasoning
+   - questions *with* their answers
+   - clarity
+   - opening at the start of a topic
+   - starting and ending at **strong boundaries**
 
-   It loses points for **starting mid-thought** ("And…", "But…"), **filler** and **procedural talk** (greetings,
-   housekeeping, "next item").
-3. Choice: greedy, with no overlap, a gap of at least 5 s, and limited word overlap between clips. Candidates
-   scoring well below the best are **not used as padding**; the recording page explains when fewer than
-   `CLIPS_PER_RECORDING` (default 6) were found.
-4. **Optional local LLM (Ollama):** it may re-rank candidates by index number only. It can't invent text or
-   timestamps, and its summaries are labelled *machine interpretation*.
+   It loses points for:
+   - cutting while the speaker's point continues
+   - ending on an unanswered question
+   - spanning a change of topic
+   - starting mid-thought
+   - filler and procedural talk
+4. Clips are chosen greedily: no overlaps, a gap of at least 5 s, and limited repetition. **Quality comes before
+   quantity:** weak passages are never used to reach a count. If only two passages qualify, you get two, and the
+   recording page explains why.
+5. Hateful or extremist advocacy is **flagged for contextual review**, never turned into promotional text (§6).
 
-**Reproducible evaluation:** `scripts/make_longform_sample.py` generates labelled long recordings. The text is
-original, the speech is synthesised locally, and each paragraph is tagged substantive or procedural, with a topic.
-`scripts/evaluate_selection.py` compares profiles on that labelled sample.
+**Reproducible evaluation** (`scripts/make_longform_sample.py` + `scripts/evaluate_selection.py`):
 
-| Sample | Profile | Substantive share | Procedural share | Topic diversity |
-|---|---|---|---|---|
-| 114 min, **real Whisper transcript** | v1 | 0.80 | 0.118 | 0.83 |
-| 114 min, **real Whisper transcript** | v2 | **0.94** | **0.00** | 0.83 |
-| 58 min, exact-timing stub | v1 | 0.81 | 0.115 | 0.83 |
-| 58 min, exact-timing stub | v2 | **0.94** | **0.00** | 0.83 |
-| 9 min | v1 | 0.77 | 0.15 | 0.83 |
-| 9 min | v2 | **0.92** | **0.02** | **1.0** |
+| Sample | Profile | Substantive | Procedural | Ends mid-topic | Starts mid-topic | Topic diversity | Durations (s) |
+|---|---|---|---|---|---|---|---|
+| 58 min | v1 (55 s target) | 0.81 | 0.115 | 0.33 | 0.17 | 0.83 | 51–59 |
+| 58 min | v2 (55 s target) | 0.94 | 0.00 | 0.17 | 0.00 | 0.83 | 45–58 |
+| 58 min | **v3 (content-led)** | **0.94** | **0.00** | **0.00** | 0.33 | **1.0** | 33–55 |
+| 9 min | v1 | 0.77 | 0.15 | 0.33 | 0.50 | 0.83 | 31–60 |
+| 9 min | v2 | 0.92 | 0.02 | 0.00 | 0.33 | 1.0 | 32–58 |
+| 9 min | **v3** | **0.92** | 0.02 | **0.00** | 0.50 | **1.0** | 20–113 |
 
-All of these clips started cleanly and ended on terminal punctuation. The sample text is template-based and the
-scorer uses similar cues, so compare the profiles rather than trusting the absolute numbers.
+These use the TEST-ONLY exact-timing transcript of a template-generated recording. In it, pauses don't vary with
+topic changes, which handicaps v3's boundary signal. Compare the profiles rather than the absolute numbers. The
+real-Whisper long-form CI job reports the same metrics on a genuine transcript.
+
+**Measured:** v3 removes the duration target and never cut a topic's discussion short. It sometimes starts one
+paragraph into a topic. `SELECTION_PROFILE=v2` restores the previous behaviour.
+
+## 5b. Captions (approved style)
+
+**Approved default style:**
+
+- **Anton** (official Google Fonts build, SIL OFL 1.1, bundled in `clipengine/assets/fonts`)
+- normal sentence case, never forced to uppercase
+- solid white with a modest solid black outline; no shadow, background, colour effects or animation
+- 52 px on a 1080×1920 frame
+- centred, with the caption block at 72% of the height (lower-middle, clear of the TikTok/Instagram overlays)
+- at most two lines, wrapped at word boundaries using Anton's measured glyph widths
+
+**Verification:**
+
+- The app renders a test frame at start-up and confirms that libass loaded the bundled Anton file and selected
+  `Anton-Regular`.
+- If a different font was substituted, the Setup checklist says so, by name.
+
+Settings → Captions lets you change the size, outline thickness, vertical position, preset (Anton or the system's
+classic sans), burn-in on/off, an optional subtle dark backing (off by default) and the small source label. A live
+preview is shown.
 
 ## 6. Editorial safeguards
 
@@ -179,6 +273,28 @@ scorer uses similar cues, so compare the profiles rather than trusting the absol
   you record an editorial decision note.
 - **Rights.** Publishing requires a recorded rights basis: owned, licensed, public domain, or fair dealing
   reviewed. Approval alone is not enough.
+
+## 6b. Ready to Review and Ready to Post
+
+**Ready to Review** lists every new clip, each with:
+
+- its preview and thumbnail
+- source and timestamps
+- duration
+- direct transcript, with context before and after
+- suggested neutral description
+- content flags and rights status
+
+From there you can approve, reject, adjust timestamps, regenerate, edit the description or download the MP4.
+
+**Ready to Post** lists approved clips that have a recorded rights basis and no unresolved content flag, each with:
+
+- one-click MP4 download and Copy description
+- source information
+- an **export check** against the documented TikTok and Instagram limits
+- **manual posted/not-posted tracking** for each platform (an optional link and a note)
+
+Neither page requires TikTok or Instagram to be connected.
 
 ## 7. Publishing (needs your developer accounts)
 
@@ -268,6 +384,42 @@ few minutes, whereas the alternative requires exposing a public endpoint.
 
 Meta allows 100 API-published posts per 24 hours.
 
+## 7b. Email notifications (Outlook)
+
+When all of a recording's clips are ready, **one** email lists them. It includes:
+
+- the title, date and number of clips
+- a small thumbnail, duration and direct quote for each clip
+- links into your private dashboard (sign-in required)
+
+No MP4s are attached and no public media links are created. Optional alerts cover failed processing and low disk
+space. No "ready" email is sent if processing fails before clips exist.
+
+**Nothing is sent until you approve it.** Notifications are created as *held* until you open Settings →
+Notifications, preview a real sample, type the recipient and approve that wording. Changing the recipient or the
+template revokes the approval. Each notification has a duplicate-proof key, and sending runs as a retrying,
+restart-safe job.
+
+**Set-up (one-time, free):**
+
+1. Sign in at <https://entra.microsoft.com> (or <https://portal.azure.com>) with your Microsoft account, then go to
+   **App registrations → New registration**.
+2. Name it `Clipping Engine`. Under supported account types, choose **Personal Microsoft accounts only** (or
+   *Any … and personal Microsoft accounts*). No redirect URI is needed.
+3. Under **Authentication**, set **Allow public client flows** to **Yes**.
+4. Under **API permissions**, add Microsoft Graph delegated permissions: `Mail.Send`, `User.Read` and
+   `offline_access`.
+5. Copy the **Application (client) ID** into `.env` as `OUTLOOK_CLIENT_ID`. It is not a secret, and no client
+   secret is needed.
+6. In `.env`, set `NOTIFY_TO` to your address and `DASHBOARD_URL` to the address you open the dashboard at (for
+   example, your Tailscale HTTPS address).
+7. Restart, then go to **Settings → Notifications → Connect Outlook**. On any device, open the Microsoft link
+   shown, enter the code, and sign in.
+8. Preview the sample, approve it, and optionally send yourself a test (you must type `SEND`).
+
+If Microsoft won't let a personal account create an app registration, set `NOTIFY_TRANSPORT=smtp` and use the
+`SMTP_*` settings with a mail account that allows authenticated SMTP submission.
+
 ## 8. Reliability and storage
 
 - Jobs are stored in SQLite. Running jobs resume after a restart. Transient errors are retried with backoff, and
@@ -280,6 +432,13 @@ Meta allows 100 API-published posts per 24 hours.
   - inbox files that are duplicates or fail to import are moved to `inbox\duplicates` or `inbox\failed`, never
     deleted
 - Logs go to `data/logs/clipengine.jsonl` (structured JSON), and each job also has its own log.
+- **Crash recovery:** the launcher runs the engine under a supervisor, which restarts it automatically after a
+  crash (with back-off). Jobs, transcription chunks, downloads, live recordings and uploads all resume.
+- **Start at sign-in (optional):** use Settings → *Start automatically when I sign in*, or run
+  `Enable-Autostart.cmd` (undo with `Disable-Autostart.cmd`). This adds a per-user Startup entry that launches the
+  engine minimised in the background. It needs no administrator rights or Task Scheduler. The PC must be on for
+  monitoring and processing to happen.
+- Disk space is checked hourly. Warnings appear on the dashboard, and in a daily email if approved.
 
 ## 9. Phone access, securely
 
@@ -298,6 +457,18 @@ Meta allows 100 API-published posts per 24 hours.
 - Login attempts are rate-limited (5 per 10 minutes). Cookies are HttpOnly, SameSite=strict, and Secure over
   HTTPS. Cross-origin POSTs are refused.
 - Never port-forward the dashboard.
+
+## 9b. First run on Windows (shortest path)
+
+1. Download the repository ZIP from GitHub (green **Code** button → Download ZIP, choosing the
+   `claude/optimistic-noether-k52qjf` branch) and extract it to a local folder, for example `C:\ClippingEngine`.
+2. Double-click `clipping-engine\Start-Clipping-Engine.cmd`, and answer **Y** if it offers to install Python or
+   FFmpeg.
+3. When the dashboard opens, go to **Settings**, click **Download Whisper model now**, and check the Setup
+   checklist.
+4. **Import → Upload** a short recording you are authorised to use, then wait for **Ready to Review** to show its
+   clips.
+5. Optional: enable start at sign-in, add authorised sources, and connect Outlook (§7b).
 
 ## 10. Tests
 

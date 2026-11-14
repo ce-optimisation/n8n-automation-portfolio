@@ -110,62 +110,50 @@ def layout(settings: Settings, src_w: int, src_h: int) -> dict:
 
 
 def write_ass(phrases: list[dict], path: Path, settings: Settings, src_w: int, src_h: int,
-              label: str | None = None) -> None:
-    W, H = settings.out_width, settings.out_height
-    lay = layout(settings, src_w, src_h)
-    fs = settings.caption_font_size
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {W}
-PlayResY: {H}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{settings.caption_font},{fs},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,4,1,{lay['align']},70,70,{lay['margin_v']},1
-Style: Label,{settings.caption_font},{max(26, fs // 2)},&H00E6E6E6,&H00FFFFFF,&H00101010,&H64000000,0,0,0,0,100,100,0,0,1,2,0,8,60,60,110,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-    lines = []
-    if label and phrases:
-        end = phrases[-1]["end"]
-        lines.append(f"Dialogue: 1,{fmt_ass_ts(0)},{fmt_ass_ts(end + 5)},Label,,0,0,0,,{_ass_escape(label)}")
-    for p in phrases:
-        text = "\\N".join(_ass_escape(x) for x in p["lines"])
-        lines.append(f"Dialogue: 0,{fmt_ass_ts(p['start'])},{fmt_ass_ts(p['end'])},Caption,,0,0,0,,{text}")
-    path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
+              label: str | None = None, style=None) -> None:
+    from . import captions
+    style = style or captions.PRESETS["anton"]
+    path.write_text(captions.build_ass(phrases, style, settings.out_width, settings.out_height, label),
+                    encoding="utf-8")
 
 
-def filter_graph(settings: Settings, ass_name: str = "captions.ass") -> str:
+def filter_graph(settings: Settings, ass_name: str | None = "captions.ass", fontsdir: str | None = None) -> str:
     W, H = settings.out_width, settings.out_height
     bw, bh = W // 4, H // 4
+    burn = f",ass={ass_name}" + (f":fontsdir={fontsdir}" if fontsdir else "") if ass_name else ""
     return (
         f"[0:v]split=2[bgsrc][fgsrc];"
         f"[bgsrc]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
         f"boxblur=luma_radius=12:luma_power=2,eq=brightness=-0.10:saturation=0.85,scale={W}:{H},setsar=1[bg];"
         f"[fgsrc]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[fg];"
-        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p,ass={ass_name}[v];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p{burn}[v];"
         f"[0:a]highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"
     )
 
 
 def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end: float,
                 words: list[dict], src_w: int, src_h: int, label: str | None,
-                on_progress=None) -> dict:
+                on_progress=None, style=None) -> dict:
+    from . import captions
+    style = style or captions.PRESETS["anton"]
     out_dir.mkdir(parents=True, exist_ok=True)
-    phrases = build_phrases(words, start, end)
+    phrases = build_phrases(words, start, end, max_chars=style.max_chars(settings.out_width))
     srt, ass = out_dir / "captions.srt", out_dir / "captions.ass"
     write_srt(phrases, srt)
-    write_ass(phrases, ass, settings, src_w, src_h, label)
+    write_ass(phrases, ass, settings, src_w, src_h, label, style)
     tmp_out = out_dir / "clip.tmp.mp4"
     final = out_dir / "clip.mp4"
+    src_info = media.probe(Path(src))
+    if start >= src_info["duration"] - 0.5:
+        raise media.PermanentError(f"Clip starts at {start:.1f}s but the recording is only "
+                                   f"{src_info['duration']:.1f}s long.")
+    end = min(end, src_info["duration"])
     dur = end - start
     media.run_ffmpeg([
         "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(Path(src).resolve()),
-        "-filter_complex", filter_graph(settings), "-map", "[v]", "-map", "[a]",
+        "-filter_complex", filter_graph(settings, ass.name if style.enabled else None,
+                                        captions.fontsdir_for(out_dir)),
+        "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", settings.x264_preset, "-crf", str(settings.video_crf),
         "-profile:v", "high", "-r", "30", "-c:a", "aac", "-b:a", settings.audio_bitrate,
         "-movflags", "+faststart", "-f", "mp4", tmp_out.name,
@@ -180,4 +168,5 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
                                    f"{settings.out_width}x{settings.out_height}")
     if math.isclose(info["duration"], 0.0):
         raise media.PermanentError("Render produced an empty video")
-    return {"video": final, "thumb": thumb, "srt": srt, "ass": ass, "probe": info, "phrases": len(phrases)}
+    return {"video": final, "thumb": thumb, "srt": srt, "ass": ass, "probe": info, "phrases": len(phrases),
+            "caption_style": style.preset if style.enabled else "off"}

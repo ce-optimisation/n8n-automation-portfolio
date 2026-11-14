@@ -58,13 +58,22 @@ class SelectionProfile:
     min_gap: float = 5.0
     relative_floor: float = 0.6   # drop candidates scoring below this fraction of the best
     absolute_floor: float = 0.25
+    fit_weight: float = 0.12      # closeness to a preferred duration (v1/v2 only; v3 = 0)
+    pause_weight: float = 0.10
+    continuation_weight: float = 0.0   # v3: penalise cutting while the next sentence continues the thought
+    unanswered_weight: float = 0.0     # v3: penalise ending on a question whose answer follows
+    shift_weight: float = 0.0          # v3: penalise windows that straddle a topic change
 
 
 PROFILES = {
     "v1": SelectionProfile("v1", procedural_weight=0.0, topic_bonus=0.0, min_gap=1.0, relative_floor=0.0,
                            absolute_floor=-9.0),
     "v2": SelectionProfile(),
+    # v3 (default): content-led. No preferred duration; length follows natural boundaries.
+    "v3": SelectionProfile("v3", fit_weight=0.0, pause_weight=0.18, continuation_weight=0.45, topic_bonus=0.12,
+                           unanswered_weight=0.15, shift_weight=0.25),
 }
+DEFAULT_PROFILE = "v3"
 
 
 @dataclass
@@ -76,6 +85,8 @@ class Sentence:
     mean_prob: float
     terminal: bool
     question: bool
+    ctoks: frozenset = frozenset()
+    boundary_after: float = 1.0   # 0..1 strength of the gap after this sentence as a natural break (v3)
 
 
 @dataclass
@@ -124,7 +135,8 @@ def build_sentences(segments: list[dict], max_gap: float = 1.6) -> list[Sentence
         last = cur[-1]["word"].strip().rstrip("\"')]”’")
         sentences.append(Sentence(start=cur[0]["start"], end=cur[-1]["end"], words=list(cur), text=text,
                                   mean_prob=sum(w.get("prob", 1.0) for w in cur) / len(cur),
-                                  terminal=last.endswith((".", "?", "!")), question=last.endswith("?")))
+                                  terminal=last.endswith((".", "?", "!")), question=last.endswith("?"),
+                                  ctoks=frozenset(_content_tokens(text))))
         cur.clear()
 
     for i, w in enumerate(words):
@@ -148,9 +160,57 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def score_window(sents: list[Sentence], i: int, j: int, target: float,
+def annotate_boundaries(sents: list[Sentence]) -> None:
+    """TextTiling-style boundary strength for every gap between sentences, ranked against the
+    recording's own distribution (so it adapts to each speaker and transcript):
+    lexical change between the 3 sentences either side (cosine on content words) and the pause
+    length, each converted to a percentile and averaged. A gap followed by a dangling
+    conjunction ("And…", "But…") or separating a question from its answer is a weak break."""
+    from collections import Counter
+    import math
+    n = len(sents)
+    if n < 2:
+        if sents:
+            sents[0].boundary_after = 1.0
+        return
+    lex, pause = [], []
+    for g in range(n - 1):
+        left = Counter(t for s_ in sents[max(0, g - 2):g + 1] for t in s_.ctoks)
+        right = Counter(t for s_ in sents[g + 1:g + 4] for t in s_.ctoks)
+        dot = sum(v * right.get(k, 0) for k, v in left.items())
+        norm = math.sqrt(sum(v * v for v in left.values())) * math.sqrt(sum(v * v for v in right.values()))
+        lex.append(1.0 - (dot / norm if norm else 0.0))
+        pause.append(max(0.0, sents[g + 1].start - sents[g].end))
+
+    def ranks(xs):
+        order = sorted(range(len(xs)), key=lambda k: xs[k])
+        r = [0.0] * len(xs)
+        for pos, k in enumerate(order):
+            r[k] = pos / max(1, len(xs) - 1)
+        return r
+    rl, rp = ranks(lex), ranks(pause)
+    for g in range(n - 1):
+        strength = 0.5 * rl[g] + 0.5 * rp[g]
+        nxt = sents[g + 1]
+        first = nxt.words[0]["word"].strip().lower().strip(",.") if nxt.words else ""
+        if first in DANGLING_STARTS:
+            strength *= 0.3
+        if sents[g].question:
+            strength *= 0.5
+        sents[g].boundary_after = round(strength, 4)
+    sents[-1].boundary_after = 1.0
+
+
+def _cont(a: list[Sentence], b: list[Sentence]) -> float:
+    """Lexical continuity between two sentence groups (0 = unrelated, 1 = same thread)."""
+    ta = frozenset().union(*[x.ctoks for x in a]) if a else frozenset()
+    tb = frozenset().union(*[x.ctoks for x in b]) if b else frozenset()
+    return min(1.0, _jaccard(ta, tb) * 3.0)
+
+
+def score_window(sents: list[Sentence], i: int, j: int, target: float | None = None,
                  profile: SelectionProfile | None = None) -> tuple[float, list[str]]:
-    profile = profile or PROFILES["v2"]
+    profile = profile or PROFILES[DEFAULT_PROFILE]
     win = sents[i:j + 1]
     text = " ".join(s.text for s in win)
     toks = re.findall(r"[a-z']+", text.lower())
@@ -179,7 +239,24 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float,
     pause_after = sents[j + 1].start - sents[j].end if j + 1 < len(sents) else 2.0
     pauses = min(1.0, pause_before / 0.8) * 0.5 + min(1.0, pause_after / 0.8) * 0.5
     dur = win[-1].end - win[0].start
-    fit = max(0.0, 1 - abs(dur - target) / target)
+    fit = max(0.0, 1 - abs(dur - target) / target) if (target and profile.fit_weight) else 0.0
+    continuation = unanswered = shift = 0.0
+    if profile.continuation_weight:
+        end_strength = sents[j].boundary_after if j + 1 < len(sents) else 1.0
+        start_strength = sents[i - 1].boundary_after if i > 0 else 1.0
+        continuation = (1.0 - end_strength) + 1.0 * (1.0 - start_strength)
+        if end_strength < 0.4:
+            reasons.append("the speaker's point continues after this cut")
+        elif end_strength >= 0.75:
+            reasons.append("ends at a natural break")
+    if profile.unanswered_weight and win[-1].question and j + 1 < len(sents):
+        unanswered = 1.0
+        reasons.append("ends on a question before its answer")
+    if profile.shift_weight and len(win) >= 2:
+        internal = max((x.boundary_after for x in win[:-1]), default=0.0)
+        shift = max(0.0, internal - 0.8) / 0.2
+        if shift > 0.5:
+            reasons.append("spans a change of topic")
     end_clean = 1.0 if win[-1].terminal else 0.0
     procedural = 0.0
     if profile.procedural_weight:
@@ -193,14 +270,17 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float,
         if any(re.search(p_, first_text) for p_ in TOPIC_START_MARKERS) or pause_before >= 0.9:
             topic = profile.topic_bonus
             reasons.append("opens at the start of a topic")
-    score = (0.36 * substance + 0.10 * qa + 0.22 * clarity + 0.10 * pauses + 0.12 * fit + 0.10 * end_clean
-             - start_pen - 1.5 * filler - profile.procedural_weight * procedural + topic)
+    score = (0.36 * substance + 0.10 * qa + 0.22 * clarity + profile.pause_weight * pauses
+             + profile.fit_weight * fit + 0.10 * end_clean
+             - start_pen - 1.5 * filler - profile.procedural_weight * procedural + topic
+             - profile.continuation_weight * continuation - profile.unanswered_weight * unanswered
+             - profile.shift_weight * shift)
     if pauses > 0.8:
         reasons.append("natural pauses at both ends")
     return round(score, 4), reasons
 
 
-def generate_candidates(sents: list[Sentence], min_s: float, max_s: float, target: float,
+def generate_candidates(sents: list[Sentence], min_s: float, max_s: float, target: float | None,
                         profile: SelectionProfile | None = None) -> list[Candidate]:
     cands = []
     for i in range(len(sents)):
@@ -232,17 +312,20 @@ def pick_diverse(cands: list[Candidate], n: int, max_similarity: float = 0.45,
     return chosen
 
 
-def effective_bounds(duration: float, min_s: float, max_s: float, target: float) -> tuple[float, float, float]:
+def effective_bounds(duration: float, min_s: float, max_s: float, target: float | None) -> tuple[float, float, float]:
     """Relax durations for short recordings so they still yield candidates."""
+    target = target or (min_s + max_s) / 2
     if duration and duration < min_s * 2.5:
         min_s = max(8.0, min(min_s, duration * 0.2))
         target = max(min_s * 1.3, min(target, duration * 0.35))
         max_s = max(target * 1.6, min(max_s, duration * 0.6))
+    elif duration and max_s > duration * 0.6:
+        max_s = max(min_s * 1.5, duration * 0.6)
     return min_s, max_s, target
 
 
-def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: float,
-           duration: float = 0.0, reranker=None, profile: str | SelectionProfile = "v2",
+def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: float | None = None,
+           duration: float = 0.0, reranker=None, profile: str | SelectionProfile = DEFAULT_PROFILE,
            report: dict | None = None) -> list[Candidate]:
     """Choose up to n diverse, self-contained excerpts. If `report` is a dict it is
     filled with an explanation of how many candidates were found and why."""
@@ -254,7 +337,9 @@ def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: 
         rep["note"] = "No sentences in the transcript."
         return []
     min_s, max_s, target = effective_bounds(duration or sents[-1].end, min_s, max_s, target)
-    rep["bounds"] = [round(min_s, 1), round(max_s, 1), round(target, 1)]
+    rep["bounds"] = [round(min_s, 1), round(max_s, 1)] + ([round(target, 1)] if prof.fit_weight else [])
+    if prof.continuation_weight or prof.shift_weight:
+        annotate_boundaries(sents)
     cands = generate_candidates(sents, min_s, max_s, target, prof)
     if not cands:
         # Fallback: allow shorter windows rather than producing nothing.

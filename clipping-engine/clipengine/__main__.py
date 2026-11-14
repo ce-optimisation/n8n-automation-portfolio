@@ -118,12 +118,61 @@ def hardware_report(settings) -> list[str]:
     return lines
 
 
+def supervise(child_args: list[str], max_restarts_per_10min: int = 5, sleep=time.sleep, cmd_factory=None) -> int:
+    """Keep the server running: restart it after a crash (non-zero exit), with back-off.
+    A clean exit (0), Ctrl+C, or a configuration problem (exit 2) ends supervision."""
+    import subprocess
+    crashes: list[float] = []
+    opened_browser = "--no-browser" in child_args
+    while True:
+        args = list(child_args)
+        if opened_browser and "--no-browser" not in args:
+            args.append("--no-browser")
+        cmd = cmd_factory(args) if cmd_factory else [sys.executable, "-m", "clipengine", *args]
+        proc = subprocess.Popen(cmd)
+        opened_browser = True
+        try:
+            rc = proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            try:
+                proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            return 0
+        if rc in (0, 2, 3):
+            return rc
+        now = time.time()
+        crashes = [t for t in crashes if now - t < 600] + [now]
+        delay = 5 if len(crashes) < max_restarts_per_10min else 600
+        print(f"\n  The engine stopped unexpectedly (exit code {rc}). Restarting in {delay}s "
+              f"(jobs resume automatically). Log: data/logs/clipengine.jsonl\n")
+        sleep(delay)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="clipengine")
     ap.add_argument("--check", action="store_true", help="validate dependencies and exit")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--download-model", action="store_true", help="download the Whisper model now and exit")
+    ap.add_argument("--supervise", action="store_true",
+                    help="run the server in a child process and restart it automatically if it crashes")
+    ap.add_argument("--autostart", choices=["on", "off"], help="add/remove start at Windows sign-in and exit")
     args = ap.parse_args(argv)
+    if args.autostart:
+        from . import autostart
+        try:
+            if args.autostart == "on":
+                print(f"Start at sign-in enabled: {autostart.install()}")
+            else:
+                autostart.remove()
+                print("Start at sign-in disabled.")
+            return 0
+        except autostart.AutostartUnsupported as e:
+            print(e)
+            return 2
+    if args.supervise:
+        return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
     problems = check(settings)

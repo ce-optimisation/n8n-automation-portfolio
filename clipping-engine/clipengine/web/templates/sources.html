@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Sources (automatic monitoring)</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<p class="muted">New recordings from enabled sources are imported, transcribed, clipped and placed in Ready to Review automatically. A source is enabled only if its site is listed in ALLOWED_URL_DOMAINS or you have recorded a written permission for it (Settings → Source permissions). Platforms whose terms forbid automated access (e.g. Rumble, YouTube) stay <b>disabled</b> until the platform's written permission is recorded. Nothing logs in, uses cookies, or bypasses paywalls/DRM. The PC must be on for monitoring to run.</p>
+{% for src in srcs %}
+<section class="card">
+  <h2>{{ src.name }} <span class="badge st-{{ 'ready' if src.status == 'ok' else 'failed' if src.status in ('error','blocked') else 'untested' }}">{{ src.status }}</span>{% if not src.enabled %} <span class="badge">disabled</span>{% endif %}</h2>
+  <p><small>{{ src.kind }} · <code>{{ src.url }}</code> · every {{ src.poll_minutes }} min{% if src.kind != 'feed' %} · record live: {{ 'yes' if src.record_live else 'no' }}{% endif %} · last checked {{ src.last_checked|dt or 'never' }}</small></p>
+  {% if src.status_detail %}<p class="{{ 'err' if src.status == 'blocked' else 'muted' }}">{{ src.status_detail }}</p>{% endif %}
+  {% if src.last_error %}<p class="err">Last error: {{ src.last_error }}</p>{% endif %}
+  {% if src.authorisation %}<p class="muted"><b>Authorisation note:</b> {{ src.authorisation }}</p>{% endif %}
+  <div class="buttons">
+    <form method="post" action="/sources/{{ src.id }}/enable"><input type="hidden" name="enabled" value="{{ '0' if src.enabled else '1' }}"><button class="btn">{{ 'Disable' if src.enabled else 'Enable' }}</button></form>
+    {% if src.enabled %}<form method="post" action="/sources/{{ src.id }}/poll"><button class="btn">Check now</button></form>{% endif %}
+    <form method="post" action="/sources/{{ src.id }}/delete" onsubmit="return confirm('Remove this source? Imported recordings are kept.')"><button class="btn ghost">Remove</button></form>
+  </div>
+  {% if items[src.id] %}
+  <table class="jobs"><thead><tr><th>Item</th><th>State</th><th>When</th></tr></thead><tbody>
+  {% for it in items[src.id] %}<tr><td>{{ it.title or it.item_key }}{% if it.kind == 'live' %} <span class="badge">live</span>{% endif %}{% if it.recording_id %} · <a href="/recordings/{{ it.recording_id }}">recording #{{ it.recording_id }}</a>{% endif %}{% if it.error %}<br><small class="err">{{ it.error[:200] }}</small>{% endif %}</td>
+    <td><span class="badge">{{ it.state }}</span>{% if it.kind == 'live' and it.segments %}<br><small>{{ it.segments }} segment(s), {{ it.restarts }} restart(s)</small>{% endif %}</td><td><small>{{ it.created_at|dt }}</small></td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% else %}<p class="card muted">No sources yet.</p>{% endfor %}
+<section class="card">
+  <h2>Add a source</h2>
+  <form method="post" action="/sources" class="grid3">
+    <label>Name <input name="name" required placeholder="City council meetings"></label>
+    <label>Type <select name="kind"><option value="feed">RSS/Atom feed with videos</option><option value="hls">Live stream (.m3u8)</option><option value="channel">Channel/page (yt-dlp)</option></select></label>
+    <label>Address <input name="url" type="url" required placeholder="https://"></label>
+    <label>Check every (minutes) <input name="poll_minutes" type="number" min="2" value="15"></label>
+    <label>Import existing items on first check <input name="backfill" type="number" min="0" value="0"></label>
+    <label class="check"><input type="checkbox" name="record_live" value="1" checked> Record live broadcasts</label>
+    <label style="grid-column:1/-1">Who authorises this automated retrieval? <input name="authorisation" required placeholder="e.g. Council open-data licence; written permission from the channel owner dated …"></label>
+    <button class="btn primary">Save source</button>
+  </form>
+  <details><summary>Using a separate recorder (e.g. Multi-Stream-Recorder)</summary>
+    <p class="muted">Point the recorder's output folder at the inbox (<code>{{ s.inbox }}</code>). Finished MP4 files are imported automatically; a JSON sidecar next to the video (same name, <code>.json</code>) is read for the source address and title. Only record sources you are authorised to record.</p></details>
+</section>
+{% endblock %}

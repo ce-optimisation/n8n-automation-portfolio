@@ -76,7 +76,10 @@ def test_migrates_database_from_first_release(tmp_path):
     assert {"stage", "container_id", "job_id", "confirmed_at"} <= cols
     assert "selection_note" in {r["name"] for r in db.query("PRAGMA table_info(recordings)")}
     assert db.one("SELECT status FROM publish_attempts WHERE id=1")["status"] == "confirmed"
-    assert db.get_kv("schema_version") == "2"
+    from clipengine.db import SCHEMA_VERSION
+    assert db.get_kv("schema_version") == str(SCHEMA_VERSION)
+    assert {"sources", "source_items", "notifications", "manual_posts"} <= {
+        r["name"] for r in db.query("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
 def test_port_helpers_distinguish_our_engine_from_other_programs():

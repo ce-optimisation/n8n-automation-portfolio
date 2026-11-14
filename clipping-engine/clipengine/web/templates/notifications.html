@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/settings">← Settings</a></p>
+<h1>Email notifications</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="card">
+  <h2>Status</h2>
+  <dl class="meta">
+    <dt>Recipient</dt><dd>{{ s.notify_to or 'not set — add NOTIFY_TO to .env' }}</dd>
+    <dt>Transport</dt><dd>{{ 'Microsoft Graph (Outlook.com)' if transport == 'graph' else 'SMTP' }} — {% if not mailer.configured %}<span class="err">not configured</span>{% elif mailer.connected %}connected{% if mailer.account %} as {{ mailer.account }}{% endif %}{% else %}not connected{% endif %}</dd>
+    <dt>Sending</dt><dd>{% if not s.notify_enabled %}Disabled (NOTIFY_ENABLED=0){% elif approved %}<b class="ok-text">Approved</b> — template v{{ template_version }} to {{ approval.to }} (approved {{ approval.approved_at|dt }}){% else %}<b>Held</b> — nothing is sent until you approve below{% endif %}</dd>
+    <dt>When</dt><dd>One email per recording when its clips are ready{% if s.notify_on_failure %}; one alert if processing fails; disk-space warnings at most daily{% endif %}.</dd>
+  </dl>
+  {% if transport == 'graph' and mailer.configured and not mailer.connected %}
+    <form method="post" action="/settings/outlook/connect"><button class="btn primary">Connect Outlook</button></form>
+  {% endif %}
+  {% if device.state %}<div class="flagbox"><p>{% if device.state == 'pending' %}On any device, open <a href="{{ device.uri }}" target="_blank" rel="noopener">{{ device.uri }}</a> and enter the code <b style="font-size:1.3em;letter-spacing:2px">{{ device.user_code }}</b>, then sign in with the Outlook account that should send the emails. This page updates when you refresh. <meta http-equiv="refresh" content="8">{% elif device.state == 'connected' %}Outlook connected.{% else %}Sign-in {{ device.state }}: {{ device.error or '' }}{% endif %}</p></div>{% endif %}
+  {% if mailer.connected and transport == 'graph' %}<form method="post" action="/settings/outlook/disconnect"><button class="btn ghost sm">Disconnect Outlook</button></form>{% endif %}
+</section>
+<section class="card">
+  <h2>Approve recipient and wording</h2>
+  <p class="muted">Preview a real notification built from your most recent processed recording. Approving authorises the app to send this template to this recipient automatically from now on. Changing the recipient or template version revokes approval.</p>
+  <p><a class="btn" href="/settings/notifications/sample" target="_blank">Open sample email</a></p>
+  {% if sample %}<p><small>Sample subject: <b>{{ sample.subject }}</b></small></p>{% endif %}
+  {% if not approved %}
+  <form method="post" action="/settings/notifications/approve" class="inline">
+    <label>Type the recipient to confirm <input name="confirm_to" autocomplete="off" placeholder="{{ s.notify_to }}"></label>
+    <label class="check"><input type="checkbox" name="agree" value="yes"> I approve this wording and recipient for automatic notifications.</label>
+    <button class="btn primary">Approve</button>
+  </form>
+  {% else %}
+  <div class="buttons">
+    <form method="post" action="/settings/notifications/revoke"><button class="btn ghost">Revoke approval</button></form>
+    <form method="post" action="/settings/notifications/release"><button class="btn">Send held notifications</button></form>
+    <form method="post" action="/settings/notifications/test" class="inline"><label>Type SEND <input name="confirm" autocomplete="off"></label><button class="btn">Send a test email</button></form>
+  </div>{% endif %}
+</section>
+<section class="card">
+  <h2>Notifications ({{ rows|length }})</h2>
+  <table class="jobs"><thead><tr><th>#</th><th>Subject</th><th>Status</th><th></th></tr></thead><tbody>
+  {% for n in rows %}<tr><td>{{ n.id }}</td><td>{{ n.subject }}<br><small class="muted">{{ n.kind }} · {{ n.created_at|dt }}{% if n.to_addr %} · to {{ n.to_addr }}{% endif %}</small>{% if n.error %}<br><small class="err">{{ n.error }}</small>{% endif %}</td>
+    <td><span class="badge pub-{{ 'published' if n.status == 'sent' else 'failed' if n.status == 'failed' else 'queued' }}">{{ n.status }}</span>{% if n.sent_at %}<br><small>{{ n.sent_at|dt }}</small>{% endif %}</td>
+    <td><a href="/settings/notifications/{{ n.id }}/preview" target="_blank">Preview</a></td></tr>
+  {% else %}<tr><td colspan="4" class="muted">None yet.</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

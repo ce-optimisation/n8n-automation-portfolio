@@ -15,6 +15,32 @@
 </section>
 
 <section class="card">
+  <h2>Captions</h2>
+  <p class="muted">Approved default: <b>Anton</b>, sentence case, solid white with a modest black outline, compact, centred in the lower-middle safe area. Font file bundled with the app (SIL Open Font License).</p>
+  <img src="/settings/captions/preview.png" alt="Caption preview" style="width:100%;max-width:270px;border-radius:8px;display:block;margin:8px 0" loading="lazy">
+  <form method="post" action="/settings/captions" class="grid3">
+    <label>Font preset <select name="preset"><option value="anton" {% if caption.preset == 'anton' %}selected{% endif %}>Anton (approved)</option><option value="classic" {% if caption.preset == 'classic' %}selected{% endif %}>Classic sans (system Arial)</option></select></label>
+    <label>Size (px) <input name="size" type="number" min="32" max="96" value="{{ caption.size }}"></label>
+    <label>Outline (px) <input name="outline" type="number" step="0.5" min="0" max="8" value="{{ caption.outline }}"></label>
+    <label>Vertical position (% from top) <input name="position" type="number" step="0.01" min="0.45" max="0.85" value="{{ caption.position }}"></label>
+    <label class="check"><input type="checkbox" name="enabled" value="1" {% if caption.enabled %}checked{% endif %}> Burn captions into video</label>
+    <label class="check"><input type="checkbox" name="backing" value="1" {% if caption.backing %}checked{% endif %}> Subtle dark backing (for difficult footage)</label>
+    <label class="check"><input type="checkbox" name="source_label" value="1" {% if caption.source_label %}checked{% endif %}> Small source label at top</label>
+    <button class="btn primary">Save captions</button>
+  </form>
+  <form method="post" action="/settings/captions/reset"><button class="btn ghost sm">Reset to approved style</button></form>
+</section>
+
+<section class="card">
+  <h2>Notifications &amp; startup</h2>
+  <p><a class="btn" href="/settings/notifications">Email notifications…</a></p>
+  {% if autostart_supported %}
+  <form method="post" action="/settings/autostart" class="inline"><input type="hidden" name="enabled" value="{{ '0' if autostart_on else '1' }}">
+    <span>Start automatically when I sign in to Windows: <b>{{ 'on' if autostart_on else 'off' }}</b></span> <button class="btn">{{ 'Turn off' if autostart_on else 'Turn on' }}</button></form>
+  {% else %}<p class="muted">Automatic start at sign-in is available on Windows (or run Enable-Autostart.cmd).</p>{% endif %}
+</section>
+
+<section class="card">
   <h2>This computer</h2>
   <dl class="meta">
     <dt>OS</dt><dd>{{ hw.os }}</dd>
@@ -42,11 +68,13 @@
   <p class="muted">Tokens are stored in: {{ token_backend }}. Client credentials come from .env.</p>
   <div class="pub">
     <div><h3>TikTok (inbox upload)</h3>
+      <p><span class="badge">{{ platform_labels.tiktok[0] }}</span><br><small class="muted">{{ platform_labels.tiktok[1] }}</small></p>
       <p>{% if not tiktok.configured %}Not configured.{% elif tiktok.connected %}Connected (scope: {{ tiktok.scope }}).{% else %}Configured, not connected.{% endif %}</p>
       {% if tiktok.configured %}<a class="btn" href="/connect/tiktok">{% if tiktok.connected %}Reconnect{% else %}Connect TikTok{% endif %}</a>{% endif %}
       {% if tiktok.connected %}<form method="post" action="/disconnect/tiktok"><button class="btn ghost sm">Disconnect</button></form>{% endif %}
     </div>
     <div><h3>Instagram (Reels)</h3>
+      <p><span class="badge">{{ platform_labels.instagram[0] }}</span><br><small class="muted">{{ platform_labels.instagram[1] }}</small></p>
       <p>{% if not instagram.configured %}Not configured.{% elif instagram.connected %}Connected as @{{ instagram.username }}.{% else %}Configured, not connected.{% endif %}</p>
       {% if instagram.configured %}<a class="btn" href="/connect/instagram">{% if instagram.connected %}Reconnect{% else %}Connect Instagram{% endif %}</a>{% endif %}
       {% if instagram.connected %}<form method="post" action="/disconnect/instagram"><button class="btn ghost sm">Disconnect</button></form>{% endif %}

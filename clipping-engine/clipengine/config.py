@@ -71,9 +71,10 @@ class Settings:
 
     # Candidate selection
     clips_per_recording: int = 6
-    clip_min_seconds: float = 30.0
-    clip_max_seconds: float = 90.0
-    clip_target_seconds: float = 55.0
+    clip_min_seconds: float = 15.0
+    clip_max_seconds: float = 150.0
+    clip_target_seconds: float = 0.0     # 0 = none. Only used by legacy profiles v1/v2.
+    selection_profile: str = "v3"        # v3 = content-led (default); v1/v2 kept for comparison
     context_seconds: float = 25.0
     llm_provider: str = "auto"           # auto | ollama | none
     ollama_url: str = "http://127.0.0.1:11434"
@@ -92,6 +93,10 @@ class Settings:
     allowed_url_domains: list[str] = field(default_factory=list)
     max_upload_mb: int = 8192
     inbox_dir: Path | None = None        # watch folder; default data/inbox
+    monitor_enabled: bool = True         # poll enabled sources (sources are individually enabled/authorised)
+    max_recording_hours: float = 8.0
+    min_recording_seconds: float = 60.0  # shorter live captures are treated as incomplete
+    live_restart_limit: int = 30
     allow_private_urls: bool = False     # TEST-ONLY: permits localhost/private URLs
     http_user_agent: str = "LocalClippingEngine/1.1 (self-hosted editorial review tool)"
 
@@ -115,6 +120,22 @@ class Settings:
     instagram_app_secret: str = ""
     instagram_redirect_uri: str = ""
     public_media_base_url: str = ""         # https base reachable by Meta, required for instagram mode
+
+    # Email notifications (nothing is ever sent until the owner approves recipient + template in Settings)
+    notify_enabled: bool = True
+    notify_to: str = ""
+    notify_transport: str = "graph"      # graph (Microsoft Graph, Outlook.com) | smtp
+    notify_on_failure: bool = True
+    notify_inline_thumbnails: bool = True
+    dashboard_url: str = ""              # link base used in emails (e.g. your Tailscale https address)
+    outlook_client_id: str = ""
+    outlook_tenant: str = "consumers"    # consumers = personal Microsoft accounts (outlook.com/hotmail)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_ssl: bool = False
 
     # Testing hook: name of a transcriber backend ("whisper" or "stub").
     transcriber_backend: str = "whisper"
@@ -175,9 +196,10 @@ def get_settings(**overrides) -> Settings:
         whisper_beam_size=_int("WHISPER_BEAM_SIZE", 5),
         transcribe_chunk_seconds=_int("TRANSCRIBE_CHUNK_SECONDS", 1200),
         clips_per_recording=_int("CLIPS_PER_RECORDING", 6),
-        clip_min_seconds=_float("CLIP_MIN_SECONDS", 30.0),
-        clip_max_seconds=_float("CLIP_MAX_SECONDS", 90.0),
-        clip_target_seconds=_float("CLIP_TARGET_SECONDS", 55.0),
+        clip_min_seconds=_float("CLIP_MIN_SECONDS", 15.0),
+        clip_max_seconds=_float("CLIP_MAX_SECONDS", 150.0),
+        clip_target_seconds=_float("CLIP_TARGET_SECONDS", 0.0),
+        selection_profile=(os.environ.get("SELECTION_PROFILE", "v3") or "v3").lower(),
         context_seconds=_float("CONTEXT_SECONDS", 25.0),
         llm_provider=(os.environ.get("LLM_PROVIDER", "auto") or "auto").lower(),
         ollama_url=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
@@ -189,6 +211,10 @@ def get_settings(**overrides) -> Settings:
         allowed_url_domains=_list("ALLOWED_URL_DOMAINS", ""),
         max_upload_mb=_int("MAX_UPLOAD_MB", 8192),
         inbox_dir=Path(os.environ["INBOX_DIR"]) if os.environ.get("INBOX_DIR") else None,
+        monitor_enabled=_bool("MONITOR_ENABLED", True),
+        max_recording_hours=_float("MAX_RECORDING_HOURS", 8.0),
+        min_recording_seconds=_float("MIN_RECORDING_SECONDS", 60.0),
+        live_restart_limit=_int("LIVE_RESTART_LIMIT", 30),
         allow_private_urls=_bool("ALLOW_PRIVATE_URLS", False),
         http_user_agent=os.environ.get("HTTP_USER_AGENT") or "LocalClippingEngine/1.1 (self-hosted editorial review tool)",
         max_attempts=_int("JOB_MAX_ATTEMPTS", 3),
@@ -209,6 +235,20 @@ def get_settings(**overrides) -> Settings:
         instagram_redirect_uri=os.environ.get("INSTAGRAM_REDIRECT_URI", ""),
         public_media_base_url=os.environ.get("PUBLIC_MEDIA_BASE_URL", "").rstrip("/"),
         transcriber_backend=os.environ.get("CLIPENGINE_TRANSCRIBER", "whisper"),
+        notify_enabled=_bool("NOTIFY_ENABLED", True),
+        notify_to=os.environ.get("NOTIFY_TO", "").strip(),
+        notify_transport=(os.environ.get("NOTIFY_TRANSPORT", "graph") or "graph").lower(),
+        notify_on_failure=_bool("NOTIFY_ON_FAILURE", True),
+        notify_inline_thumbnails=_bool("NOTIFY_INLINE_THUMBNAILS", True),
+        dashboard_url=os.environ.get("DASHBOARD_URL", "").rstrip("/"),
+        outlook_client_id=os.environ.get("OUTLOOK_CLIENT_ID", "").strip(),
+        outlook_tenant=os.environ.get("OUTLOOK_TENANT", "consumers").strip() or "consumers",
+        smtp_host=os.environ.get("SMTP_HOST", ""),
+        smtp_port=_int("SMTP_PORT", 587),
+        smtp_user=os.environ.get("SMTP_USER", ""),
+        smtp_password=os.environ.get("SMTP_PASSWORD", ""),
+        smtp_from=os.environ.get("SMTP_FROM", ""),
+        smtp_ssl=_bool("SMTP_SSL", False),
     )
     for k, v in overrides.items():
         setattr(s, k, v)

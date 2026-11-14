@@ -78,7 +78,8 @@ if not exist ".env" (
 
 rem ---- 5. Start ----------------------------------------------------------------------
 echo.
-"%VPY%" -m clipengine %*
+rem --supervise restarts the engine automatically if it ever crashes.
+"%VPY%" -m clipengine --supervise %*
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :fail_rc
 exit /b 0

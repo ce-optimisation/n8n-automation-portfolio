@@ -157,7 +157,7 @@ def main() -> int:
     (a.out / "transcript_segments.json").write_text(json.dumps({"segments": segs}), encoding="utf-8")
     from evaluate_selection import evaluate
     paras = json.loads(timing.read_text(encoding="utf-8"))["paragraphs"]
-    quality = evaluate(paras, segs, "v2", 6) if segs else None
+    quality = evaluate(paras, segs, "v3", 6) if segs else None
     if quality:
         quality.pop("clips_detail", None)
     word_hits = None
@@ -173,7 +173,7 @@ def main() -> int:
         "audio_reused_after_crash": any("Reusing extracted audio" in m for m in logs),
         "clips": len(clips), "clips_rendered": sum(1 for c in clips if c["video_path"]),
         "render_s_each": renders, "failed_jobs": [j for j in jobs if j["status"] == "failed"],
-        "transcript_segments": len(segs), "vocabulary_recall": word_hits, "selection_quality_v2": quality,
+        "transcript_segments": len(segs), "vocabulary_recall": word_hits, "selection_quality_v3": quality,
         "work_dir_left_mb": round(dir_size(data_dir / "work") / 1e6, 1),
     }
     (a.out / "report.json").write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")

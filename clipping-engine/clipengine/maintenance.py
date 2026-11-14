@@ -41,8 +41,14 @@ def storage_report(settings: Settings) -> dict:
             "warning": total / 1e9 > settings.storage_warning_gb or free < 5e9}
 
 
-def run_once(settings: Settings, db: Database) -> dict:
+def run_once(settings: Settings, db: Database, queue=None) -> dict:
     now = time.time()
+    if queue is not None:
+        report = storage_report(settings)
+        if report["warning"]:
+            from . import notify
+            notify.create(settings, db, queue, kind="disk_low", dedupe_key=f"disk:{time.strftime('%Y-%m-%d')}",
+                          content=notify.build_disk_low(settings, report))
     actions = {"stale_work_removed": 0, "rejected_renders_removed": 0, "originals_removed": 0}
     # 1. Disposable intermediates older than a day (never touched by a running job).
     running = db.one("SELECT COUNT(*) n FROM jobs WHERE status='running'")["n"]
@@ -80,8 +86,8 @@ def run_once(settings: Settings, db: Database) -> dict:
 
 
 class Maintenance:
-    def __init__(self, settings: Settings, db: Database, interval: float = 3600):
-        self.settings, self.db, self.interval = settings, db, interval
+    def __init__(self, settings: Settings, db: Database, interval: float = 3600, queue=None):
+        self.settings, self.db, self.interval, self.queue = settings, db, interval, queue
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
 
@@ -89,7 +95,7 @@ class Maintenance:
         def loop():
             while not self._stop.wait(timeout=30 if self._t is None else self.interval):
                 try:
-                    run_once(self.settings, self.db)
+                    run_once(self.settings, self.db, self.queue)
                 except Exception:  # noqa: BLE001
                     log.exception("maintenance failed")
         self._t = threading.Thread(target=loop, name="clipengine-maintenance", daemon=True)

@@ -1,0 +1,515 @@
+"""Authorised source monitoring and live recording.
+
+Watches configured sources and feeds new recordings into the EXISTING pipeline:
+  * feed    — RSS/Atom feed (e.g. a council, parliament or podcast feed) whose items carry
+              video enclosures/links. New items → existing `download_url` job.
+  * channel — a channel/page listed by yt-dlp (only for domains in ALLOWED_URL_DOMAINS or with a
+              recorded written permission). New uploads → `download_url` job; a live entry → recorder.
+  * hls     — a direct HLS (.m3u8) live stream. When it goes live it is recorded with FFmpeg.
+
+Live recordings are written as MPEG-TS segments (robust to interruption). If the recorder dies
+while the stream is still live, a new segment starts (bounded restarts). When the stream ends,
+segments are joined into one MP4, integrity-checked, and handed to the EXISTING inbox importer
+with a `.source.json` provenance sidecar, so processing starts automatically.
+
+Authorisation: monitoring is recurring automated access, so a source is only enabled when its
+host is in ALLOWED_URL_DOMAINS or a written permission is recorded for it, the host resolves to a
+public address, and (for restricted platforms such as Rumble) the platform's own written
+permission is on record. Nothing passes cookies, logs in, or bypasses DRM/paywalls/rate limits.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+
+from . import ingest, media
+from .config import Settings
+from .db import Database
+
+log = logging.getLogger("clipengine.monitor")
+
+KINDS = ("feed", "channel", "hls")
+LIVE_STATES = ("recording", "finalizing")
+MEDIA_NS = "{http://search.yahoo.com/mrss/}"
+ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+
+# ---- authorisation ------------------------------------------------------------
+
+def check_source_allowed(settings: Settings, db: Database, url: str) -> tuple[bool, str]:
+    """Is recurring automated retrieval from this URL authorised by configuration?"""
+    p = urlparse((url or "").strip())
+    host = (p.hostname or "").lower()
+    if not host or p.scheme not in ("http", "https"):
+        return False, "Enter a full http(s) address."
+    restricted = ingest.restricted_reason(host)
+    perm = ingest.permission_for(db, host)
+    if restricted and not perm:
+        dom, reason = restricted
+        return False, (f"Monitoring {dom} is disabled: {reason} To enable it, record the platform's written "
+                       "permission in Settings → Source permissions (who granted it, date, reference). Until then, "
+                       "save individual episode links as pending sources and attach files you are authorised to use.")
+    try:
+        ingest.check_network_target(url, settings)
+    except ingest.SourceError as e:
+        return False, str(e)
+    if perm:
+        return True, f"Authorised by recorded written permission ({perm['granted_by']}, ref {perm['reference']})."
+    if any(ingest.host_matches(host, d) for d in settings.allowed_url_domains):
+        return True, f"{host} is in ALLOWED_URL_DOMAINS (owner-declared as permitting automated retrieval)."
+    return False, (f"{host} is not authorised for automated monitoring. Add it to ALLOWED_URL_DOMAINS in .env only "
+                   "if its terms and the rights holder permit automated downloading, or record a written permission "
+                   "in Settings → Source permissions.")
+
+
+def add_source(settings: Settings, db: Database, *, name: str, kind: str, url: str, poll_minutes: int = 15,
+               record_live: bool = True, backfill: int = 0, authorisation: str = "") -> tuple[int, bool, str]:
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}")
+    ok, msg = check_source_allowed(settings, db, url)
+    sid = db.insert("sources", name=name.strip()[:200] or url, kind=kind, url=url.strip(),
+                    enabled=1 if ok else 0, poll_minutes=max(2, int(poll_minutes)), record_live=int(record_live),
+                    backfill=max(0, int(backfill)), authorisation=authorisation.strip()[:1000],
+                    status="new" if ok else "blocked", status_detail=msg, next_check=0)
+    return sid, ok, msg
+
+
+def set_enabled(settings: Settings, db: Database, sid: int, enabled: bool) -> tuple[bool, str]:
+    src = db.one("SELECT * FROM sources WHERE id = ?", (sid,))
+    if not src:
+        return False, "Source not found."
+    if enabled:
+        ok, msg = check_source_allowed(settings, db, src["url"])
+        if not ok:
+            db.update("sources", sid, enabled=0, status="blocked", status_detail=msg)
+            return False, msg
+        db.update("sources", sid, enabled=1, status="ok" if src["last_success"] else "new", status_detail=msg,
+                  next_check=0, consecutive_errors=0)
+        return True, msg
+    db.update("sources", sid, enabled=0, status="disabled", status_detail="Disabled by owner.")
+    return True, "Disabled."
+
+
+# ---- small safe HTTP fetch -----------------------------------------------------
+
+def fetch_text(settings: Settings, url: str, limit: int = 5_000_000, timeout: float = 20.0) -> tuple[int, str, str]:
+    """GET with SSRF checks on every redirect hop. Returns (status, final_url, text)."""
+    import httpx
+    current = url
+    with httpx.Client(timeout=timeout, follow_redirects=False,
+                      headers={"User-Agent": settings.http_user_agent}) as c:
+        for _ in range(6):
+            ingest.check_network_target(current, settings)
+            with c.stream("GET", current) as r:
+                if r.status_code in (301, 302, 303, 307, 308):
+                    current = urljoin(current, r.headers.get("location", ""))
+                    continue
+                if not settings.allow_private_urls and not ingest._peer_is_public(r):
+                    raise ingest.SourceError("private_address", "Connection reached a private address; refused.")
+                data = b""
+                for chunk in r.iter_bytes():
+                    data += chunk
+                    if len(data) > limit:
+                        raise ingest.SourceError("too_large", "Response too large for a feed/playlist.")
+                return r.status_code, current, data.decode(r.encoding or "utf-8", errors="replace")
+    raise ingest.SourceError("too_many_redirects", "Too many redirects.")
+
+
+# ---- feed / channel / hls listing ------------------------------------------------
+
+def parse_feed(text: str, base_url: str) -> list[dict]:
+    """RSS 2.0 / Atom → [{key, title, url, published}] for items that carry a video."""
+    root = ET.fromstring(text)
+    items = []
+    for it in root.iter("item"):
+        url = None
+        for enc in it.findall("enclosure"):
+            if (enc.get("type") or "").startswith("video/") or Path(urlparse(enc.get("url", "")).path).suffix.lower() in ingest.VIDEO_EXTS:
+                url = enc.get("url")
+                break
+        if not url:
+            for mc in it.iter(MEDIA_NS + "content"):
+                if (mc.get("type") or "").startswith("video/") or mc.get("medium") == "video":
+                    url = mc.get("url")
+                    break
+        link = (it.findtext("link") or "").strip()
+        url = url or link
+        if not url:
+            continue
+        key = (it.findtext("guid") or "").strip() or url
+        items.append({"key": key, "title": (it.findtext("title") or "").strip(), "url": urljoin(base_url, url),
+                      "published": (it.findtext("pubDate") or "").strip()})
+    for entry in root.iter(ATOM_NS + "entry"):
+        url = None
+        for ln in entry.findall(ATOM_NS + "link"):
+            if ln.get("rel") == "enclosure" and ((ln.get("type") or "").startswith("video/") or
+                                                  Path(urlparse(ln.get("href", "")).path).suffix.lower() in ingest.VIDEO_EXTS):
+                url = ln.get("href")
+                break
+        if not url:
+            alt = entry.find(ATOM_NS + "link")
+            url = alt.get("href") if alt is not None else None
+        if not url:
+            continue
+        items.append({"key": (entry.findtext(ATOM_NS + "id") or url).strip(),
+                      "title": (entry.findtext(ATOM_NS + "title") or "").strip(), "url": urljoin(base_url, url),
+                      "published": (entry.findtext(ATOM_NS + "updated") or entry.findtext(ATOM_NS + "published") or "").strip()})
+    return items
+
+
+def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
+    """yt-dlp flat listing of a channel/page (only called for authorised domains)."""
+    import yt_dlp
+    opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "playlistend": limit,
+            "skip_download": True, "http_headers": {"User-Agent": settings.http_user_agent}, "socket_timeout": 30}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    entries = info.get("entries") or [info]
+    out = []
+    for e in entries:
+        if not e:
+            continue
+        u = e.get("webpage_url") or e.get("url")
+        if not u:
+            continue
+        out.append({"key": str(e.get("id") or u), "title": e.get("title") or "", "url": u,
+                    "published": str(e.get("upload_date") or e.get("timestamp") or ""),
+                    "live": e.get("live_status") == "is_live" or bool(e.get("is_live"))})
+    return out
+
+
+def hls_state(text: str) -> dict:
+    """Minimal HLS inspection: is it a playlist, does it have media, has it ended?"""
+    if "#EXTM3U" not in text:
+        return {"valid": False}
+    seq = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", text)
+    uris = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+    return {"valid": True, "ended": "#EXT-X-ENDLIST" in text, "uris": uris,
+            "master": "#EXT-X-STREAM-INF" in text,
+            "segments": len(re.findall(r"^#EXTINF", text, re.M)),
+            "sequence": int(seq.group(1)) if seq else 0,
+            "fingerprint": hashlib.sha1("\n".join(ln for ln in text.splitlines() if ln and not ln.startswith("#"))[:4000]
+                                        .encode()).hexdigest()[:12]}
+
+
+# ---- integrity --------------------------------------------------------------------
+
+def verify_recording(path: Path, min_seconds: float) -> tuple[bool, list[str], dict]:
+    """Detect incomplete/corrupt files: probe streams and duration, then decode the last 10 s."""
+    problems: list[str] = []
+    try:
+        info = media.probe(path)
+    except Exception as e:  # noqa: BLE001
+        return False, [f"unreadable: {e}"], {}
+    if not info["has_video"]:
+        problems.append("no video stream")
+    if not info["has_audio"]:
+        problems.append("no audio stream")
+    if info["duration"] < min_seconds:
+        problems.append(f"too short ({info['duration']:.1f}s < {min_seconds:.0f}s)")
+    ffmpeg = media.require("ffmpeg")
+    tail = subprocess.run([ffmpeg, "-v", "error", "-sseof", "-10", "-i", str(path), "-f", "null", "-"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          **media._popen_kwargs())
+    errs = [ln for ln in tail.stderr.splitlines() if ln.strip()]
+    if tail.returncode != 0 or len(errs) > 5:
+        problems.append(f"decode errors near the end ({len(errs)} lines): {' | '.join(errs[:2])[:200]}")
+    return not problems, problems, info
+
+
+# ---- monitor ------------------------------------------------------------------------
+
+class SourceMonitor:
+    """Polls due sources (in its own thread, so long transcriptions never delay live detection)
+    and supervises live recorder subprocesses."""
+
+    def __init__(self, settings: Settings, db: Database, queue, interval: float = 30.0, sleep=time.sleep):
+        self.settings, self.db, self.queue, self.interval, self.sleep = settings, db, queue, interval, sleep
+        self.procs: dict[int, subprocess.Popen] = {}
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+        self.lister = list_channel           # replaceable in tests (MOCK)
+        queue.register("download_url:failed", self._download_failed)
+
+    # -- lifecycle
+    def start(self) -> None:
+        self.recover()
+
+        def loop():
+            while not self._stop.wait(self.interval):
+                try:
+                    self.tick()
+                except Exception:  # noqa: BLE001 - never let the monitor die
+                    log.exception("monitor tick failed")
+        self._t = threading.Thread(target=loop, name="clipengine-monitor", daemon=True)
+        self._t.start()
+
+    def stop(self) -> None:
+        """Stop polling; terminate recorders but leave items in 'recording' so a restart resumes."""
+        self._stop.set()
+        for p in list(self.procs.values()):
+            try:
+                p.terminate()
+                p.wait(timeout=10)
+            except Exception:  # noqa: BLE001
+                p.kill()
+        self.procs.clear()
+
+    def recover(self) -> None:
+        """After a restart: items left 'recording' resume (new segment) if still live, else finalize."""
+        for it in self.db.query("SELECT * FROM source_items WHERE state IN ('recording','finalizing')"):
+            src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
+            if it["state"] == "finalizing" or not src or not src["enabled"]:
+                self._finalize(it["id"])
+                continue
+            if self._stream_live(src, it):
+                self._log_item(it["id"], "Resuming recording after restart")
+                self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (it["id"],)))
+            else:
+                self._finalize(it["id"])
+
+    def tick(self) -> None:
+        now = time.time()
+        if self.settings.monitor_enabled:
+            for src in self.db.query("SELECT * FROM sources WHERE enabled = 1 AND COALESCE(next_check, 0) <= ?", (now,)):
+                self.poll(src["id"])
+        self.supervise()
+
+    # -- polling
+    def poll(self, sid: int) -> dict:
+        src = self.db.one("SELECT * FROM sources WHERE id = ?", (sid,))
+        if not src:
+            return {}
+        ok, msg = check_source_allowed(self.settings, self.db, src["url"])
+        if not ok:
+            self.db.update("sources", sid, enabled=0, status="blocked", status_detail=msg, last_checked=time.time())
+            return {"blocked": msg}
+        result = {"new": 0, "live": False}
+        try:
+            first = src["last_success"] is None
+            if src["kind"] == "feed":
+                status, final, text = fetch_text(self.settings, src["url"])
+                if status != 200:
+                    raise ingest.SourceError("http_error", f"Feed returned HTTP {status}")
+                result["new"] = self._handle_vods(src, parse_feed(text, final), first)
+            elif src["kind"] == "channel":
+                entries = self.lister(self.settings, src["url"])
+                live = [e for e in entries if e.get("live")]
+                result["new"] = self._handle_vods(src, [e for e in entries if not e.get("live")], first)
+                if live and src["record_live"]:
+                    result["live"] = self._handle_live(src, live[0]["key"], live[0]["url"], live[0]["title"], "ytdlp")
+            elif src["kind"] == "hls":
+                status, _, text = fetch_text(self.settings, src["url"])
+                st = hls_state(text) if status == 200 else {"valid": False}
+                if st.get("valid") and st.get("segments", 0) + (1 if st.get("master") else 0) > 0:
+                    result["live"] = self._handle_hls(src, st, first)
+            self.db.update("sources", sid, status="ok", status_detail=msg, last_checked=time.time(),
+                           last_success=time.time(), consecutive_errors=0, last_error=None,
+                           next_check=time.time() + src["poll_minutes"] * 60)
+        except Exception as e:  # noqa: BLE001 - recorded and backed off, never fatal
+            n = src["consecutive_errors"] + 1
+            delay = min(6 * 3600, src["poll_minutes"] * 60 * 2 ** min(n, 6))
+            self.db.update("sources", sid, status="error", last_checked=time.time(), consecutive_errors=n,
+                           last_error=f"{type(e).__name__}: {e}"[:1000], next_check=time.time() + delay)
+            result["error"] = str(e)
+            log.warning("source %s poll failed: %s", sid, e)
+        return result
+
+    def _handle_vods(self, src, items: list[dict], first_poll: bool) -> int:
+        new = 0
+        known = {r["item_key"] for r in self.db.query("SELECT item_key FROM source_items WHERE source_id=?", (src["id"],))}
+        fresh = [it for it in items if it["key"] not in known]
+        backfill_keys = {it["key"] for it in fresh[:src["backfill"]]} if first_poll else set()
+        for it in fresh:
+            if first_poll and it["key"] not in backfill_keys:
+                # Baseline: items already published when monitoring began are recorded, not downloaded.
+                self.db.insert("source_items", source_id=src["id"], item_key=it["key"], title=it["title"],
+                               url=it["url"], published=it.get("published"), state="baseline")
+                continue
+            decision = ingest.classify_url(it["url"], self.settings, self.db)
+            iid = self.db.insert("source_items", source_id=src["id"], item_key=it["key"], title=it["title"],
+                                 url=it["url"], published=it.get("published"), state="queued")
+            if not decision.ok:
+                self.db.update("source_items", iid, state="failed", error=decision.message)
+                continue
+            jid = self.queue.enqueue("download_url", max_attempts=6, dedupe_key=f"download:{ingest.normalize_url(it['url'])}",
+                                     payload={"url": it["url"], "title": it["title"] or None, "source_item_id": iid,
+                                              "rights_attestation": f"Monitored source '{src['name']}': {src['authorisation'] or 'authorised by configuration'}"})
+            self.db.update("source_items", iid, job_id=jid)
+            new += 1
+        return new
+
+    def _download_failed(self, ctx) -> None:
+        iid = ctx.payload.get("source_item_id")
+        if iid:
+            job = self.db.one("SELECT error FROM jobs WHERE id=?", (ctx.id,))
+            self.db.update("source_items", iid, state="failed", error=(job["error"] if job else "failed"))
+
+    # -- live recording
+    def _handle_hls(self, src, st: dict, first_poll: bool) -> bool:
+        """One broadcast = one recording. Identity comes from the playlist's media segment URIs."""
+        active = self.db.one("SELECT * FROM source_items WHERE source_id=? AND state IN ('recording','finalizing')",
+                             (src["id"],))
+        if active:
+            return True
+        uris = set(st.get("uris") or [])
+        for prev in self.db.query("SELECT fingerprint FROM source_items WHERE source_id=? AND kind='live' "
+                                  "ORDER BY id DESC LIMIT 5", (src["id"],)):
+            if prev["fingerprint"] and uris & set(json.loads(prev["fingerprint"])):
+                return False                  # same broadcast as one already recorded
+        key = f"live-{time.strftime('%Y%m%d-%H%M%S')}-{hashlib.sha1((st['uris'] or [''])[0].encode()).hexdigest()[:8]}"
+        if st.get("ended") and first_poll and not src["backfill"]:
+            # An archived broadcast that ended before monitoring began: baseline, not downloaded.
+            self.db.insert("source_items", source_id=src["id"], item_key=key, title="(ended before monitoring began)",
+                           url=src["url"], kind="live", state="baseline", fingerprint=json.dumps(st["uris"][-200:]))
+            return False
+        title = f"{src['name']} {time.strftime('%Y-%m-%d %H:%M')}"
+        started = self._handle_live(src, key, src["url"], title, "hls")
+        self.db.execute("UPDATE source_items SET fingerprint=? WHERE source_id=? AND item_key=?",
+                        (json.dumps(st["uris"][-200:]), src["id"], key))
+        return started
+
+    def _remember_segments(self, it) -> None:
+        """Extend the broadcast fingerprint with the playlist's current segment URIs."""
+        try:
+            status, _, text = fetch_text(self.settings, it["url"])
+            if status == 200:
+                st = hls_state(text)
+                seen = set(json.loads(it["fingerprint"] or "[]")) | set(st.get("uris") or [])
+                self.db.update("source_items", it["id"], fingerprint=json.dumps(sorted(seen)[-500:]))
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
+    def _handle_live(self, src, key: str, url: str, title: str, method: str) -> bool:
+        it = self.db.one("SELECT * FROM source_items WHERE source_id=? AND item_key=?", (src["id"], key))
+        if it and (it["state"] not in LIVE_STATES or it["id"] in self.procs):
+            return it["state"] in LIVE_STATES
+        if not it:
+            wd = self.settings.work_dir / "live" / f"src{src['id']:03d}_{re.sub(r'[^A-Za-z0-9_-]', '_', key)[:60]}"
+            wd.mkdir(parents=True, exist_ok=True)
+            iid = self.db.insert("source_items", source_id=src["id"], item_key=key, title=title, url=url, kind="live",
+                                 state="recording", work_dir=str(wd), started_at=time.time(),
+                                 published=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+            it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+            self._log_item(iid, f"Live stream detected ({method}); recording started")
+        self._start_segment(src, it, method)
+        return True
+
+    def _recorder_cmd(self, src, it, seg: Path, method: str) -> list[str]:
+        if method == "hls" or src["kind"] == "hls":
+            return [media.require("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+                    "-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "20000000",
+                    "-live_start_index", "-1" if (it["restarts"] if "restarts" in it.keys() else 0) else "-3",
+                    "-i", it["url"], "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", str(seg)]
+        return [sys.executable, "-m", "yt_dlp", "--no-part", "--hls-use-mpegts", "--no-progress", "--quiet",
+                "--user-agent", self.settings.http_user_agent, "-o", str(seg), it["url"]]
+
+    def _start_segment(self, src, it, method: str | None = None) -> None:
+        wd = Path(it["work_dir"])
+        wd.mkdir(parents=True, exist_ok=True)
+        n = it["segments"] + 1
+        seg = wd / f"seg_{n:03d}.ts"
+        method = method or ("hls" if src["kind"] == "hls" else "ytdlp")
+        logf = open(wd / f"seg_{n:03d}.log", "w", encoding="utf-8")
+        p = subprocess.Popen(self._recorder_cmd(src, it, seg, method), stdout=logf, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, **media._popen_kwargs())
+        self.procs[it["id"]] = p
+        self.db.update("source_items", it["id"], segments=n, state="recording")
+
+    def _stream_live(self, src, it) -> bool:
+        try:
+            if src["kind"] == "hls":
+                status, _, text = fetch_text(self.settings, it["url"])
+                st = hls_state(text) if status == 200 else {"valid": False}
+                return bool(st.get("valid")) and not st.get("ended")
+            entries = self.lister(self.settings, src["url"])
+            return any(e.get("live") and e["key"] == it["item_key"] for e in entries)
+        except Exception:  # noqa: BLE001 - unreachable counts as not live
+            return False
+
+    def supervise(self) -> None:
+        for iid, p in list(self.procs.items()):
+            it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+            if not it:
+                self.procs.pop(iid, None)
+                continue
+            elapsed = time.time() - (it["started_at"] or time.time())
+            if p.poll() is None:
+                if elapsed > self.settings.max_recording_hours * 3600:
+                    self._log_item(iid, "Maximum recording length reached; stopping", "WARNING")
+                    p.terminate()
+                    p.wait(timeout=15)
+                    self.procs.pop(iid, None)
+                    self._finalize(iid)
+                continue
+            self.procs.pop(iid, None)
+            src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
+            if src and src["enabled"] and self._stream_live(src, it) and it["restarts"] < self.settings.live_restart_limit:
+                self.db.update("source_items", iid, restarts=it["restarts"] + 1)
+                self._log_item(iid, f"Recorder exited (code {p.returncode}) while the stream is still live; "
+                                    f"starting a new segment (restart {it['restarts'] + 1})", "WARNING")
+                self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (iid,)))
+            else:
+                self._finalize(iid)
+
+    def _log_item(self, iid: int, msg: str, level: str = "INFO") -> None:
+        log.log(getattr(logging, level), "source item %s: %s", iid, msg)
+
+    def _finalize(self, iid: int) -> None:
+        """Join segments → MP4, verify integrity, hand to the inbox with a provenance sidecar."""
+        it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+        if not it:
+            return
+        if (it["url"] or "").split("?")[0].endswith(".m3u8"):
+            self._remember_segments(it)
+        self.db.update("source_items", iid, state="finalizing")
+        wd = Path(it["work_dir"])
+        segs = sorted(p for p in wd.glob("seg_*.ts") if p.stat().st_size > 0)
+        if not segs:
+            self.db.update("source_items", iid, state="failed", error="No data was recorded.", ended_at=time.time())
+            return
+        out = wd / "recording.mp4"
+        listing = wd / "segments.txt"
+        listing.write_text("".join(f"file '{p.name}'\n" for p in segs), encoding="utf-8")
+        try:
+            media.run_ffmpeg(["-f", "concat", "-safe", "0", "-i", listing.name, "-map", "0:v:0?", "-map", "0:a:0?",
+                              "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", out.name], cwd=wd)
+        except Exception as e:  # noqa: BLE001
+            self.db.update("source_items", iid, state="failed", error=f"Could not join segments: {e}"[:1000],
+                           ended_at=time.time())
+            return
+        ok, problems, info = verify_recording(out, self.settings.min_recording_seconds)
+        if not ok:
+            self.db.update("source_items", iid, state="failed", ended_at=time.time(),
+                           error="Integrity check failed: " + "; ".join(problems))
+            return
+        src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(it["started_at"] or time.time()))
+        name = f"monitor_{ingest.safe_filename(src['name'] if src else 'source', 40)}_{stamp}_item{iid}.mp4"
+        inbox = self.settings.inbox
+        inbox.mkdir(parents=True, exist_ok=True)
+        sidecar = {"recorder": "clipengine", "source_item_id": iid, "source_id": it["source_id"],
+                   "source_name": src["name"] if src else None, "source_url": it["url"],
+                   "title": it["title"], "item_key": it["item_key"],
+                   "started_at": it["started_at"], "ended_at": time.time(), "segments": len(segs),
+                   "restarts": it["restarts"], "duration": info.get("duration"),
+                   "authorisation": src["authorisation"] if src else None}
+        (inbox / (name + ".source.json")).write_text(json.dumps(sidecar, indent=1), encoding="utf-8")
+        tmp = inbox / (name + ".partial")
+        shutil.move(str(out), tmp)
+        tmp.replace(inbox / name)        # becomes visible to the inbox importer only when complete
+        self.db.update("source_items", iid, state="handed_off", ended_at=time.time(), error=None)
+        for p in segs:
+            p.unlink(missing_ok=True)
+        self._log_item(iid, f"Recording complete ({info.get('duration', 0):.0f}s, {len(segs)} segment(s)); "
+                            "handed to inbox")

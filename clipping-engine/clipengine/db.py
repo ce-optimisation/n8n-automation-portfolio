@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -159,6 +159,78 @@ CREATE TABLE IF NOT EXISTS source_permissions (
     updated_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sources (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,                    -- feed | channel | hls
+    url TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    poll_minutes INTEGER NOT NULL DEFAULT 15,
+    record_live INTEGER NOT NULL DEFAULT 1,
+    backfill INTEGER NOT NULL DEFAULT 0,
+    authorisation TEXT,                    -- owner's note: who permits this retrieval and how
+    status TEXT NOT NULL DEFAULT 'new',     -- new | ok | blocked | error | disabled
+    status_detail TEXT,
+    last_checked REAL, next_check REAL, last_success REAL,
+    consecutive_errors INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    settings_json TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_items (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    item_key TEXT NOT NULL,
+    title TEXT,
+    url TEXT,
+    published TEXT,
+    kind TEXT NOT NULL DEFAULT 'vod',      -- vod | live
+    state TEXT NOT NULL,                   -- baseline | queued | recording | finalizing | handed_off | imported | duplicate | failed
+    job_id INTEGER,
+    recording_id INTEGER,
+    work_dir TEXT,
+    fingerprint TEXT,                      -- JSON list of media segment URIs seen (live broadcast identity)
+    segments INTEGER NOT NULL DEFAULT 0,
+    restarts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    started_at REAL, ended_at REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(source_id, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,                    -- recording_ready | job_failed | disk_low | test
+    dedupe_key TEXT NOT NULL UNIQUE,
+    recording_id INTEGER,
+    to_addr TEXT,
+    subject TEXT NOT NULL,
+    body_html TEXT NOT NULL,
+    body_text TEXT NOT NULL,
+    status TEXT NOT NULL,                  -- held | queued | sending | sent | failed | suppressed
+    transport TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    sent_at REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS manual_posts (
+    id INTEGER PRIMARY KEY,
+    clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    posted INTEGER NOT NULL DEFAULT 1,
+    post_url TEXT,
+    note TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(clip_id, platform)
+);
+
 CREATE TABLE IF NOT EXISTS public_media_tokens (
     token TEXT PRIMARY KEY,
     clip_id INTEGER NOT NULL,
@@ -190,6 +262,7 @@ MIGRATIONS = [
     ("publish_attempts", "job_id", "INTEGER"),
     ("publish_attempts", "confirmed_at", "REAL"),
     ("recordings", "selection_note", "TEXT"),
+    ("source_items", "fingerprint", "TEXT"),
 ]
 
 

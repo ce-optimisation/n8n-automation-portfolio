@@ -116,13 +116,14 @@ def register_file(settings: Settings, db: Database, src: Path, *, title: str | N
                   source_url: str | None = None, source_site: str | None = None,
                   source_media_id: str | None = None, extra_meta: dict | None = None,
                   move: bool = True, rights_attestation: str | None = None,
-                  settings_json: dict | None = None) -> tuple[int, bool]:
+                  settings_json: dict | None = None, dedupe_by_url: bool = True) -> tuple[int, bool]:
     """Store a video file as a recording. Returns (recording_id, is_duplicate)."""
     src = Path(src)
     if src.suffix.lower() not in VIDEO_EXTS:
         raise PermanentError(f"Unsupported file type '{src.suffix}'. Use MP4 or MOV (also MKV/WEBM/M4V/AVI).")
     digest = sha256_file(src)
-    dup = find_duplicate(db, sha256=digest, url=source_url)
+    # A live channel/stream URL is shared by every broadcast, so live recordings dedupe by content only.
+    dup = find_duplicate(db, sha256=digest, url=source_url if dedupe_by_url else None)
     if dup:
         if move and src.exists() and settings.work_dir.resolve() in src.resolve().parents:  # temp copies only
             src.unlink(missing_ok=True)
@@ -477,6 +478,9 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
     if file.parent.name.startswith("ytdlp_"):
         shutil.rmtree(file.parent, ignore_errors=True)
     db.update("jobs", ctx.id, recording_id=rid)
+    if ctx.payload.get("source_item_id"):
+        db.update("source_items", ctx.payload["source_item_id"], recording_id=rid,
+                  state="duplicate" if dup else "imported", error=None)
     if dup:
         ctx.log(f"Duplicate of existing recording #{rid}; not re-processing", "WARNING")
         return

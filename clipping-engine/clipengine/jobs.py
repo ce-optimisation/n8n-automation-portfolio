@@ -64,6 +64,7 @@ class JobQueue:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self.current_job_id: int | None = None
+        self.failure_listeners: list[Callable] = []   # called with the failed job row (e.g. notifications)
 
     def register(self, kind: str, handler: Handler) -> None:
         self.handlers[kind] = handler
@@ -171,6 +172,12 @@ class JobQueue:
                         on_fail(ctx)
                     except Exception:  # noqa: BLE001
                         log.exception("failure hook crashed")
+                failed_row = self.db.one("SELECT * FROM jobs WHERE id = ?", (job["id"],))
+                for listener in self.failure_listeners:
+                    try:
+                        listener(failed_row)
+                    except Exception:  # noqa: BLE001
+                        log.exception("failure listener crashed")
         finally:
             self.current_job_id = None
         return True

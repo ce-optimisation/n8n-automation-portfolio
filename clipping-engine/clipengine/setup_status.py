@@ -109,6 +109,56 @@ def checklist(core) -> list[dict]:
     else:
         add("review", "Dashboard ready for review", UNTESTED, "Worker running; no rendered clips yet.",
             "Import a recording to produce the first clips.")
+    # Captions (approved Anton style)
+    from . import captions
+    style = captions.load_style(db)
+    fc = json.loads(db.get_kv("caption_font_check") or "null")
+    if not style.enabled:
+        add("captions", "Captions", UNTESTED, "Burned-in captions are turned off (SRT files are still produced).",
+            "Turn captions on in Settings → Captions.")
+    elif fc and fc.get("ok"):
+        add("captions", "Caption font", READY, f"{fc.get('requested')} verified: libass selected "
+            f"{fc.get('postscript')} from the bundled font file.")
+    elif fc:
+        add("captions", "Caption font", FAILED, f"Requested {fc.get('requested')}, libass used "
+            f"{fc.get('substituted_by') or fc.get('selected') or 'nothing'} {fc.get('error', '')}".strip(),
+            "Choose the Anton preset (bundled) or install the requested font.")
+    else:
+        add("captions", "Caption font", UNTESTED, "Font check runs at start-up.", "Reload this page in a moment.")
+    # Source monitoring
+    srcs = db.query("SELECT * FROM sources")
+    live = [x for x in srcs if x["enabled"] and x["last_success"]]
+    if live:
+        add("sources", "Automatic source monitoring", READY, f"{len(live)} source(s) checked successfully.")
+    elif any(x["status"] == "blocked" for x in srcs):
+        add("sources", "Automatic source monitoring", OWNER,
+            "Configured sources are disabled pending authorisation (see Sources).",
+            "Record the platform's written permission, or use an authorised source/feed.")
+    elif srcs:
+        add("sources", "Automatic source monitoring", UNTESTED, "Sources configured; not yet checked successfully.",
+            "Open Sources and click Check now.")
+    else:
+        add("sources", "Automatic source monitoring", NOT_CONFIGURED, "No sources configured (optional).",
+            "Add an authorised feed or live stream in Sources, or keep using upload/inbox.")
+    # Email notifications
+    from . import notify
+    mailer = core.notifier.mailer.status()
+    sent = db.one("SELECT COUNT(*) n FROM notifications WHERE status='sent'")["n"]
+    if not s.notify_enabled:
+        add("email", "Email notifications", NOT_CONFIGURED, "Disabled (NOTIFY_ENABLED=0).")
+    elif not s.notify_to or not mailer["configured"]:
+        add("email", "Email notifications", OWNER, "Recipient or sending account not configured.",
+            "Set NOTIFY_TO and OUTLOOK_CLIENT_ID in .env (README → Email notifications).")
+    elif not mailer["connected"]:
+        add("email", "Email notifications", OWNER, "Outlook account not connected.",
+            "Settings → Notifications → Connect Outlook.")
+    elif not notify.is_approved(s, db):
+        add("email", "Email notifications", OWNER, "Connected; awaiting your approval of recipient and wording "
+            "(notifications are held until then).", "Settings → Notifications → review the sample and approve.")
+    elif sent:
+        add("email", "Email notifications", READY, f"{sent} email(s) accepted for delivery.")
+    else:
+        add("email", "Email notifications", CONNECTED, "Approved and connected; no email sent yet.")
     # 10. Platform publishing readiness
     for plat, label, ok_state in (("tiktok", "TikTok upload-to-inbox", "delivered_inbox"),
                                   ("instagram", "Instagram Reels publishing", "published")):
@@ -129,3 +179,26 @@ def checklist(core) -> list[dict]:
                 "Approve a clip, record its rights basis, and send it" +
                 (" to your TikTok inbox." if plat == "tiktok" else " (this posts publicly)."))
     return items
+
+
+def platform_label(core, plat: str) -> tuple[str, str]:
+    """Account status shown in Settings: never reports a mocked or unverified success.
+    Returns (label, explanation)."""
+    client = core.tiktok if plat == "tiktok" else core.instagram
+    st = client.status()
+    err = core.db.get_kv(f"oauth_error.{plat}")
+    last = core.db.one("SELECT * FROM publish_attempts WHERE platform=? ORDER BY id DESC LIMIT 1", (plat,))
+    confirmed = core.db.one("SELECT COUNT(*) n FROM publish_attempts WHERE platform=? AND status IN "
+                            "('delivered_inbox','published')", (plat,))["n"]
+    if not st["configured"]:
+        return "Not connected", "Developer credentials are not configured (optional; see README)."
+    if not st["connected"]:
+        if err and any(k in err.lower() for k in ("approv", "review", "scope", "permission", "unaudited")):
+            return "Awaiting developer approval", err
+        return "Not connected", (f"Last sign-in error: {err}" if err else "Use Connect to sign in.")
+    if last and last["status"] == "failed":
+        return "Upload failed", last["detail"] or ""
+    if confirmed:
+        what = "delivery to your TikTok inbox" if plat == "tiktok" else "publication"
+        return f"Platform-confirmed {what}", f"{confirmed} confirmed transaction(s) reported by the platform API."
+    return "Upload available", "Connected. Approved, rights-cleared clips can be sent (nothing is sent automatically)."

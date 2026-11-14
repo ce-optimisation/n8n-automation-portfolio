@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Review queue</h1>
+<h1>Ready to Review</h1>
+<p class="muted">Each clip: preview, source, timestamps, transcript with context, suggested description, content and rights status. <a href="/search">Search transcripts</a></p>
 <nav class="tabs">
   {% for st, label in [('ready','Awaiting review'),('approved','Approved'),('rejected','Rejected'),('rendering','Rendering'),('pending_render','Queued'),('failed','Failed'),('all','All')] %}
   <a href="/review?status={{ st }}" class="{% if status == st %}active{% endif %}">{{ label }}</a>

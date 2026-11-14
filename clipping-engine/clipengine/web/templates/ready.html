@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Ready to Post</h1>
+<p class="muted">Approved clips whose rights basis is recorded and whose content flags (if any) have an editorial decision. Nothing here is posted automatically: download, copy the description, post where you choose, and record it below.</p>
+{% for c in cleared %}
+<article class="card clip">
+  <div class="clip-media"><video controls preload="metadata" playsinline poster="/clips/{{ c.id }}/thumb?r={{ c.render_rev }}" src="/clips/{{ c.id }}/video?r={{ c.render_rev }}"></video></div>
+  <div class="clip-body">
+    <header><a href="/clips/{{ c.id }}"><b>Clip #{{ c.id }}</b></a> <span class="badge approved">approved</span> <span class="badge">{{ (c.end - c.start)|round(1) }} s</span> <span class="badge">rights: {{ c.rights_status.replace('_',' ') }}</span></header>
+    <p class="src"><b>{{ c.title }}</b><br><small>{{ c.start|mmss }}–{{ c.end|mmss }} · source: {% if c.source_url %}<a href="{{ c.source_url }}" target="_blank" rel="noopener noreferrer">{{ c.source_url }}</a>{% else %}{{ c.original_filename }}{% endif %}</small></p>
+    <pre class="desc" id="desc-{{ c.id }}">{{ c.description }}</pre>
+    <div class="buttons">
+      <a class="btn primary" href="/clips/{{ c.id }}/download">Download MP4</a>
+      <button class="btn" type="button" onclick="navigator.clipboard.writeText(document.getElementById('desc-{{ c.id }}').innerText).then(()=>{this.textContent='Copied ✓'})">Copy description</button>
+      <a class="btn ghost" href="/clips/{{ c.id }}/captions.srt">Captions (.srt)</a>
+    </div>
+    <p><b>Export check</b>:
+      {% for plat, chk in checks[c.id].items() %}<span class="badge {{ 'pub-published' if chk[0] else 'pub-failed' }}" title="{{ chk[1] }}">{{ 'TikTok' if plat == 'tiktok' else 'Instagram Reels' }} {{ '✓' if chk[0] else '✗' }}</span> {% endfor %}
+      {% for plat, chk in checks[c.id].items() %}{% if not chk[0] %}<br><small class="err">{{ plat }}: {{ chk[1] }}</small>{% endif %}{% endfor %}</p>
+    {% set pubsum = pubs.get(c.id) %}{% if pubsum %}<p class="pubrow"><small>API connections:</small> {% for plat, st in pubsum.items() %}<span class="badge pub-{{ st.status }}">{{ 'TikTok' if plat == 'tiktok' else 'Instagram' }}: {{ st.label }}</span> {% endfor %}</p>{% endif %}
+    <details {% if posts.get(c.id) %}open{% endif %}><summary>Posted manually? ({{ posts.get(c.id, {})|length }} recorded)</summary>
+      <ul class="list">{% for plat, p in posts.get(c.id, {}).items() %}<li>{{ plat }}: <b>{{ 'posted' if p.posted else 'not posted' }}</b>{% if p.post_url %} · <a href="{{ p.post_url }}" target="_blank" rel="noopener noreferrer">link</a>{% endif %}{% if p.note %} · {{ p.note }}{% endif %} <small class="muted">{{ p.updated_at|dt }}</small></li>{% endfor %}</ul>
+      <form method="post" action="/clips/{{ c.id }}/posted" class="grid3">
+        <label>Platform <select name="platform"><option>tiktok</option><option>instagram</option><option>youtube</option><option>x</option><option>other</option></select></label>
+        <label>Status <select name="posted"><option value="1">Posted</option><option value="0">Not posted</option></select></label>
+        <label>Post link (optional) <input name="post_url" type="url" placeholder="https://"></label>
+        <label>Note <input name="note" maxlength="200"></label>
+        <button class="btn">Save</button>
+      </form>
+    </details>
+  </div>
+</article>
+{% else %}<p class="card muted">No approved, rights-cleared clips yet. Approve clips in <a href="/review">Ready to Review</a> and record their rights basis.</p>{% endfor %}
+{% if blocked %}
+<section class="card"><h2>Approved but not yet cleared ({{ blocked|length }})</h2>
+<ul class="list">{% for c in blocked %}<li><a href="/clips/{{ c.id }}">Clip #{{ c.id }}</a> — {{ c.title }}<br><small class="muted">{{ gates[c.id]|join(' ') }}</small></li>{% endfor %}</ul></section>
+{% endif %}
+{% endblock %}

@@ -10,6 +10,7 @@ import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from html import escape as html_escape
 from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -17,7 +18,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import hardware, inbox, ingest, maintenance, render, segment, setup_status
+from .. import (autostart, captions, hardware, inbox, ingest, maintenance, monitor, notify, render, segment,
+               setup_status)
 from ..config import Settings
 from ..db import Database
 from ..jobs import JobQueue, PermanentError
@@ -60,14 +62,30 @@ class App:
                                              settings.meta_redirect_uri, self.tokens, settings.meta_graph_version)
         self.publisher = PublishService(settings, self.db, self.queue, self.tiktok, self.instagram)
         self.queue.register("download_model", self._download_model)
-        self.maintenance = maintenance.Maintenance(settings, self.db)
+        self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
+        self.monitor = monitor.SourceMonitor(settings, self.db, self.queue)
+        self.notifier = notify.Notifier(settings, self.db, self.queue, self.tokens)
+        self.queue.failure_listeners.append(
+            lambda job: notify.on_job_failed(self.settings, self.db, self.queue, job))
+        self.device_flow: dict = {}
+
         self.login_failures: dict[str, list[float]] = {}
         self.oauth_state: dict[str, dict] = {}
         key_file = settings.secrets_dir / "session_key"
         if not key_file.exists():
             key_file.write_text(secrets.token_hex(32))
         self.session_key = key_file.read_text().strip().encode()
+
+    def check_caption_font(self) -> dict:
+        """Render a frame with libass and record which font file was actually used (Settings checklist)."""
+        try:
+            res = captions.verify_font(self.settings.work_dir / "fontcheck", captions.load_style(self.db))
+        except Exception as e:  # noqa: BLE001
+            res = {"ok": False, "error": str(e)}
+        res["checked_at"] = time.time()
+        self.db.set_kv("caption_font_check", json.dumps(res))
+        return res
 
     def _download_model(self, ctx) -> None:
         from ..transcribe import WhisperTranscriber
@@ -86,12 +104,15 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.queue.start()
             core.maintenance.start()
             core.inbox.start()
+            core.monitor.start()
+            __import__("threading").Thread(target=core.check_caption_font, daemon=True).start()
         try:
             yield
         finally:
             core.queue.stop()
             core.maintenance.stop()
             core.inbox.stop()
+            core.monitor.stop()
 
     app = FastAPI(title="Local Clipping Engine", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.core = core
@@ -451,6 +472,240 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return PlainTextResponse(c["description"] or "", headers={
             "Content-Disposition": f'attachment; filename="{_dl_name(cid, "txt")}"'})
 
+    # ---- ready to post -----------------------------------------------------
+    from ..publishing import base as pubbase
+    from ..publishing import instagram as ig_mod
+    from ..publishing import tiktok as tt_mod
+    EXPORT_LIMITS = {"tiktok": tt_mod.LIMITS, "instagram": ig_mod.LIMITS}
+
+    def export_checks(c) -> dict:
+        out = {}
+        for plat, lim in EXPORT_LIMITS.items():
+            try:
+                pubbase.validate_video(Path(c["video_path"]), **lim)
+                out[plat] = (True, "Meets the platform's documented limits")
+            except Exception as e:  # noqa: BLE001
+                out[plat] = (False, str(e))
+        return out
+
+    @app.get("/ready", response_class=HTMLResponse)
+    def ready_to_post(request: Request):
+        rows = core.db.query("SELECT c.*, r.title, r.source_url, r.original_filename, r.created_at AS rec_created "
+                             "FROM clips c JOIN recordings r ON r.id = c.recording_id WHERE c.status='approved' "
+                             "ORDER BY c.reviewed_at DESC")
+        cleared, blocked = [], []
+        for c in rows:
+            (blocked if editorial_gate(c) else cleared).append(c)
+        posts = {}
+        for r in core.db.query("SELECT * FROM manual_posts"):
+            posts.setdefault(r["clip_id"], {})[r["platform"]] = r
+        conn = core.publisher.connections()
+        return page(request, "ready.html", cleared=cleared, blocked=blocked, posts=posts,
+                    checks={c["id"]: export_checks(c) for c in cleared}, gates={c["id"]: editorial_gate(c) for c in blocked},
+                    pubs={c["id"]: core.publisher.summary(c, conn) for c in cleared})
+
+    @app.post("/clips/{cid}/posted")
+    def mark_posted(request: Request, cid: int, platform: str = Form(...), posted: str = Form("1"),
+                    post_url: str = Form(""), note: str = Form("")):
+        _clip(cid)
+        platform = platform.strip().lower()[:30] or "other"
+        if post_url and urlparse(post_url).scheme not in ("http", "https"):
+            post_url = ""
+        core.db.execute("INSERT INTO manual_posts(clip_id, platform, posted, post_url, note, created_at, updated_at) "
+                        "VALUES (?,?,?,?,?,?,?) ON CONFLICT(clip_id, platform) DO UPDATE SET posted=excluded.posted, "
+                        "post_url=excluded.post_url, note=excluded.note, updated_at=excluded.updated_at",
+                        (cid, platform, 1 if posted == "1" else 0, post_url.strip()[:500], note.strip()[:500],
+                         time.time(), time.time()))
+        return RedirectResponse(request.headers.get("referer") or "/ready", status_code=303)
+
+    # ---- sources -----------------------------------------------------------
+    @app.get("/sources", response_class=HTMLResponse)
+    def sources_page(request: Request, msg: str = "", err: str = ""):
+        srcs = core.db.query("SELECT * FROM sources ORDER BY id")
+        items = {s_["id"]: core.db.query("SELECT * FROM source_items WHERE source_id=? ORDER BY id DESC LIMIT 15",
+                                         (s_["id"],)) for s_ in srcs}
+        return page(request, "sources.html", srcs=srcs, items=items, msg=msg, err=err, s=settings)
+
+    def _sources_redirect(**q):
+        return RedirectResponse("/sources?" + urlencode(q), status_code=303)
+
+    @app.post("/sources")
+    def add_source(name: str = Form(...), kind: str = Form(...), url: str = Form(...), poll_minutes: int = Form(15),
+                   record_live: str = Form(""), backfill: int = Form(0), authorisation: str = Form("")):
+        try:
+            sid, ok, msg = monitor.add_source(settings, core.db, name=name, kind=kind, url=url,
+                                              poll_minutes=poll_minutes, record_live=record_live == "1",
+                                              backfill=backfill, authorisation=authorisation)
+        except ValueError as e:
+            return _sources_redirect(err=str(e))
+        return _sources_redirect(msg=f"Source #{sid} saved and enabled. {msg}") if ok else \
+            _sources_redirect(err=f"Source #{sid} saved but DISABLED: {msg}")
+
+    @app.post("/sources/{sid}/enable")
+    def enable_source(sid: int, enabled: str = Form("1")):
+        ok, msg = monitor.set_enabled(settings, core.db, sid, enabled == "1")
+        return _sources_redirect(msg=msg) if ok else _sources_redirect(err=msg)
+
+    @app.post("/sources/{sid}/poll")
+    def poll_source(sid: int):
+        res = core.monitor.poll(sid)
+        if res.get("blocked"):
+            return _sources_redirect(err=res["blocked"])
+        if res.get("error"):
+            return _sources_redirect(err=f"Check failed: {res['error']}")
+        return _sources_redirect(msg=f"Checked: {res.get('new', 0)} new item(s)"
+                                     + ("; live stream recording" if res.get("live") else ""))
+
+    @app.post("/sources/{sid}/delete")
+    def delete_source(sid: int):
+        core.db.execute("DELETE FROM sources WHERE id=?", (sid,))
+        return _sources_redirect(msg="Source removed (already imported recordings are kept).")
+
+    # ---- notifications -----------------------------------------------------
+    @app.get("/settings/notifications", response_class=HTMLResponse)
+    def notifications_page(request: Request, msg: str = "", err: str = ""):
+        rows = core.db.query("SELECT * FROM notifications ORDER BY id DESC LIMIT 50")
+        sample = None
+        rec = core.db.one("SELECT r.id FROM recordings r WHERE EXISTS (SELECT 1 FROM clips c WHERE c.recording_id=r.id "
+                          "AND c.status IN ('ready','approved')) ORDER BY r.id DESC LIMIT 1")
+        if rec:
+            sample = notify.build_ready(settings, core.db, rec["id"])
+        return page(request, "notifications.html", rows=rows, s=settings, approved=notify.is_approved(settings, core.db),
+                    approval=notify.approval(core.db), mailer=core.notifier.mailer.status(),
+                    transport=settings.notify_transport, device=core.device_flow, sample=sample,
+                    template_version=notify.TEMPLATE_VERSION, msg=msg, err=err)
+
+    def _notify_redirect(**q):
+        return RedirectResponse("/settings/notifications?" + urlencode(q), status_code=303)
+
+    @app.get("/settings/notifications/{nid}/preview", response_class=HTMLResponse)
+    def notification_preview(nid: int):
+        if not core.db.one("SELECT id FROM notifications WHERE id=?", (nid,)):
+            raise HTTPException(404)
+        return HTMLResponse(core.notifier.preview_html(nid))
+
+    @app.get("/settings/notifications/sample", response_class=HTMLResponse)
+    def notification_sample():
+        rec = core.db.one("SELECT r.id FROM recordings r WHERE EXISTS (SELECT 1 FROM clips c WHERE c.recording_id=r.id "
+                          "AND c.status IN ('ready','approved')) ORDER BY r.id DESC LIMIT 1")
+        content = notify.build_ready(settings, core.db, rec["id"]) if rec else None
+        if not content:
+            return HTMLResponse("<p>No processed recording yet — import one to see a real sample.</p>")
+        body = content["html"]
+        for i in content["images"]:
+            body = body.replace(f"cid:{i['cid']}", f"/clips/{i['clip_id']}/thumb")
+        return HTMLResponse(f"<p style='font:13px sans-serif;color:#666'>Subject: <b>{html_escape(content['subject'])}</b>"
+                            f" — To: {html_escape(settings.notify_to or '(NOTIFY_TO not set)')}</p>{body}")
+
+    @app.post("/settings/notifications/approve")
+    def approve_notifications(confirm_to: str = Form(...), agree: str = Form("")):
+        if agree != "yes" or confirm_to.strip().lower() != settings.notify_to.lower() or not settings.notify_to:
+            return _notify_redirect(err="Type the recipient address exactly as configured and tick the confirmation.")
+        notify.approve(settings, core.db)
+        return _notify_redirect(msg=f"Approved: template v{notify.TEMPLATE_VERSION} to {settings.notify_to}. "
+                                    "New notifications will now be sent automatically.")
+
+    @app.post("/settings/notifications/revoke")
+    def revoke_notifications():
+        notify.revoke(core.db)
+        return _notify_redirect(msg="Approval revoked; notifications will be held again.")
+
+    @app.post("/settings/notifications/release")
+    def release_notifications():
+        n = notify.release_held(settings, core.db, core.queue)
+        return _notify_redirect(msg=f"{n} held notification(s) queued for sending.")
+
+    @app.post("/settings/notifications/test")
+    def test_notification(confirm: str = Form("")):
+        if confirm != "SEND":
+            return _notify_redirect(err="Type SEND to confirm the test email.")
+        if not notify.is_approved(settings, core.db):
+            return _notify_redirect(err="Approve the recipient and template first.")
+        content = {"subject": "[Clip review] Test email from your Clipping Engine",
+                   "html": "<p>This is a test sent at your request from Settings → Notifications.</p>",
+                   "text": "This is a test sent at your request from Settings → Notifications.", "images": []}
+        nid = notify.create(settings, core.db, core.queue, kind="test", dedupe_key=f"test:{int(time.time())}",
+                            content=content)
+        return _notify_redirect(msg=f"Test email #{nid} queued.")
+
+    @app.post("/settings/outlook/connect")
+    def outlook_connect():
+        try:
+            flow = core.notifier.graph.start_device_code()
+        except notify.NotifyNotConfigured as e:
+            return _notify_redirect(err=str(e))
+        core.device_flow.clear()
+        core.device_flow.update(user_code=flow["user_code"], uri=flow["verification_uri"], state="pending",
+                                expires=time.time() + int(flow.get("expires_in", 900)))
+
+        def poll():
+            interval = int(flow.get("interval", 5))
+            while time.time() < core.device_flow.get("expires", 0):
+                time.sleep(interval)
+                try:
+                    if core.notifier.graph.poll_device_code(flow["device_code"]) == "connected":
+                        core.device_flow.update(state="connected")
+                        return
+                except Exception as e:  # noqa: BLE001
+                    core.device_flow.update(state="failed", error=str(e))
+                    return
+            core.device_flow.update(state="expired")
+        __import__("threading").Thread(target=poll, daemon=True).start()
+        return _notify_redirect(msg="Follow the sign-in steps shown below.")
+
+    @app.post("/settings/outlook/disconnect")
+    def outlook_disconnect():
+        core.tokens.delete("outlook")
+        return _notify_redirect(msg="Outlook disconnected.")
+
+    # ---- captions & autostart -----------------------------------------------
+    @app.post("/settings/captions")
+    def save_captions(preset: str = Form("anton"), size: int = Form(52), outline: float = Form(3.0),
+                      position: float = Form(0.72), enabled: str = Form(""), backing: str = Form(""),
+                      source_label: str = Form("")):
+        base = captions.PRESETS.get(preset, captions.PRESETS["anton"])
+        style = captions.CaptionStyle(**{**captions.asdict(base), "size": size, "outline": outline,
+                                         "position": position, "enabled": enabled == "1", "backing": backing == "1",
+                                         "source_label": source_label == "1"})
+        captions.save_style(core.db, style)
+        return _settings_redirect(msg="Caption settings saved; they apply to clips rendered or regenerated from now on.")
+
+    @app.post("/settings/captions/reset")
+    def reset_captions():
+        core.db.execute("DELETE FROM meta WHERE key='caption_style'")
+        return _settings_redirect(msg="Captions reset to the approved Anton style.")
+
+    @app.get("/settings/captions/preview.png")
+    def caption_preview():
+        style = captions.load_style(core.db)
+        out = settings.work_dir / "caption_preview"
+        res = captions.verify_font(out, style)
+        clip = core.db.one("SELECT thumb_path FROM clips WHERE thumb_path IS NOT NULL ORDER BY id DESC LIMIT 1")
+        img = Path(res["image"]) if res.get("image") else None
+        if clip and Path(clip["thumb_path"]).is_file():
+            # Composite captions over a real (authorised, already imported) frame for realism.
+            from .. import media as _media
+            frame = out / "frame.png"
+            _media.run_ffmpeg(["-i", str(Path(clip["thumb_path"]).resolve()), "-vf",
+                               f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
+                               f"ass=fontcheck.ass:fontsdir={captions.fontsdir_for(out)}", "-frames:v", "1",
+                               frame.name], cwd=out)
+            img = frame
+        if not img or not img.is_file():
+            raise HTTPException(500, "Preview could not be rendered")
+        return FileResponse(img, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.post("/settings/autostart")
+    def set_autostart(enabled: str = Form("")):
+        try:
+            if enabled == "1":
+                path = autostart.install()
+                return _settings_redirect(msg=f"The engine will start automatically when you sign in to Windows ({path}).")
+            autostart.remove()
+            return _settings_redirect(msg="Automatic start at sign-in removed.")
+        except autostart.AutostartUnsupported as e:
+            return _settings_redirect(err=str(e))
+
     # ---- jobs ------------------------------------------------------------
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs_page(request: Request):
@@ -515,7 +770,10 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return page(request, "settings.html", hw=hw, model=model, llm=llm, s=settings,
                     storage=maintenance.storage_report(settings), tiktok=core.tiktok.status(),
                     instagram=core.instagram.status(), token_backend=core.tokens.backend, msg=msg, err=err,
-                    checklist=setup_status.checklist(core), perms=perms,
+                    checklist=setup_status.checklist(core), perms=perms, caption=captions.load_style(core.db),
+                    font_check=core.db.get_kv("caption_font_check"), autostart_on=autostart.is_installed(),
+                    platform_labels={p_: setup_status.platform_label(core, p_) for p_ in ("tiktok", "instagram")},
+                    autostart_supported=autostart.supported(),
                     restricted=sorted(ingest.RESTRICTED_PLATFORMS), threads=__import__(
                         "clipengine.transcribe", fromlist=["auto_cpu_threads"]).auto_cpu_threads())
 

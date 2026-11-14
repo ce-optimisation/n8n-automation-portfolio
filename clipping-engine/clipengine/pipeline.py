@@ -17,7 +17,7 @@ from .transcribe import get_transcriber
 log = logging.getLogger("clipengine.pipeline")
 
 OVERRIDABLE = {"clips_per_recording": int, "clip_min_seconds": float, "clip_max_seconds": float,
-               "clip_target_seconds": float, "language": str, "llm_provider": str}
+               "clip_target_seconds": float, "language": str, "llm_provider": str, "selection_profile": str}
 
 
 def effective_settings(settings: Settings, overrides: dict | None) -> Settings:
@@ -29,6 +29,20 @@ def effective_settings(settings: Settings, overrides: dict | None) -> Settings:
             except (TypeError, ValueError):
                 pass
     return s
+
+
+def clamp_segments(segments: list[dict], duration: float | None) -> list[dict]:
+    """Drop speech timed beyond the end of the media and clamp overruns (models occasionally
+    emit timestamps past the end of the audio; clips must never point outside the file)."""
+    if not duration:
+        return segments
+    out = []
+    for sg in segments:
+        if sg["start"] >= duration:
+            continue
+        words = [dict(w, end=min(w["end"], duration)) for w in sg.get("words", []) if w["start"] < duration]
+        out.append(dict(sg, end=min(sg["end"], duration), words=words))
+    return out
 
 
 def all_words(segments: list[dict]) -> list[dict]:
@@ -155,7 +169,7 @@ class Pipeline:
             if ctx.cancelled():
                 return
         rows = self.db.query("SELECT * FROM transcript_chunks WHERE recording_id = ? ORDER BY chunk_idx", (rid,))
-        segs = [sg for r in rows for sg in json.loads(r["segments_json"])]
+        segs = clamp_segments([sg for r in rows for sg in json.loads(r["segments_json"])], rec["duration"])
         if not segs:
             raise PermanentError("No speech was detected in this recording.")
         self.db.replace_transcript(rid, segs)
@@ -218,9 +232,11 @@ class Pipeline:
         ctx.progress(0.88, "Selecting candidate excerpts", force=True)
         report: dict = {}
         ts = time.time()
+        profile = s.selection_profile if s.selection_profile in segment.PROFILES else segment.DEFAULT_PROFILE
         cands = segment.select(segs, n=s.clips_per_recording, min_s=s.clip_min_seconds,
-                               max_s=s.clip_max_seconds, target=s.clip_target_seconds,
-                               duration=rec["duration"], reranker=self.make_reranker(s, ctx), report=report)
+                               max_s=s.clip_max_seconds, target=s.clip_target_seconds or None,
+                               duration=rec["duration"], reranker=self.make_reranker(s, ctx), report=report,
+                               profile=profile)
         self._record_stats(rid, selection_s=round(time.time() - ts, 2), selection=report)
         self.db.update("recordings", rid, selection_note=report.get("note"))
         ctx.log(f"Selection: {report}")
@@ -230,10 +246,16 @@ class Pipeline:
         sents = segment.build_sentences(segs)
         words = all_words(segs)
         next_idx = (self.db.one("SELECT MAX(idx) m FROM clips WHERE recording_id = ?", (rid,))["m"] or 0) + 1
-        for k, c in enumerate(cands):
-            cid = self.create_clip(rec, next_idx + k, c.start, c.end, words, sents, s, score=c.score,
-                                   reasons=c.reasons, method=c.method, summary=c.summary)
+        made = 0
+        for c in cands:
+            if rec["duration"] and c.start >= rec["duration"] - 1.0:
+                continue                      # cannot point outside the media
+            cid = self.create_clip(rec, next_idx + made, c.start, min(c.end, rec["duration"] or c.end), words,
+                                   sents, s, score=c.score, reasons=c.reasons, method=c.method, summary=c.summary)
             self.enqueue_render(cid)
+            made += 1
+        if not made:
+            raise PermanentError("No candidate passages fall within the recording's media duration.")
         self.db.update("recordings", rid, status="clips_queued", stage="rendering")
         ctx.log(f"Selected {len(cands)} candidate excerpts; render jobs queued")
 
@@ -280,6 +302,8 @@ class Pipeline:
     def _render_failed(self, ctx: JobContext) -> None:
         job = self.db.one("SELECT error FROM jobs WHERE id = ?", (ctx.id,))
         self.db.update("clips", ctx.job["clip_id"], status="failed", error=job["error"] if job else "failed")
+        if ctx.job["recording_id"]:
+            self._maybe_complete(ctx.job["recording_id"])
 
     def render_clip(self, ctx: JobContext) -> None:
         clip = self.db.clip(ctx.job["clip_id"])
@@ -298,8 +322,9 @@ class Pipeline:
         words = all_words(self.db.segments(rec["id"]))
         label = f"Excerpt · {rec['title'][:48]} · {render.mmss(clip['start'])}"
         ctx.progress(0.05, "Rendering vertical video", force=True)
+        from . import captions
         res = render.render_clip(self.settings, Path(rec["file_path"]), out_dir, clip["start"], clip["end"],
-                                 words, rec["width"], rec["height"], label,
+                                 words, rec["width"], rec["height"], label, style=captions.load_style(self.db),
                                  on_progress=lambda f: ctx.progress(0.05 + 0.9 * f, "Rendering"))
         (out_dir / "transcript.txt").write_text(
             f"Source: {rec['source_url'] or rec['original_filename']}\nRecording: {rec['title']}\n"
@@ -316,10 +341,21 @@ class Pipeline:
         for d in base.glob(f"clip{clip['id']:05d}_r*"):
             if d != out_dir:
                 shutil.rmtree(d, ignore_errors=True)
+        self._maybe_complete(rec["id"])
+
+    def _maybe_complete(self, rid: int) -> None:
+        """When no clip is still rendering: mark the recording ready and queue ONE notification
+        (only if at least one clip is reviewable — never for a recording that failed before clips)."""
         remaining = self.db.one("SELECT COUNT(*) n FROM clips WHERE recording_id = ? AND status IN "
-                                "('pending_render','rendering')", (rec["id"],))["n"]
-        if remaining == 0:
-            self.db.update("recordings", rec["id"], status="ready", stage="done")
+                                "('pending_render','rendering')", (rid,))["n"]
+        if remaining:
+            return
+        ready = self.db.one("SELECT COUNT(*) n FROM clips WHERE recording_id=? AND status IN ('ready','approved')",
+                            (rid,))["n"]
+        if ready:
+            self.db.update("recordings", rid, status="ready", stage="done")
+            from . import notify
+            notify.on_recording_ready(self.settings, self.db, self.queue, rid)
 
     # ---- owner actions ---------------------------------------------------
     def adjust_and_regenerate(self, clip_id: int, start: float | None = None, end: float | None = None) -> int:
