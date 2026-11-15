@@ -423,6 +423,7 @@ class SourceMonitor:
         logf = open(wd / f"seg_{n:03d}.log", "w", encoding="utf-8")
         p = subprocess.Popen(self._recorder_cmd(src, it, seg, method), stdout=logf, stderr=subprocess.STDOUT,
                              stdin=subprocess.DEVNULL, **media._popen_kwargs())
+        logf.close()      # the child has its own handle; keeping ours would leak (and lock on Windows)
         self.procs[it["id"]] = p
         self.db.update("source_items", it["id"], segments=n, state="recording")
 
@@ -510,6 +511,9 @@ class SourceMonitor:
         tmp.replace(inbox / name)        # becomes visible to the inbox importer only when complete
         self.db.update("source_items", iid, state="handed_off", ended_at=time.time(), error=None)
         for p in segs:
-            p.unlink(missing_ok=True)
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass      # e.g. Windows still releasing a handle; stale work files are cleaned up later
         self._log_item(iid, f"Recording complete ({info.get('duration', 0):.0f}s, {len(segs)} segment(s)); "
                             "handed to inbox")

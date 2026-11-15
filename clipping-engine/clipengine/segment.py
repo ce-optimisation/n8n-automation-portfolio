@@ -201,6 +201,17 @@ def annotate_boundaries(sents: list[Sentence]) -> None:
     sents[-1].boundary_after = 1.0
 
 
+def _cos(a: list[Sentence], b: list[Sentence]) -> float:
+    from collections import Counter
+    import math
+    ca = Counter(t for x in a for t in x.ctoks)
+    cb = Counter(t for x in b for t in x.ctoks)
+    dot = sum(v * cb.get(k, 0) for k, v in ca.items())
+    na = math.sqrt(sum(v * v for v in ca.values()))
+    nb = math.sqrt(sum(v * v for v in cb.values()))
+    return dot / (na * nb) if na and nb else 0.0
+
+
 def _cont(a: list[Sentence], b: list[Sentence]) -> float:
     """Lexical continuity between two sentence groups (0 = unrelated, 1 = same thread)."""
     ta = frozenset().union(*[x.ctoks for x in a]) if a else frozenset()
@@ -243,7 +254,15 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float | None = N
     continuation = unanswered = shift = 0.0
     if profile.continuation_weight:
         end_strength = sents[j].boundary_after if j + 1 < len(sents) else 1.0
+        if j + 1 < len(sents):
+            # Whole-clip cohesion with what follows: if the next sentences keep using the clip's
+            # vocabulary, the discussion is still going (robust when pauses are unreliable).
+            follow = _cos(win, sents[j + 1:j + 4])
+            end_strength = min(end_strength, 1.0 - min(1.0, follow * 1.6))
         start_strength = sents[i - 1].boundary_after if i > 0 else 1.0
+        if i > 0:
+            precede = _cos(sents[max(0, i - 3):i], win)
+            start_strength = min(start_strength, 1.0 - min(1.0, precede * 1.6))
         continuation = (1.0 - end_strength) + 1.0 * (1.0 - start_strength)
         if end_strength < 0.4:
             reasons.append("the speaker's point continues after this cut")
