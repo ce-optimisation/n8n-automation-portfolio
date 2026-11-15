@@ -68,47 +68,189 @@ across both sessions remain in force.
 
 ---
 
-## 1. Current status (end of session 2)
+## 1. Current status (end of session 3)
 
 | Area | Status | Evidence |
 |---|---|---|
-| Local workflow: import → real Whisper → selection → 1080×1920 render → mobile review → approve/reject → download → restart persists | **Verified** | Acceptance test 9/9 on Ubuntu **and** Windows with real faster-whisper `base.en` (CI run #8 `43611814430`; latest run #9 `43613236155` green) |
-| Unit and integration suite | **Green** | 68 tests. CI Ubuntu: 68 passed. CI Windows: 67 passed + 1 expected failure (live Wikimedia import refused by that runner with HTTP 403). Local sandbox: 66 passed, 2 skipped (real Whisper and live network are blocked there). |
-| URL ingestion (direct files, permitted extractor, pending sources, inbox, SSRF protection, resume) | **Verified** | Local-server tests; **live** import of a public-domain NASA video from Wikimedia Commons on the Ubuntu CI runner |
-| Rumble automated download | **Deliberately not enabled** | Rumble's Terms of Use forbid automated access without Rumble's prior written permission. Lawful routes are implemented (§7). Live Rumble retrieval is **untested**. |
-| Long-form processing | **Verified** | 114-min recording, real Whisper, hard-kill crash test with resume (§10) |
-| Selection v2 | **Verified, reproducible** | Evaluation on a real Whisper transcript (§9) |
-| TikTok upload-to-inbox | **Implemented, mock-tested only** | Needs the owner's developer app, OAuth connection and a first real upload |
-| Instagram Reels publishing | **Implemented (two login modes), mock-tested only** | Needs a Creator account, a Meta app and a connection; the first real publish is **public** and needs explicit owner go-ahead |
-| Windows launcher | **Verified on GitHub Windows runners only** | `Start-Clipping-Engine.cmd --check` passes in CI |
+| Local workflow: import → real Whisper → selection → 1080×1920 render with Anton captions → review → approve/reject → download → restart persists | **Verified** | Acceptance test 9/9 with real faster-whisper `base.en` on Ubuntu and Windows (CI; see §1.2) |
+| Test suite | **Green** | 89 tests (locally 87 passed + 2 environment-skipped; CI Ubuntu all passed; Windows has the known remote-403 expected failure) |
+| **Authorised source monitoring** (feed / live HLS / permitted channel) → automatic import → clips | **Verified with local test sources** | `tests/test_monitor.py`: local RSS feed and a real-time local FFmpeg HLS live stream, including a recorder crash mid-stream, restart, finalisation, integrity check, inbox handoff, processing, no duplicate re-record, and restart recovery. **No third-party source has been monitored.** |
+| Rumble / America First / America First Plus | **Disabled by design** | Rumble's terms require Rumble's prior written permission for automated access, and AF+ appears to be a subscription service (paywall). The source is saved disabled with an explanation. The exact Rumble channel URL was **not verified** (rumble.com and americafirst.plus are unreachable from the build sandbox). |
+| Content-led selection (v3, default) | **Verified, reproducible** | No duration target. §1A.3: real-Whisper 58-min evaluation plus local exact and Whisper-like transcripts |
+| Approved Anton caption style | **Verified** | libass log confirms the bundled Anton-Regular is loaded; real rendered frames inspected (§1A.4) |
+| Ready to Review / Ready to Post / Sources / Notifications pages | **Verified** | Tests plus 390 px phone screenshots (no horizontal overflow) |
+| Outlook email notifications | **Implemented; MOCK-tested only; never sent** | Microsoft Graph device-code flow and SMTP fallback are tested against mocks. Sending is **held** until the owner connects Outlook and approves the recipient and wording in-app. |
+| Autostart at Windows sign-in + crash supervisor | **Verified (CI Windows + unit tests)** | `Enable/Disable-Autostart.cmd` run on a Windows runner with a temporary Startup folder; supervisor restart test |
+| TikTok / Instagram | **Implemented, mock-tested, NOT connected** (unchanged; disconnected by default, tested) | Owner developer accounts needed |
 | Owner's Windows PC | **Never run** | Owner action C1 |
 
-### 1.1 Commit history on the branch
+### 1.1 Commit history (session 3)
+Sessions 1–2: see git history (`f95fa7a` … `c54dab7`).
 
-| SHA | Session | Summary |
-|---|---|---|
-| `0099d4e` | — | Original repo upload (n8n templates; not ours) |
-| `f95fa7a` | 1 | Initial full application, tests, launcher, README, CI |
-| `39e5846` | 1 | Fix: a plain "Regenerate" no longer overwrites an owner-edited description |
-| `fc51955` | 1 | Fix (found only by real-model CI): pass NumPy samples to Whisper instead of a file path (PyAV `metadata_errors` incompatibility) |
-| `4eb9736` | 1 | Fix: read UTF-8 caption files explicitly (Windows cp1252 default) |
-| `553c922` | 1 | First handoff document |
-| `6ab4b2c` | 2 | Main continuation: lawful link ingestion, checkpointed long-form transcription, selection v2, job-based publishing, setup checklist, security, launcher improvements |
-| `0616266` | 2 | Configurable `HTTP_USER_AGENT`; the live import test reports a remote HTTP 403 as an expected failure |
-| `ce0ba89` | 2 | Accurate transcription-speed metric after a resume; README long-form figures; session-2 handoff |
-| *(this commit)* | 2 | This consolidated handoff |
+| SHA | Summary |
+|---|---|
+| `12ae89a` | Source monitoring, content-led selection v3, Anton captions, Ready to Review/Post, Sources, notifications, autostart, supervisor |
+| `e9c735a` | Windows-safe live-segment cleanup (WinError 32 found by CI); whole-clip cohesion in v3 boundaries (found by the real-Whisper long-form evaluation) |
+| *(this commit)* | Handoff and README refresh |
 
-### 1.2 CI runs worth knowing
+### 1.2 CI runs worth knowing (session 3)
 
 | Run | Notes |
 |---|---|
-| #4 `43600559824` | First fully green session-1 run |
-| #6 `43610881618` | Windows live-import 403 discovered |
-| #7 `43610890294` | **Long-form dispatch run** (114 min, real Whisper, crash test); artifact `longform-report` |
-| #8 `43611814430` | Green on both operating systems with the expected failure on Windows |
-| #9 `43613236155` | Latest, green |
+| #11 `43655906924` (push of `12ae89a`) | Ubuntu: all passed, including real Whisper and acceptance. Windows: launcher and autostart OK, but **one real Windows bug** (segment unlink, WinError 32), fixed in `e9c735a`. |
+| #12 `43655915197` (dispatch, 60 min) | Long-form real Whisper with crash test **passed**. Selection evaluation on the real transcript showed v3 ending mid-topic in 0.5 of clips, which led to the cohesion fix. |
+| RUN_PUSH_E9 | Push of `e9c735a`: see §1A.6 |
+| RUN_LF_E9 | Long-form dispatch after the fix: see §1A.6 |
 
 ---
+
+## 1A. Session 3: what was built (read this first)
+
+### 1A.1 Source monitoring (`clipengine/monitor.py`, Sources page)
+
+- **Source kinds:**
+  - `feed`: RSS/Atom with video enclosures, `media:content` or links.
+  - `hls`: a direct `.m3u8` live stream.
+  - `channel`: a yt-dlp flat listing, only for permitted or allowlisted domains.
+- **Authorisation** (`check_source_allowed`):
+  - A restricted platform (e.g. rumble.com) without a `source_permissions` row is blocked.
+  - Otherwise the host must be in `ALLOWED_URL_DOMAINS` or have a recorded permission, and pass the
+    public-address/SSRF check.
+  - A blocked source is **saved disabled** with an actionable `status_detail`.
+  - Every poll re-checks authorisation and disables the source if it no longer passes.
+- **Polling:**
+  - Runs in its own thread (`SourceMonitor`, every 30 s, for sources that are due), so long transcriptions never
+    delay live detection.
+  - Errors back off exponentially (capped at 6 h).
+  - Fetches use `fetch_text`: SSRF checks on every redirect hop, a peer-IP check, a 5 MB limit.
+- **New items:**
+  - On the first successful poll, existing items are stored as `baseline` and not downloaded, unless `backfill`
+    is greater than 0.
+  - Later items create `source_items` rows (unique per `source_id` and `item_key`) and existing `download_url`
+    jobs.
+  - A `source_item_id` in the job payload updates the item to `imported` or `duplicate`.
+  - The `download_url:failed` hook marks the item `failed`.
+- **Live recording:**
+  - The recorder is FFmpeg for HLS (`-protocol_whitelist http,https,tcp,tls,crypto`, `-c copy -f mpegts`,
+    `-live_start_index -1` on restarts) or `python -m yt_dlp --hls-use-mpegts` for permitted channels.
+  - Output is `seg_NNN.ts` files in `work/live/<item>`.
+  - `supervise()`: if the recorder exits while the stream is still live, a new segment starts (up to
+    `LIVE_RESTART_LIMIT` times). `MAX_RECORDING_HOURS` is enforced.
+  - **Broadcast identity:** the playlist's segment URIs are stored in `source_items.fingerprint`. A playlist
+    sharing any URI with a recent recorded item is the same broadcast and is not re-recorded. An already-ended
+    playlist on the first poll is a baseline.
+  - `_finalize()`:
+    1. join the segments with the concat demuxer into MP4 with `+faststart`
+    2. `verify_recording` (video and audio streams, at least `MIN_RECORDING_SECONDS`, decode test of the last
+       10 s)
+    3. write `<name>.mp4.source.json` into the inbox, then atomically rename `.partial` to `.mp4`
+    4. mark the item `handed_off`; segment deletion is best-effort
+  - `recover()` at start-up: `recording` items resume (new segment) if still live, otherwise finalise.
+- **Inbox sidecars** (`inbox.read_sidecar`):
+  - Ours: `<file>.source.json`, giving `source_type='monitor'`.
+  - External: `<file>.json` or `<stem>.json` / `.info.json` (Multi-Stream-Recorder or yt-dlp style), giving
+    `source_type='recorder_import'`.
+  - The sidecar is moved to `recordings/…/recorder_sidecar.json`.
+  - `register_file(dedupe_by_url=False)` is used, because one live URL serves many broadcasts.
+- **Recorder evaluation:**
+  - **Multi-Stream-Recorder:** MIT licence, Python/Tkinter, yt-dlp/streamlink, Windows-first, MP4 plus JSON
+    sidecar. Not adopted as the default: it is a separate GUI with no permission enforcement, while the built-in
+    monitor uses the same underlying tools. It is supported through the inbox and its sidecar, but **untested
+    against its real output**.
+  - **Rekordly:** unreachable and not findable, so not evaluated.
+
+### 1A.2 Durations, clamps and robustness
+
+- Transcripts are clamped to the media duration (`pipeline.clamp_segments`).
+- Clip windows that start beyond the media are skipped.
+- `render_clip` refuses windows outside the media.
+
+### 1A.3 Selection v3 (`segment.py`, default `SELECTION_PROFILE=v3`)
+
+- No duration target (`fit_weight=0`). The limits are `CLIP_MIN_SECONDS=15` and `CLIP_MAX_SECONDS=150`.
+- `annotate_boundaries()`: for each gap, the cosine-distance rank of the 3 sentences either side and the pause
+  rank are averaged. Dangling "And/But/So…" (×0.3) and question→answer (×0.5) weaken the gap.
+- **Whole-clip cohesion** (added after the real-transcript run): the end boundary is weakened by the cosine
+  similarity between the whole clip and the next 3 sentences; the start boundary likewise with the previous 3.
+- Penalties:
+  - continuation, i.e. a weak end boundary plus a weak start boundary
+  - an unanswered question at the end
+  - straddling a strong internal boundary
+- The topic-opener bonus is 0.12. Quality floors mean weak clips are never used as padding.
+- **Evaluation** (substantive / procedural / ends mid-topic / starts mid-topic):
+
+  | Transcript | Profile | Substantive | Procedural | Ends mid-topic | Starts mid-topic |
+  |---|---|---|---|---|---|
+  | 58 min, **real Whisper**, before the cohesion fix (run #12) | v2 | 0.919 | 0.015 | 0.0 | 0.333 |
+  | 58 min, **real Whisper**, before the cohesion fix (run #12) | v3 | 0.932 | 0.0 | **0.5** | 0.0 |
+  | 58 min, exact, after the fix | v3 | 0.935 | 0.0 | **0.0** | 0.333 |
+  | 58 min, Whisper-like, after the fix | v3 | 0.934 | 0.0 | **0.0** | 0.333 |
+  | 9 min, exact, after the fix | v3 | 0.924 | 0.015 | **0.0** | 0.5 |
+  | 9 min, Whisper-like, after the fix | v3 | 0.917 | 0.015 | **0.0** | 0.5 |
+  | Real Whisper, after the fix | v3 | see §1A.6 | | | |
+
+  "Whisper-like" is a TEST-ONLY perturbation of the exact transcript: word ends stretched into pauses, timing
+  jitter, merged segments. The script is in the session scratchpad and is not committed. Known weakness: v3 still
+  starts one paragraph into a topic in 33–50% of clips on synthetic data. Caveat: the sample text is
+  template-generated.
+
+### 1A.4 Captions (`captions.py`)
+
+- **Font:** official Anton v2.116 (Google Fonts build, from npm `@expo-google-fonts/anton`;
+  sha256 `97aae409…de1d0`), stored as `assets/fonts/Anton-Regular.ttf`. The licence is in `assets/Anton-OFL.txt`.
+  It must **not** live in the fonts folder, because libass tries to load every file there.
+- **Rendering:** `ass=captions.ass:fontsdir=<relative path>`. `fontsdir_for()` uses `os.path.relpath`, falling
+  back to copying the font next to the clip if the data folder is on another drive.
+- **Style:**
+  - Anton 52 px, Bold 0 (no faux bold), white `&H00FFFFFF`, black outline `&H00000000` 3 px, no shadow
+  - BorderStyle 1; the optional backing uses BorderStyle 3 with a translucent box
+  - `{\an5\pos(540, 0.72·H)}` centring
+  - at most two lines, `max_chars` derived from Anton's measured 0.391 em average advance and 120 px side margins
+  - sentence case is never altered
+- **Verification:** `verify_font()` renders a frame at verbose log level and parses `fontselect`. It passes only
+  if `Anton-Regular` is selected **and** "Loading font file …Anton-Regular.ttf" appears. Substitutes are reported
+  (the classic Arial preset becomes LiberationSans on Linux). The result is stored in the `caption_font_check`
+  key-value entry at start-up and shown in the checklist.
+- **Settings:** preset, size, outline, position, on/off, backing and source label are stored in the key-value
+  table `caption_style`, clamped to safe ranges, with a live preview at `/settings/captions/preview.png`.
+
+### 1A.5 Notifications, Ready to Post, autostart
+
+- **`notify.py`:**
+  - Notifications are rows in `notifications` (unique `dedupe_key`).
+  - `ready:<rid>` is created when a recording's last clip finishes, and only if at least one clip is reviewable
+    (`Pipeline._maybe_complete`, also called from the render failure hook).
+  - `failed:rec<rid>` comes from `JobQueue.failure_listeners`; `disk:<date>` from maintenance.
+  - **Status is `held` unless `is_approved`**: the stored approval's `to` equals `NOTIFY_TO` and its template
+    version equals `TEMPLATE_VERSION` (1).
+  - Approval is an in-app owner action: type the recipient and tick the box. Changing the recipient or the
+    template revokes it.
+  - Sending is the `send_notification` job (max 6 attempts).
+  - **Graph:** device code at `login.microsoftonline.com/{OUTLOOK_TENANT=consumers}/oauth2/v2.0/devicecode`,
+    scopes `offline_access Mail.Send User.Read`, tokens in the `TokenStore` under `outlook`, `POST
+    /me/sendMail` with inline 240 px JPEG thumbnails (cid). A 202 means accepted; 401 refreshes once; 429/5xx
+    are transient.
+  - **SMTP fallback** also uses inline related images.
+  - Emails link only to `DASHBOARD_URL` pages (sign-in required); no media links.
+  - **No email has ever been sent.** `NOTIFY_TO` is **not** committed anywhere. The owner supplied their address
+    in chat; it belongs only in their local `.env`.
+- **Ready to Post** (`/ready`):
+  - approved clips that pass `editorial_gate`
+  - export checks (`validate_video` against the TikTok and Instagram limits)
+  - download, copy description, SRT
+  - `manual_posts` per platform (posted flag, optional http(s) link, note)
+  - approved-but-blocked clips listed with their reasons
+- **Autostart:** `autostart.py` writes `%APPDATA%\…\Startup\ClippingEngine.cmd`, which runs `start /min
+  Start-Clipping-Engine.cmd --no-browser --supervise`. `CLIPENGINE_STARTUP_DIR` overrides the folder for tests.
+  There is a Settings toggle plus `Enable-/Disable-Autostart.cmd`.
+- **Supervisor:** `python -m clipengine --supervise` restarts the child on a non-zero exit (5 s back-off; after 5
+  crashes in 10 minutes it waits 10 minutes). Exit codes 0, 2 and 3 stop supervision. The launcher uses
+  `--supervise` by default.
+- **Platform labels** (`setup_status.platform_label`): Not connected / Awaiting developer approval / Upload
+  available / Upload failed / Platform-confirmed …. It never shows a mocked success.
+
+### 1A.6 Final CI verification (filled in at the end of session 3)
+FINAL_CI_SUMMARY
 
 ## 2. Environment facts that shaped decisions
 
@@ -289,7 +431,7 @@ clipping-engine/
 
 ---
 
-## 5. Data model (SQLite, schema_version 2)
+## 5. Data model (SQLite, schema_version 3; v3 added sources, source_items (+fingerprint), notifications, manual_posts)
 
 - **meta**: `key`, `value`.
   - `schema_version`
@@ -871,80 +1013,73 @@ PW_CHROMIUM=/opt/pw-browsers/chromium                # sandbox only, for the acc
 
 ## 17. Remaining engineering issues
 
-1. **Live TikTok and Instagram transactions are unverified.** Everything is mocked until the owner connects real
-   accounts. Unknowns:
-   - TikTok portal acceptance of the `127.0.0.1` loopback redirect
-   - inbox-upload limits for unaudited apps
-   - real Meta error codes
-   - TikTok chunk boundaries near 5 MB and 64 MB
-2. **Rumble live retrieval has never been executed.** It is permission-gated by design.
-3. **Wikimedia refused the Windows CI runner (403).** The owner may need `HTTP_USER_AGENT` with contact details.
-4. **The Ollama re-ranker hasn't been evaluated.**
-5. **Peak RAM is 1.6 GB with `base`**; `small` needs more. Use `tiny.en` or `base.en` on PCs with 4 GB of RAM.
-   `small`, GPU and 3-hour runs are unmeasured.
-6. **The OAuth state lives in memory**; a restart during sign-in means reconnecting (minor).
-7. **python-multipart spools uploads to temp**, briefly doubling disk use. The inbox avoids this.
-8. Optional subject-tracking crop and speaker diarisation were **intentionally not built**.
-
----
+1. **No third-party source has been monitored live.** Monitoring is verified only against local test feeds and
+   streams.
+   - The `channel` kind's yt-dlp listing is mock-tested.
+   - Real sources need the owner's authorisation (`ALLOWED_URL_DOMAINS` or a recorded permission).
+2. **Rumble (America First) is blocked** pending Rumble's written permission, and the channel URL is unverified.
+   AF+ is presumed to be paywalled, so it is not supported for automated retrieval.
+3. **Outlook sending has never been executed live** (mocked only).
+   - Whether a personal Microsoft account can create the Entra app registration is unconfirmed; use the SMTP
+     fallback if it can't.
+   - Graph returns 202 "accepted", not proof of delivery.
+4. **v3 still starts one paragraph into a topic** in 33–50% of clips on synthetic data. Re-check the real-Whisper
+   figures in §1A.6.
+5. **Live HLS restart overlap:** a restarted segment can repeat about 1 segment of content (`live_start_index -1`).
+   It is not trimmed.
+6. **XML feeds** are parsed with stdlib ElementTree, which relies on expat's entity-expansion limits. Feeds come
+   only from authorised hosts.
+7. Carried over from earlier sessions: TikTok/Instagram never connected live; Ollama re-ranker unevaluated;
+   multipart upload spooling; OAuth state held in memory.
+8. Multi-Stream-Recorder's sidecar format is untested against real output.
 
 ## 18. Owner action checklist (prioritised; present it once, at the end)
 
 1. **C1 — Install and launch on the Windows PC (mandatory).**
-   - Download the repository and double-click `clipping-engine\Start-Clipping-Engine.cmd`.
-   - Accept the Python and FFmpeg winget prompts.
-   - Settings → Setup checklist → **Download Whisper model now**.
-   - *Return:* the console "Computer:" line and every checklist status.
-2. **C2 — First real recording (mandatory).**
-   - Upload a short authorised recording, or save it into the inbox folder.
-   - *Return:* whether "A real transcription has succeeded" shows Ready, the processing stats line, and whether
-     the clips are usable.
-3. **C3 — TikTok (may take days for app review).**
-   - Create or sign in to the TikTok account; set it to Public if required.
-   - At [developers.tiktok.com](https://developers.tiktok.com), Manage apps → connect a **Desktop** app.
-   - Add Login Kit and the Content Posting API, with scopes `user.info.basic` and `video.upload`.
-   - Register the redirect `http://127.0.0.1:8765/oauth/tiktok/callback`. If loopback is rejected, use a Web app
-     with a Tailscale HTTPS redirect and set `TIKTOK_APP_TYPE=web`.
-   - Add yourself as a tester, or submit for review.
-   - Put `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` in `.env` (never in chat). Restart, then Settings →
-     Connect TikTok.
-   - Approve a clip, set its rights, and click **Send to my TikTok inbox**.
-   - *Return:* whether the clip shows "Delivered to TikTok inbox (confirmed)" and appears in the app, or the
-     exact error.
-4. **C4 — Instagram (Meta review may delay this).**
-   - In the Instagram app, Settings → Account type and tools → **Creator** account; link a Facebook Page
-     ([create one](https://www.facebook.com/pages/create) if needed).
-   - At [developers.facebook.com/apps](https://developers.facebook.com/apps), create an app with Facebook Login
-     for Business and the Instagram Graph API.
-   - Request `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` and
-     `business_management`.
-   - Add the redirect `http://localhost:8765/oauth/instagram/callback`. Keep the app in development mode with
-     yourself under App roles.
-   - Put `META_APP_ID` and `META_APP_SECRET` in `.env`, then Connect Instagram.
-   - *Return:* the checklist status.
-   - **The first public publish only on the owner's explicit instruction.**
-5. **C5 — Optional.**
-   - Tailscale for secure phone access ([download](https://tailscale.com/download)).
-   - Rumble's written permission, recorded in Settings.
-   - `HTTP_USER_AGENT` with contact details.
-   - `INSTALL_CUDA_LIBS=1` for an NVIDIA GPU.
-   - Approve the cloud-session network change (Hugging Face) from claude.ai on desktop, only if real
-     transcription is wanted inside the sandbox.
+   - Download the branch ZIP, extract it, and double-click `clipping-engine\Start-Clipping-Engine.cmd`.
+   - Accept the Python and FFmpeg prompts.
+   - Settings: click **Download Whisper model now**, and check the Setup checklist (caption font should show
+     Ready).
+   - *Return:* the console "Computer:" line and the checklist statuses.
+2. **C2 — First real recording (mandatory).** Upload or drop into the inbox a short recording you are authorised
+   to use.
+   - *Return:* whether clips appeared in Ready to Review, whether the Anton captions look right on your phone,
+     and the processing stats line.
+3. **C3 — Email notifications (needed for "notify me").**
+   - Register a free Entra app (README §7b), then put `OUTLOOK_CLIENT_ID`, `NOTIFY_TO=<your address>` and
+     `DASHBOARD_URL` in `.env`.
+   - Settings → Notifications → Connect Outlook (device code), preview the sample, approve, and optionally send a
+     test (type `SEND`).
+   - *Return:* whether the test email arrived.
+   - Nothing is sent before this approval.
+4. **C4 — Authorised automatic sources (needed for hands-off import).** For each source you are authorised to
+   retrieve automatically:
+   - add its domain to `ALLOWED_URL_DOMAINS` or record a written permission
+   - add it on the Sources page and click Check now
 
-**Recommended order:** C1, then C2, then start C3 (because of review time) and do C4 in parallel.
+   For **Rumble/America First**, either obtain Rumble's written permission (then record it in Settings → Source
+   permissions and add the channel URL), or keep using pending sources with files supplied by the rights holder.
+   *Return:* the Sources page status.
+5. **C5 — Optional:**
+   - enable start at sign-in
+   - Tailscale for phone access and HTTPS email links
+   - TikTok and Instagram developer apps (unchanged from session 2)
+   - `INSTALL_CUDA_LIBS=1` for an NVIDIA GPU
 
-**Readiness verdict:**
-
-1. **Local clipping and review:** ready for routine use (verified in CI; not yet run on the owner's PC).
-2. **URL ingestion:** ready (direct, permitted, inbox, link + file); Rumble only through link + file or a
-   recorded permission.
-3. **TikTok:** built and mock-tested, not connected.
-4. **Instagram:** built and mock-tested, not connected.
-5. **Overall:** ready for local editorial work once installed; publishing awaits the owner's actions.
-
----
+**Readiness verdict:** local import → transcription → content-led clips → Anton captions → review → email is
+complete and verified in CI. Hands-off operation depends on C3 (approval to send) and C4 (an authorised
+source). Publishing remains manual (download and post) until the platforms are connected.
 
 ## 19. Gotchas — never break these
+
+- **Session 3 additions:**
+  - Never enable a restricted-platform source without a recorded written permission.
+  - Never send email without `is_approved`.
+  - Never commit the owner's email address.
+  - Keep `Anton-OFL.txt` **outside** the fonts folder (libass loads every file there).
+  - Keep the caption text case untouched.
+  - Live finalisation must atomically rename `.partial` to `.mp4`, so the inbox never imports a half-written file.
+  - Keep `dedupe_by_url=False` for live and sidecar imports.
 
 - Keep `read_wav_range` and the NumPy input to Whisper; never pass file paths (PyAV).
 - The port check uses `connect_ex`, never `bind`.
