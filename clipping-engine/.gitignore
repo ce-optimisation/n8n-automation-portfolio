@@ -5,3 +5,4 @@ tools/ffmpeg/
 __pycache__/
 *.pyc
 .pytest_cache/
+.review/
