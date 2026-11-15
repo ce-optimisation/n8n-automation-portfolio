@@ -111,12 +111,106 @@ def find_duplicate(db: Database, *, sha256: str | None = None, url: str | None =
     return None
 
 
+FILENAME_DATE_RE = re.compile(r"(?<!\d)(20\d{2}|19\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
+
+
+def parse_recorded_at(value) -> str | None:
+    """Normalise an original recording/broadcast date to 'YYYY-MM-DD' (or 'YYYY-MM-DDTHH:MM').
+    Accepts ISO dates, yt-dlp 'YYYYMMDD', RSS dates, and Unix timestamps. None if unusable or
+    in the future."""
+    if value in (None, ""):
+        return None
+    import datetime as dt
+    from email.utils import parsedate_to_datetime
+    d: dt.datetime | None = None
+    has_time = False
+    try:
+        if isinstance(value, (int, float)) or re.fullmatch(r"\d{9,11}(\.\d+)?", str(value).strip()):
+            d, has_time = dt.datetime.fromtimestamp(float(value)), True
+        else:
+            v = str(value).strip()
+            if re.fullmatch(r"\d{8}", v):
+                d = dt.datetime.strptime(v, "%Y%m%d")
+            elif re.match(r"\d{4}-\d{2}-\d{2}", v):
+                d = dt.datetime.fromisoformat(v.replace("Z", "+00:00"))
+                has_time = len(v) > 10
+            else:
+                d, has_time = parsedate_to_datetime(v), True
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+    if d.tzinfo is not None:
+        d = d.astimezone().replace(tzinfo=None)
+    if d.year < 1990 or d > dt.datetime.now() + dt.timedelta(days=1):
+        return None
+    return d.strftime("%Y-%m-%dT%H:%M") if has_time and (d.hour or d.minute) else d.strftime("%Y-%m-%d")
+
+
+def date_from_filename(name: str) -> str | None:
+    m = FILENAME_DATE_RE.search(Path(name).stem)
+    return parse_recorded_at(f"{m.group(1)}-{m.group(2)}-{m.group(3)}") if m else None
+
+
+def classify_origin(recorded_at: str | None, source_type: str, now: float | None = None) -> str:
+    """live_capture = recorded by this engine as it was broadcast; archive = an older recording
+    brought in afterwards; recent = everything else."""
+    import datetime as dt
+    if source_type == "monitor":
+        return "live_capture"
+    if recorded_at:
+        try:
+            day = dt.date.fromisoformat(recorded_at[:10])
+            today = dt.date.fromtimestamp(now) if now else dt.date.today()
+            if (today - day).days >= 2:
+                return "archive"
+        except ValueError:
+            pass
+    return "recent"
+
+
+def set_provenance(db: Database, rid: int, *, source_url: str | None = None, recorded_at: str | None = None) -> dict:
+    """Owner correction of a recording's source address / original date (also updates provenance.json)."""
+    rec = db.recording(rid)
+    if not rec:
+        raise SourceError("not_found", "Recording not found.")
+    fields: dict = {}
+    if source_url is not None:
+        u = source_url.strip()
+        if u and urlparse(u).scheme not in ("http", "https"):
+            raise SourceError("bad_url", "Enter a full http(s) address for the original source.")
+        fields["source_url"] = normalize_url(u) if u else None
+        fields["source_site"] = urlparse(u).hostname if u else rec["source_site"]
+    if recorded_at is not None:
+        if recorded_at.strip():
+            parsed = parse_recorded_at(recorded_at)
+            if not parsed:
+                raise SourceError("bad_date", "Enter the original date as YYYY-MM-DD (it cannot be in the future).")
+            fields["recorded_at"] = parsed
+        else:
+            fields["recorded_at"] = None
+    if "recorded_at" in fields:
+        fields["origin"] = classify_origin(fields["recorded_at"], rec["source_type"])
+    if fields:
+        db.update("recordings", rid, **fields)
+        pfile = Path(rec["file_path"]).parent / "provenance.json" if rec["file_path"] else None
+        if pfile and pfile.is_file():
+            try:
+                data = json.loads(pfile.read_text(encoding="utf-8"))
+                data.update({k: fields[k] for k in ("source_url", "recorded_at", "origin") if k in fields})
+                data.setdefault("corrections", []).append({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                                           "fields": sorted(fields)})
+                pfile.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+    return fields
+
+
 def register_file(settings: Settings, db: Database, src: Path, *, title: str | None = None,
                   original_name: str | None = None, source_type: str = "upload",
                   source_url: str | None = None, source_site: str | None = None,
                   source_media_id: str | None = None, extra_meta: dict | None = None,
                   move: bool = True, rights_attestation: str | None = None,
-                  settings_json: dict | None = None, dedupe_by_url: bool = True) -> tuple[int, bool]:
+                  settings_json: dict | None = None, dedupe_by_url: bool = True,
+                  recorded_at: str | None = None, origin: str | None = None) -> tuple[int, bool]:
     """Store a video file as a recording. Returns (recording_id, is_duplicate)."""
     src = Path(src)
     if src.suffix.lower() not in VIDEO_EXTS:
@@ -141,7 +235,9 @@ def register_file(settings: Settings, db: Database, src: Path, *, title: str | N
     else:
         shutil.copy2(src, dest)
     meta = {"probe": info, **(extra_meta or {})}
-    rid = db.insert("recordings", title=title, source_type=source_type,
+    recorded_at = parse_recorded_at(recorded_at)
+    origin = origin or classify_origin(recorded_at, source_type)
+    rid = db.insert("recordings", title=title, source_type=source_type, recorded_at=recorded_at, origin=origin,
                     source_url=normalize_url(source_url) if source_url else None,
                     source_site=source_site, source_media_id=source_media_id,
                     original_filename=original_name or src.name, file_path=str(dest), sha256=digest,
@@ -154,6 +250,7 @@ def register_file(settings: Settings, db: Database, src: Path, *, title: str | N
         "recording_id": rid, "title": title, "source_type": source_type, "source_url": source_url,
         "source_site": source_site, "source_media_id": source_media_id, "original_filename": original_name,
         "sha256": digest, "imported_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "recorded_at": recorded_at, "origin": origin,
         "rights_attestation": rights_attestation}, indent=2), encoding="utf-8")
     return rid, False
 
@@ -474,7 +571,9 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
     rid, dup = register_file(settings, db, file, title=title, original_name=original_name, source_type="url",
                              source_url=url, source_site=site, source_media_id=source_media_id, extra_meta=extra,
                              move=True, rights_attestation=attestation.strip(" |") or None,
-                             settings_json=ctx.payload.get("settings"))
+                             settings_json=ctx.payload.get("settings"),
+                             recorded_at=ctx.payload.get("recorded_at") or (extra.get("source_info") or {}).get("upload_date")
+                             or extra["retrieval"].get("last_modified"))
     if file.parent.name.startswith("ytdlp_"):
         shutil.rmtree(file.parent, ignore_errors=True)
     db.update("jobs", ctx.id, recording_id=rid)
@@ -504,7 +603,7 @@ def create_pending_source(db: Database, url: str, *, title: str | None, reason: 
 
 def attach_file_to_pending(settings: Settings, db: Database, pending_id: int, path: Path, *,
                            original_name: str, title: str | None = None,
-                           attestation: str | None = None) -> tuple[int, bool]:
+                           attestation: str | None = None, recorded_at: str | None = None) -> tuple[int, bool]:
     src = db.one("SELECT * FROM pending_sources WHERE id = ?", (pending_id,))
     if not src or src["status"] != "awaiting_file":
         raise SourceError("pending_not_found", "That pending source no longer exists or already has a file.")
@@ -515,6 +614,7 @@ def attach_file_to_pending(settings: Settings, db: Database, pending_id: int, pa
                              source_site=urlparse(src["url"]).hostname,
                              extra_meta={"retrieval": {"method": "owner_supplied_file", "pending_source_id": pending_id}},
                              move=True, rights_attestation=note,
-                             settings_json=json.loads(src["settings_json"] or "{}"))
+                             settings_json=json.loads(src["settings_json"] or "{}"),
+                             recorded_at=recorded_at or date_from_filename(original_name))
     db.update("pending_sources", pending_id, status="attached", recording_id=rid)
     return rid, dup

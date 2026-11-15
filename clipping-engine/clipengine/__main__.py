@@ -3,6 +3,8 @@
 Flags:
   --check       validate dependencies and exit (0 = ready)
   --no-browser  do not open the dashboard automatically
+  --doctor      diagnostic report (add --selftest for a real end-to-end run with genuine speech)
+  --setup       guided first-time setup (add --yes to accept defaults)
 """
 from __future__ import annotations
 
@@ -158,6 +160,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--supervise", action="store_true",
                     help="run the server in a child process and restart it automatically if it crashes")
     ap.add_argument("--autostart", choices=["on", "off"], help="add/remove start at Windows sign-in and exit")
+    ap.add_argument("--doctor", action="store_true", help="print a diagnostic report and exit")
+    ap.add_argument("--selftest", action="store_true",
+                    help="with --doctor: also run the real end-to-end self-test (genuine speech, real Whisper)")
+    ap.add_argument("--setup", action="store_true", help="run the setup assistant, then exit")
+    ap.add_argument("--yes", action="store_true", help="with --setup: accept the defaults without asking")
     args = ap.parse_args(argv)
     if args.autostart:
         from . import autostart
@@ -175,6 +182,12 @@ def main(argv: list[str] | None = None) -> int:
         return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
+    if args.doctor:
+        from . import doctor
+        return doctor.main(settings, run_selftest=args.selftest)
+    if args.setup:
+        from . import setup_wizard
+        return setup_wizard.main(settings, assume_yes=args.yes or os.environ.get("CLIPENGINE_NONINTERACTIVE") == "1")
     problems = check(settings)
     if problems:
         print("\nThe Clipping Engine cannot start yet:\n")

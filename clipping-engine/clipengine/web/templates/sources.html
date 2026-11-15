@@ -3,7 +3,20 @@
 <h1>Sources (automatic monitoring)</h1>
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
-<p class="muted">New recordings from enabled sources are imported, transcribed, clipped and placed in Ready to Review automatically. A source is enabled only if its site is listed in ALLOWED_URL_DOMAINS or you have recorded a written permission for it (Settings → Source permissions). Platforms whose terms forbid automated access (e.g. Rumble, YouTube) stay <b>disabled</b> until the platform's written permission is recorded. Nothing logs in, uses cookies, or bypasses paywalls/DRM. The PC must be on for monitoring to run.</p>
+<section class="card">
+  <h2>How it works</h2>
+  <ol class="small-list">
+    <li><b>Authorise.</b> A source is checked automatically only when you have declared that automated retrieval is permitted: either its site is listed in <code>ALLOWED_URL_DOMAINS</code>, or a written permission is recorded below. Platforms whose terms forbid automated access (e.g. {{ restricted[:5]|join(', ') }}) additionally need <b>the platform's</b> written permission.</li>
+    <li><b>Add</b> the verified feed, live-stream or channel address and say who authorises it.</li>
+    <li><b>Check now.</b> The first check only <i>notes</i> what is already published (the “baseline”) — it does not download the back catalogue. From then on, every <b>new</b> item is imported automatically, and a live stream is recorded while it is on air.</li>
+    <li><b>Older items (optional).</b> To bring in earlier recordings, use “Import older items” on the source, or set “Import existing items on first check” when adding it. Every item is imported at most once.</li>
+    <li>Imported recordings are transcribed, clipped and placed in <a href="/review">Ready to Review</a>.</li>
+  </ol>
+  <p class="muted">Nothing logs in, uses cookies, or bypasses paywalls/DRM. A source that cannot be authorised can still be used manually: save its episode link on the <a href="/import">Import</a> page and attach a file supplied by the rights holder. The PC must be on and awake for monitoring to run.</p>
+  <details><summary>Recorded written permissions ({{ perms|length }})</summary>
+    <ul class="list">{% for p in perms %}<li><b>{{ p.domain }}</b> — granted by {{ p.granted_by }} on {{ p.granted_on }}, ref {{ p.reference }}</li>{% else %}<li class="muted">None. Record one in <a href="/settings#permissions">Settings → Source permissions</a> only if you actually hold it.</li>{% endfor %}</ul></details>
+</section>
+<p class="muted" hidden>New recordings from enabled sources are imported, transcribed, clipped and placed in Ready to Review automatically. A source is enabled only if its site is listed in ALLOWED_URL_DOMAINS or you have recorded a written permission for it (Settings → Source permissions). Platforms whose terms forbid automated access (e.g. Rumble, YouTube) stay <b>disabled</b> until the platform's written permission is recorded. Nothing logs in, uses cookies, or bypasses paywalls/DRM. The PC must be on for monitoring to run.</p>
 {% for src in srcs %}
 <section class="card">
   <h2>{{ src.name }} <span class="badge st-{{ 'ready' if src.status == 'ok' else 'failed' if src.status in ('error','blocked') else 'untested' }}">{{ src.status }}</span>{% if not src.enabled %} <span class="badge">disabled</span>{% endif %}</h2>
@@ -14,12 +27,13 @@
   <div class="buttons">
     <form method="post" action="/sources/{{ src.id }}/enable"><input type="hidden" name="enabled" value="{{ '0' if src.enabled else '1' }}"><button class="btn">{{ 'Disable' if src.enabled else 'Enable' }}</button></form>
     {% if src.enabled %}<form method="post" action="/sources/{{ src.id }}/poll"><button class="btn">Check now</button></form>{% endif %}
+    {% if src.enabled and baseline.get(src.id) %}<form method="post" action="/sources/{{ src.id }}/backfill" class="inline"><label>Import older items <input name="count" type="number" min="1" max="50" value="3" style="width:5em"></label><button class="btn" title="Imports the most recent items that were only noted when monitoring began">Import ({{ baseline[src.id] }} available)</button></form>{% endif %}
     <form method="post" action="/sources/{{ src.id }}/delete" onsubmit="return confirm('Remove this source? Imported recordings are kept.')"><button class="btn ghost">Remove</button></form>
   </div>
   {% if items[src.id] %}
   <table class="jobs"><thead><tr><th>Item</th><th>State</th><th>When</th></tr></thead><tbody>
   {% for it in items[src.id] %}<tr><td>{{ it.title or it.item_key }}{% if it.kind == 'live' %} <span class="badge">live</span>{% endif %}{% if it.recording_id %} · <a href="/recordings/{{ it.recording_id }}">recording #{{ it.recording_id }}</a>{% endif %}{% if it.error %}<br><small class="err">{{ it.error[:200] }}</small>{% endif %}</td>
-    <td><span class="badge">{{ it.state }}</span>{% if it.kind == 'live' and it.segments %}<br><small>{{ it.segments }} segment(s), {{ it.restarts }} restart(s)</small>{% endif %}</td><td><small>{{ it.created_at|dt }}</small></td></tr>{% endfor %}
+    <td><span class="badge" title="{{ {'baseline': 'Already published when monitoring began: noted, not downloaded', 'queued': 'Waiting to download', 'recording': 'Live stream being recorded now', 'finalizing': 'Joining and checking the recording', 'handed_off': 'Recorded; waiting for import', 'imported': 'Imported', 'duplicate': 'Already imported earlier', 'failed': 'Failed'}.get(it.state, '') }}">{{ {'baseline': 'older (not imported)'}.get(it.state, it.state) }}</span>{% if it.kind == 'live' and it.segments %}<br><small>{{ it.segments }} segment(s), {{ it.restarts }} restart(s)</small>{% endif %}</td><td><small>{% if it.published %}published {{ it.published[:16] }}<br>{% endif %}seen {{ it.created_at|dt }}</small></td></tr>{% endfor %}
   </tbody></table>{% endif %}
 </section>
 {% else %}<p class="card muted">No sources yet.</p>{% endfor %}

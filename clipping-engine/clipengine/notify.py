@@ -37,7 +37,7 @@ from .jobs import JobContext, PermanentError, TransientError
 
 log = logging.getLogger("clipengine.notify")
 
-TEMPLATE_VERSION = "1"
+TEMPLATE_VERSION = "2"
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = "offline_access Mail.Send User.Read"
 
@@ -61,7 +61,7 @@ def is_approved(settings, db) -> bool:
 
 def approve(settings, db) -> None:
     if not settings.notify_to:
-        raise NotifyNotConfigured("Set NOTIFY_TO in .env first.")
+        raise NotifyNotConfigured("Set the recipient first (Settings → Notifications).")
     db.set_kv("notify.approval", json.dumps({"to": settings.notify_to, "template_version": TEMPLATE_VERSION,
                                              "transport": settings.notify_transport, "approved_at": time.time()}))
 
@@ -87,7 +87,16 @@ def build_ready(settings, db, rid: int) -> dict | None:
     clips = db.query("SELECT * FROM clips WHERE recording_id=? AND status IN ('ready','approved') ORDER BY start", (rid,))
     if not rec or not clips:
         return None
-    date = time.strftime("%d %b %Y", time.localtime(rec["created_at"]))
+    imported = time.strftime("%d %b %Y", time.localtime(rec["created_at"]))
+    date = imported
+    recorded = rec["recorded_at"] if "recorded_at" in rec.keys() else None
+    if recorded:
+        try:
+            date = time.strftime("%d %b %Y", time.strptime(recorded[:10], "%Y-%m-%d"))
+        except ValueError:
+            recorded = None
+    when = (f"Recorded {date} · imported {imported}" if recorded and date != imported else
+            f"Recorded {date}" if recorded else f"Imported {imported}")
     n = len(clips)
     subject = f"[Clip review] {n} clip{'s' if n != 1 else ''} ready — {_short(rec['title'], 70)} ({date})"
     rows_h, rows_t, images = [], [], []
@@ -116,7 +125,7 @@ def build_ready(settings, db, rid: int) -> dict | None:
     review = _link(settings, f"/review?status=ready")
     body_html = (
         "<div style='font:15px/1.5 Segoe UI,Arial,sans-serif;color:#1d2330;max-width:640px'>"
-        f"<p><b>{html.escape(rec['title'])}</b><br><span style='color:#555'>Recorded/imported {date} · "
+        f"<p><b>{html.escape(rec['title'])}</b><br><span style='color:#555'>{when} · "
         f"Source: {html.escape(_short(source, 90))}</span></p>"
         f"<p>{n} clip{'s are' if n != 1 else ' is'} awaiting your review.</p>"
         f"<table cellspacing='0' cellpadding='0'>{''.join(rows_h)}</table>"
@@ -125,7 +134,7 @@ def build_ready(settings, db, rid: int) -> dict | None:
         "<p style='color:#777;font-size:12px'>Private links: they open your Clipping Engine dashboard and require "
         "sign-in. Quotes are direct transcript excerpts; nothing has been published. "
         "Turn these emails off in Settings → Notifications.</p></div>")
-    body_text = (f"{rec['title']}\nRecorded/imported {date}. Source: {source}\n\n{n} clip(s) awaiting review:\n\n"
+    body_text = (f"{rec['title']}\n{when}. Source: {source}\n\n{n} clip(s) awaiting review:\n\n"
                  + "\n".join(rows_t) + f"\n\nOpen the review queue: {review}\n\n"
                  "Private links (sign-in required). Nothing has been published.")
     return {"subject": subject, "html": body_html, "text": body_text, "images": images}
@@ -234,7 +243,7 @@ class GraphMailer:
 
     def start_device_code(self) -> dict:
         if not self.configured:
-            raise NotifyNotConfigured("Set OUTLOOK_CLIENT_ID in .env (see README → Email notifications).")
+            raise NotifyNotConfigured("Enter the Application (client) ID first: Settings → Notifications → Connect a sending account → Outlook.")
         r = self.http.post(f"{self.auth}/devicecode", data={"client_id": self.settings.outlook_client_id,
                                                             "scope": SCOPES})
         body = r.json()
@@ -313,14 +322,30 @@ class GraphMailer:
 class SmtpMailer:
     platform = "smtp"
 
-    def __init__(self, settings, smtp_factory=None):
+    def __init__(self, settings, smtp_factory=None, store=None):
         self.settings = settings
         self.smtp_factory = smtp_factory
+        self.store = store
+
+    def password(self) -> str:
+        """SMTP_PASSWORD from .env, or (preferred) the password saved in the OS credential store
+        through Settings → Notifications."""
+        if self.settings.smtp_password:
+            return self.settings.smtp_password
+        tok = self.store.get("smtp") if self.store else None
+        return (tok or {}).get("password", "")
+
+    def save_password(self, password: str) -> None:
+        self.store.set("smtp", {"password": password, "saved_at": time.time()})
+
+    def forget_password(self) -> None:
+        if self.store:
+            self.store.delete("smtp")
 
     @property
     def configured(self) -> bool:
         s = self.settings
-        return bool(s.smtp_host and s.smtp_user and s.smtp_password)
+        return bool(s.smtp_host and s.smtp_user and self.password())
 
     def status(self) -> dict:
         return {"configured": self.configured, "connected": self.configured, "account": self.settings.smtp_user}
@@ -329,7 +354,7 @@ class SmtpMailer:
         import smtplib
         s = self.settings
         if not self.configured:
-            raise NotifyNotConfigured("SMTP_HOST, SMTP_USER and SMTP_PASSWORD must be set in .env.")
+            raise NotifyNotConfigured("The sending account is not set up: Settings → Notifications → Connect a sending account.")
         m = EmailMessage()
         m["Subject"], m["From"], m["To"] = subject, s.smtp_from or s.smtp_user, to
         m.set_content("This message is best viewed as HTML.")
@@ -342,7 +367,7 @@ class SmtpMailer:
             with factory(s.smtp_host, s.smtp_port, timeout=30) as conn:
                 if not s.smtp_ssl:
                     conn.starttls()
-                conn.login(s.smtp_user, s.smtp_password)
+                conn.login(s.smtp_user, self.password())
                 conn.send_message(m)
         except (OSError, smtplib.SMTPServerDisconnected) as e:
             raise TransientError(f"SMTP server unreachable: {e}") from e
@@ -355,7 +380,7 @@ class Notifier:
     def __init__(self, settings, db, queue, store, graph_http=None, smtp_factory=None):
         self.settings, self.db, self.queue = settings, db, queue
         self.graph = GraphMailer(settings, store, graph_http)
-        self.smtp = SmtpMailer(settings, smtp_factory)
+        self.smtp = SmtpMailer(settings, smtp_factory, store)
         queue.register("send_notification", self.run)
 
     @property

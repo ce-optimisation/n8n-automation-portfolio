@@ -385,10 +385,16 @@ class Pipeline:
         return self.enqueue_render(clip_id)
 
     def import_upload(self, path: Path, original_name: str, title: str | None, overrides: dict,
-                      attestation: str | None) -> tuple[int, bool, int | None]:
+                      attestation: str | None, source_url: str | None = None,
+                      recorded_at: str | None = None) -> tuple[int, bool, int | None]:
+        extra = {"retrieval": {"method": "owner_supplied_file"}} if source_url else None
         rid, dup = ingest.register_file(self.settings, self.db, path, title=title, original_name=original_name,
-                                        source_type="upload", move=True, rights_attestation=attestation,
-                                        settings_json=overrides)
+                                        source_type="linked_file" if source_url else "upload", move=True,
+                                        rights_attestation=attestation, settings_json=overrides,
+                                        source_url=source_url or None, extra_meta=extra,
+                                        source_site=(__import__("urllib.parse").parse.urlparse(source_url).hostname
+                                                     if source_url else None),
+                                        recorded_at=recorded_at or ingest.date_from_filename(original_name))
         jid = None
         if not dup:
             jid = self.queue.enqueue("process_recording", recording_id=rid, dedupe_key=f"process:{rid}",

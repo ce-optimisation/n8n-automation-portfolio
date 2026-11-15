@@ -18,9 +18,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import (autostart, captions, hardware, inbox, ingest, maintenance, monitor, notify, render, segment,
-               setup_status)
-from ..config import Settings
+from .. import (autostart, captions, hardware, health, inbox, ingest, maintenance, monitor, notify, power, render,
+               segment, setup_status, tailscale)
+from ..config import Settings, apply_settings
 from ..db import Database
 from ..jobs import JobQueue, PermanentError
 from ..pipeline import Pipeline
@@ -69,13 +69,29 @@ class App:
         self.queue.failure_listeners.append(
             lambda job: notify.on_job_failed(self.settings, self.db, self.queue, job))
         self.device_flow: dict = {}
+        self.keepawake = power.KeepAwake(settings, self.db)
+        self.heartbeat = health.Heartbeat(self.db)
+        self.phone_report: dict = {}
 
         self.login_failures: dict[str, list[float]] = {}
-        self.oauth_state: dict[str, dict] = {}
         key_file = settings.secrets_dir / "session_key"
         if not key_file.exists():
             key_file.write_text(secrets.token_hex(32))
         self.session_key = key_file.read_text().strip().encode()
+
+    # OAuth "state" values are kept in the database (15-minute lifetime) so a sign-in that was
+    # started before an engine restart can still be completed afterwards.
+    def oauth_put(self, state: str, data: dict) -> None:
+        now = time.time()
+        allst = {k: v for k, v in json.loads(self.db.get_kv("oauth_state") or "{}").items() if now - v.get("ts", 0) < 900}
+        allst[state] = {**data, "ts": now}
+        self.db.set_kv("oauth_state", json.dumps(allst))
+
+    def oauth_pop(self, state: str) -> dict | None:
+        allst = json.loads(self.db.get_kv("oauth_state") or "{}")
+        st = allst.pop(state, None)
+        self.db.set_kv("oauth_state", json.dumps(allst))
+        return st
 
     def check_caption_font(self) -> dict:
         """Render a frame with libass and record which font file was actually used (Settings checklist)."""
@@ -105,6 +121,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.maintenance.start()
             core.inbox.start()
             core.monitor.start()
+            core.keepawake.start()
+            core.heartbeat.start()
             __import__("threading").Thread(target=core.check_caption_font, daemon=True).start()
         try:
             yield
@@ -113,6 +131,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.maintenance.stop()
             core.inbox.stop()
             core.monitor.stop()
+            core.keepawake.stop()
+            if start_worker:
+                core.heartbeat.stop()
 
     app = FastAPI(title="Local Clipping Engine", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.core = core
@@ -187,7 +208,13 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
         recs = core.db.query("SELECT * FROM recordings ORDER BY id DESC LIMIT 10")
-        return page(request, "dashboard.html", recordings=recs, storage=maintenance.storage_report(settings))
+        return page(request, "dashboard.html", recordings=recs, storage=maintenance.storage_report(settings),
+                    health=health.items(core), s=settings)
+
+    @app.post("/health/dismiss")
+    def health_dismiss():
+        health.dismiss_downtime(core.db)
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/partials/jobs", response_class=HTMLResponse)
     def jobs_partial(request: Request, limit: int = 15):
@@ -214,10 +241,16 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.post("/import/upload")
     async def import_upload(request: Request, file: UploadFile = File(...), title: str = Form(""),
                             clips: str = Form(""), min_s: str = Form(""), max_s: str = Form(""),
-                            language: str = Form(""), rights: str = Form(""), pending_id: str = Form("")):
+                            language: str = Form(""), rights: str = Form(""), pending_id: str = Form(""),
+                            source_url: str = Form(""), recorded_at: str = Form("")):
         name = ingest.safe_filename(file.filename or "upload.mp4")
         if Path(name).suffix.lower() not in ingest.VIDEO_EXTS:
             return _import_result(request, err=f"Unsupported file type: {file.filename}")
+        source_url, recorded_at = source_url.strip(), recorded_at.strip()
+        if source_url and urlparse(source_url).scheme not in ("http", "https"):
+            return _import_result(request, err="The original source address must start with http:// or https://")
+        if recorded_at and not ingest.parse_recorded_at(recorded_at):
+            return _import_result(request, err="Enter the original recording date as YYYY-MM-DD (not in the future).")
         tmp = settings.work_dir / f"upload_{int(time.time() * 1000)}_{name}"
         limit = settings.max_upload_mb * 1024 * 1024
         written = 0
@@ -233,13 +266,15 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             if pending_id.strip():
                 rid, dup = ingest.attach_file_to_pending(settings, core.db, int(pending_id), tmp,
                                                          original_name=file.filename or name, title=title or None,
-                                                         attestation=rights or None)
+                                                         attestation=rights or None, recorded_at=recorded_at or None)
                 if not dup:
                     core.queue.enqueue("process_recording", recording_id=rid, dedupe_key=f"process:{rid}",
                                        payload={"settings": {}})
             else:
                 rid, dup, _ = core.pipeline.import_upload(tmp, file.filename or name, title or None,
-                                                          _overrides(clips, min_s, max_s, language), rights or None)
+                                                          _overrides(clips, min_s, max_s, language), rights or None,
+                                                          source_url=source_url or None,
+                                                          recorded_at=recorded_at or None)
         except (PermanentError, ValueError) as e:
             tmp.unlink(missing_ok=True)
             return _import_result(request, err=str(e))
@@ -294,7 +329,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return rec
 
     @app.get("/recordings/{rid}", response_class=HTMLResponse)
-    def recording_detail(request: Request, rid: int):
+    def recording_detail(request: Request, rid: int, msg: str = "", err: str = ""):
         rec = _rec(rid)
         clips = core.db.query("SELECT * FROM clips WHERE recording_id = ? ORDER BY start", (rid,))
         segs = core.db.segments(rid)
@@ -302,7 +337,16 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         conn = core.publisher.connections()
         pubs = {c["id"]: core.publisher.summary(c, conn) for c in clips if c["status"] == "approved"}
         return page(request, "recording.html", rec=rec, clips=clips, segments=segs, jobs=jobs, pubs=pubs,
-                    meta=json.loads(rec["metadata_json"] or "{}"))
+                    meta=json.loads(rec["metadata_json"] or "{}"), msg=msg, err=err)
+
+    @app.post("/recordings/{rid}/provenance")
+    def recording_provenance(rid: int, source_url: str = Form(""), recorded_at: str = Form("")):
+        _rec(rid)
+        try:
+            ingest.set_provenance(core.db, rid, source_url=source_url, recorded_at=recorded_at)
+        except PermanentError as e:
+            return RedirectResponse(f"/recordings/{rid}?" + urlencode({"err": str(e)}), status_code=303)
+        return RedirectResponse(f"/recordings/{rid}?" + urlencode({"msg": "Source details saved."}), status_code=303)
 
     @app.get("/recordings/{rid}/media")
     def recording_media(rid: int):
@@ -524,7 +568,11 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         srcs = core.db.query("SELECT * FROM sources ORDER BY id")
         items = {s_["id"]: core.db.query("SELECT * FROM source_items WHERE source_id=? ORDER BY id DESC LIMIT 15",
                                          (s_["id"],)) for s_ in srcs}
-        return page(request, "sources.html", srcs=srcs, items=items, msg=msg, err=err, s=settings)
+        baseline = {r["source_id"]: r["n"] for r in core.db.query(
+            "SELECT source_id, COUNT(*) n FROM source_items WHERE state='baseline' AND kind='vod' GROUP BY source_id")}
+        perms = core.db.query("SELECT * FROM source_permissions ORDER BY domain")
+        return page(request, "sources.html", srcs=srcs, items=items, msg=msg, err=err, s=settings, baseline=baseline,
+                    perms=perms, restricted=sorted(ingest.RESTRICTED_PLATFORMS))
 
     def _sources_redirect(**q):
         return RedirectResponse("/sources?" + urlencode(q), status_code=303)
@@ -556,6 +604,15 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return _sources_redirect(msg=f"Checked: {res.get('new', 0)} new item(s)"
                                      + ("; live stream recording" if res.get("live") else ""))
 
+    @app.post("/sources/{sid}/backfill")
+    def backfill_source(sid: int, count: int = Form(3)):
+        res = core.monitor.backfill(sid, min(max(count, 1), 50))
+        if res.get("blocked") or res.get("error"):
+            return _sources_redirect(err=res.get("blocked") or res.get("error"))
+        return _sources_redirect(msg=f"{res['queued']} older item(s) queued for import"
+                                     + (f", {res['refused']} refused by the source rules" if res["refused"] else "")
+                                     + f"; {res['remaining']} older item(s) remain. Each item is imported at most once.")
+
     @app.post("/sources/{sid}/delete")
     def delete_source(sid: int):
         core.db.execute("DELETE FROM sources WHERE id=?", (sid,))
@@ -573,7 +630,10 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return page(request, "notifications.html", rows=rows, s=settings, approved=notify.is_approved(settings, core.db),
                     approval=notify.approval(core.db), mailer=core.notifier.mailer.status(),
                     transport=settings.notify_transport, device=core.device_flow, sample=sample,
-                    template_version=notify.TEMPLATE_VERSION, msg=msg, err=err)
+                    template_version=notify.TEMPLATE_VERSION, msg=msg, err=err,
+                    graph=core.notifier.graph.status(), smtp=core.notifier.smtp.status(),
+                    smtp_password_saved=bool(core.notifier.smtp.password()), token_backend=core.tokens.backend,
+                    held=core.db.one("SELECT COUNT(*) n FROM notifications WHERE status='held'")["n"])
 
     def _notify_redirect(**q):
         return RedirectResponse("/settings/notifications?" + urlencode(q), status_code=303)
@@ -596,6 +656,51 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             body = body.replace(f"cid:{i['cid']}", f"/clips/{i['clip_id']}/thumb")
         return HTMLResponse(f"<p style='font:13px sans-serif;color:#666'>Subject: <b>{html_escape(content['subject'])}</b>"
                             f" — To: {html_escape(settings.notify_to or '(NOTIFY_TO not set)')}</p>{body}")
+
+    @app.post("/settings/notifications/recipient")
+    def notify_recipient(notify_to: str = Form(""), dashboard_url: str = Form("")):
+        notify_to, dashboard_url = notify_to.strip(), dashboard_url.strip().rstrip("/")
+        if notify_to and not __import__("re").fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", notify_to):
+            return _notify_redirect(err="That does not look like an email address.")
+        if dashboard_url and urlparse(dashboard_url).scheme not in ("http", "https"):
+            return _notify_redirect(err="The dashboard address must start with https:// (or http://).")
+        changed = notify_to.lower() != settings.notify_to.lower()
+        apply_settings(settings, {"NOTIFY_TO": notify_to, "DASHBOARD_URL": dashboard_url})
+        return _notify_redirect(msg="Saved in your local .env." + (
+            " The recipient changed, so sending is held again until you approve it below." if changed else ""))
+
+    @app.post("/settings/notifications/transport")
+    def notify_transport(transport: str = Form(...), outlook_client_id: str = Form(""), smtp_host: str = Form(""),
+                         smtp_port: str = Form("587"), smtp_user: str = Form(""), smtp_from: str = Form(""),
+                         smtp_password: str = Form("")):
+        if transport == "graph":
+            cid = outlook_client_id.strip()
+            if not __import__("re").fullmatch(r"[0-9a-fA-F-]{36}", cid):
+                return _notify_redirect(err="Paste the Application (client) ID exactly as shown in the Microsoft Entra "
+                                            "portal (36 characters, like 1a2b3c4d-….).")
+            apply_settings(settings, {"NOTIFY_TRANSPORT": "graph", "OUTLOOK_CLIENT_ID": cid})
+            return _notify_redirect(msg="Saved. Now press “Connect Outlook” to sign in.")
+        if transport == "smtp":
+            if not (smtp_host.strip() and smtp_user.strip()):
+                return _notify_redirect(err="Enter the mail server and the sending address.")
+            if not smtp_port.strip().isdigit():
+                return _notify_redirect(err="The port must be a number (587 for most providers).")
+            apply_settings(settings, {"NOTIFY_TRANSPORT": "smtp", "SMTP_HOST": smtp_host.strip(),
+                                      "SMTP_PORT": smtp_port.strip(), "SMTP_USER": smtp_user.strip(),
+                                      "SMTP_FROM": smtp_from.strip(), "SMTP_SSL": "1" if smtp_port.strip() == "465" else "0"})
+            if smtp_password:
+                core.notifier.smtp.save_password(smtp_password.replace(" ", "") if "gmail" in smtp_host.lower()
+                                                 else smtp_password)
+            if not core.notifier.smtp.password():
+                return _notify_redirect(err="Saved the server details, but no password is stored yet — enter the app password.")
+            return _notify_redirect(msg=f"Sending account saved (password kept in: {core.tokens.backend}). "
+                                        "Nothing is sent until you approve below.")
+        return _notify_redirect(err="Unknown sending method.")
+
+    @app.post("/settings/notifications/smtp/forget")
+    def notify_smtp_forget():
+        core.notifier.smtp.forget_password()
+        return _notify_redirect(msg="Stored mail password removed.")
 
     @app.post("/settings/notifications/approve")
     def approve_notifications(confirm_to: str = Form(...), agree: str = Form("")):
@@ -737,7 +842,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/api/status")
     def api_status():
         return {"counts": core.db.counts(),
-                "worker_alive": bool(core.queue._thread and core.queue._thread.is_alive())}
+                "worker_alive": bool(core.queue._thread and core.queue._thread.is_alive()),
+                "health": health.summary(core), "keep_awake": core.keepawake.status()}
 
     @app.get("/api/recordings/{rid}")
     def api_recording(rid: int):
@@ -773,12 +879,50 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                     checklist=setup_status.checklist(core), perms=perms, caption=captions.load_style(core.db),
                     font_check=core.db.get_kv("caption_font_check"), autostart_on=autostart.is_installed(),
                     platform_labels={p_: setup_status.platform_label(core, p_) for p_ in ("tiktok", "instagram")},
-                    autostart_supported=autostart.supported(),
+                    autostart_supported=autostart.supported(), keepawake=core.keepawake.status(),
+                    ts=tailscale.status(), ts_serve=tailscale.serve_status(settings.port) if tailscale.find_cli() else None,
+                    phone=core.phone_report, phone_steps=tailscale.phone_instructions(settings.dashboard_url),
+                    downtime=health.downtime(core.db, only_unseen=False),
                     restricted=sorted(ingest.RESTRICTED_PLATFORMS), threads=__import__(
                         "clipengine.transcribe", fromlist=["auto_cpu_threads"]).auto_cpu_threads())
 
     def _settings_redirect(**q):
         return RedirectResponse("/settings?" + urlencode(q), status_code=303)
+
+    @app.post("/settings/phone/setup")
+    def phone_setup():
+        try:
+            rep_ = tailscale.setup_phone_access(settings)
+        except Exception as e:  # noqa: BLE001 - shown to the owner, never a crash page
+            return _settings_redirect(err=f"Phone access setup failed: {e}")
+        core.phone_report.clear()
+        core.phone_report.update(rep_)
+        if rep_["ok"]:
+            return RedirectResponse("/settings?" + urlencode({"msg": f"Phone access is ready: {rep_['url']}"}) + "#phone",
+                                    status_code=303)
+        return RedirectResponse("/settings?" + urlencode({"err": rep_["next_step"]}) + "#phone", status_code=303)
+
+    @app.post("/settings/phone/disable")
+    def phone_disable():
+        try:
+            ok, out = tailscale.disable_serve()
+        except Exception as e:  # noqa: BLE001
+            return _settings_redirect(err=str(e))
+        core.phone_report.clear()
+        return _settings_redirect(msg="The dashboard is no longer published on your tailnet." if ok else out)
+
+    @app.post("/settings/phone/seen")
+    def phone_seen():
+        core.phone_report.pop("password_created", None)
+        return RedirectResponse("/settings#phone", status_code=303)
+
+    @app.post("/settings/unattended")
+    def set_unattended(prevent_sleep: str = Form("active")):
+        if prevent_sleep not in power.MODES:
+            return _settings_redirect(err="Unknown option.")
+        apply_settings(settings, {"PREVENT_SLEEP": prevent_sleep})
+        core.keepawake.tick()
+        return RedirectResponse("/settings?" + urlencode({"msg": "Saved."}) + "#unattended", status_code=303)
 
     @app.post("/settings/download-model")
     def download_model():
@@ -824,7 +968,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             url, state = client.authorize_url()
         except NotConfigured as e:
             return _settings_redirect(err=str(e))
-        core.oauth_state[state["state"]] = {"platform": platform, "ts": time.time(), **state}
+        core.oauth_put(state["state"], {"platform": platform, **state})
         return RedirectResponse(url, status_code=303)
 
     @app.post("/disconnect/{platform}")
@@ -836,7 +980,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/oauth/{platform}/callback")
     def oauth_callback(platform: str, code: str = "", state: str = "", error: str = "",
                        error_description: str = ""):
-        st = core.oauth_state.pop(state, None)
+        st = core.oauth_pop(state) if state else None
         if error:
             msg = f"Authorisation declined or refused by {platform}: {error_description or error}"
             core.db.set_kv(f"oauth_error.{platform}", msg)

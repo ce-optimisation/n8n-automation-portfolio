@@ -12,9 +12,81 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def env_file_path() -> Path:
+    """The local settings file. CLIPENGINE_ENV_FILE overrides it (used by tests)."""
+    return Path(os.environ.get("CLIPENGINE_ENV_FILE") or PROJECT_ROOT / ".env")
+
+
+# Settings that the dashboard and the setup assistant may change without the owner editing .env by
+# hand: .env key → (Settings attribute, converter). Anything else still needs a deliberate edit.
+EDITABLE = {
+    "DASHBOARD_PASSWORD": ("dashboard_password", str),
+    "DASHBOARD_URL": ("dashboard_url", lambda v: v.strip().rstrip("/")),
+    "NOTIFY_TO": ("notify_to", lambda v: v.strip()),
+    "NOTIFY_TRANSPORT": ("notify_transport", lambda v: (v or "graph").strip().lower()),
+    "OUTLOOK_CLIENT_ID": ("outlook_client_id", lambda v: v.strip()),
+    "SMTP_HOST": ("smtp_host", lambda v: v.strip()),
+    "SMTP_PORT": ("smtp_port", lambda v: int(v or 587)),
+    "SMTP_USER": ("smtp_user", lambda v: v.strip()),
+    "SMTP_FROM": ("smtp_from", lambda v: v.strip()),
+    "SMTP_SSL": ("smtp_ssl", lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"}),
+    "WHISPER_MODEL": ("whisper_model", lambda v: (v or "auto").strip()),
+    "PREVENT_SLEEP": ("prevent_sleep", lambda v: (v or "active").strip().lower()),
+    "ALLOWED_URL_DOMAINS": ("allowed_url_domains", lambda v: [x.strip().lower() for x in v.split(",") if x.strip()]),
+}
+
+
+def update_env_file(values: dict[str, str], path: Path | None = None) -> Path:
+    """Set KEY=VALUE lines in the local .env, keeping every other line and comment as it is.
+    Creates the file from .env.example when it does not exist yet. Never touches other keys."""
+    path = path or env_file_path()
+    for k, v in values.items():
+        if not k.replace("_", "").isalnum() or "\n" in str(v) or "\r" in str(v):
+            raise ValueError(f"Refusing to write an unsafe setting: {k}")
+    if path.is_file():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    else:
+        example = PROJECT_ROOT / ".env.example"
+        lines = example.read_text(encoding="utf-8").splitlines() if example.is_file() else []
+    todo = {k: str(v) for k, v in values.items()}
+    out = []
+    for raw in lines:
+        key = raw.split("=", 1)[0].strip().lstrip("#").strip() if "=" in raw else ""
+        active = "=" in raw and not raw.lstrip().startswith("#")
+        if active and key in todo:
+            out.append(f"{key}={todo.pop(key)}")
+        else:
+            out.append(raw)
+    if todo:
+        if out and out[-1].strip():
+            out.append("")
+        out.append("# --- Set by the setup assistant / dashboard --------------------------------")
+        out += [f"{k}={v}" for k, v in todo.items()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def apply_settings(settings: "Settings", values: dict[str, str], persist: bool = True) -> list[str]:
+    """Change editable settings now (running app) and in .env (next start). Returns the keys set."""
+    done = []
+    for k, v in values.items():
+        if k not in EDITABLE:
+            raise ValueError(f"{k} cannot be changed from here; edit .env instead.")
+        attr, conv = EDITABLE[k]
+        setattr(settings, attr, conv(v))
+        os.environ[k] = str(v)
+        done.append(k)
+    if persist and done:
+        update_env_file({k: values[k] for k in done}, settings.env_file)
+    return done
+
+
 def load_dotenv(path: Path | None = None) -> None:
     """Load KEY=VALUE pairs from a .env file without overriding real env vars."""
-    path = path or PROJECT_ROOT / ".env"
+    path = path or env_file_path()
     if not path.is_file():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -105,6 +177,11 @@ class Settings:
     delete_rejected_renders_after_days: int = 14
     delete_originals_after_days: int = 0     # 0 = never delete originals
     storage_warning_gb: float = 50.0
+    # Keep Windows awake: off | active (while recording or processing — default) | monitoring
+    # (whenever an enabled source is being watched). Per-process request; no system setting is changed.
+    prevent_sleep: str = "active"
+    env_file: Path | None = None             # the local .env this instance reads and writes
+    models_path: Path | None = None          # share downloaded speech models with another data folder
 
     # Publishing (client credentials only; user tokens go to the secure store)
     tiktok_client_key: str = ""
@@ -158,7 +235,7 @@ class Settings:
 
     @property
     def models_dir(self) -> Path:
-        return self.data_dir / "models"
+        return Path(self.models_path) if self.models_path else self.data_dir / "models"
 
     @property
     def secrets_dir(self) -> Path:
@@ -221,6 +298,8 @@ def get_settings(**overrides) -> Settings:
         delete_rejected_renders_after_days=_int("DELETE_REJECTED_RENDERS_AFTER_DAYS", 14),
         delete_originals_after_days=_int("DELETE_ORIGINALS_AFTER_DAYS", 0),
         storage_warning_gb=_float("STORAGE_WARNING_GB", 50.0),
+        prevent_sleep=(os.environ.get("PREVENT_SLEEP", "active") or "active").lower(),
+        env_file=env_file_path(),
         tiktok_client_key=os.environ.get("TIKTOK_CLIENT_KEY", ""),
         tiktok_client_secret=os.environ.get("TIKTOK_CLIENT_SECRET", ""),
         tiktok_redirect_uri=os.environ.get("TIKTOK_REDIRECT_URI", ""),

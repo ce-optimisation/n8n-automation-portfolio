@@ -89,3 +89,14 @@ dl.meta { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; margin
 table.checklist td:last-child { white-space: nowrap; width: 1%; }
 code, dd, .src, .pending p, .checklist small { overflow-wrap: anywhere; word-break: break-word; }
 main { overflow-x: hidden; }
+
+/* dashboard health banner */
+.health-list { list-style: none; padding: 0; margin: 0 0 8px; }
+.health-list li { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.health-list li:last-child { border-bottom: 0; }
+.health-list .dot { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--accent); }
+.health-list .h-bad .dot { background: var(--bad); } .health-list .h-warn .dot { background: var(--warn); }
+.steps { counter-reset: st; list-style: none; padding: 0; }
+.steps > li { counter-increment: st; position: relative; padding: 4px 0 10px 34px; overflow-wrap: anywhere; }
+.steps > li::before { content: counter(st); position: absolute; left: 0; top: 2px; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line); text-align: center; font-size: .8rem; line-height: 24px; }
+.steps > li.done::before { content: "✓"; color: var(--good); border-color: var(--good); }

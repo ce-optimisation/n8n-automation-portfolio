@@ -5,36 +5,82 @@
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 <section class="card">
-  <h2>Status</h2>
-  <dl class="meta">
-    <dt>Recipient</dt><dd>{{ s.notify_to or 'not set — add NOTIFY_TO to .env' }}</dd>
-    <dt>Transport</dt><dd>{{ 'Microsoft Graph (Outlook.com)' if transport == 'graph' else 'SMTP' }} — {% if not mailer.configured %}<span class="err">not configured</span>{% elif mailer.connected %}connected{% if mailer.account %} as {{ mailer.account }}{% endif %}{% else %}not connected{% endif %}</dd>
-    <dt>Sending</dt><dd>{% if not s.notify_enabled %}Disabled (NOTIFY_ENABLED=0){% elif approved %}<b class="ok-text">Approved</b> — template v{{ template_version }} to {{ approval.to }} (approved {{ approval.approved_at|dt }}){% else %}<b>Held</b> — nothing is sent until you approve below{% endif %}</dd>
-    <dt>When</dt><dd>One email per recording when its clips are ready{% if s.notify_on_failure %}; one alert if processing fails; disk-space warnings at most daily{% endif %}.</dd>
-  </dl>
-  {% if transport == 'graph' and mailer.configured and not mailer.connected %}
-    <form method="post" action="/settings/outlook/connect"><button class="btn primary">Connect Outlook</button></form>
-  {% endif %}
-  {% if device.state %}<div class="flagbox"><p>{% if device.state == 'pending' %}On any device, open <a href="{{ device.uri }}" target="_blank" rel="noopener">{{ device.uri }}</a> and enter the code <b style="font-size:1.3em;letter-spacing:2px">{{ device.user_code }}</b>, then sign in with the Outlook account that should send the emails. This page updates when you refresh. <meta http-equiv="refresh" content="8">{% elif device.state == 'connected' %}Outlook connected.{% else %}Sign-in {{ device.state }}: {{ device.error or '' }}{% endif %}</p></div>{% endif %}
-  {% if mailer.connected and transport == 'graph' %}<form method="post" action="/settings/outlook/disconnect"><button class="btn ghost sm">Disconnect Outlook</button></form>{% endif %}
-</section>
-<section class="card">
-  <h2>Approve recipient and wording</h2>
-  <p class="muted">Preview a real notification built from your most recent processed recording. Approving authorises the app to send this template to this recipient automatically from now on. Changing the recipient or template version revokes approval.</p>
-  <p><a class="btn" href="/settings/notifications/sample" target="_blank">Open sample email</a></p>
-  {% if sample %}<p><small>Sample subject: <b>{{ sample.subject }}</b></small></p>{% endif %}
-  {% if not approved %}
-  <form method="post" action="/settings/notifications/approve" class="inline">
-    <label>Type the recipient to confirm <input name="confirm_to" autocomplete="off" placeholder="{{ s.notify_to }}"></label>
-    <label class="check"><input type="checkbox" name="agree" value="yes"> I approve this wording and recipient for automatic notifications.</label>
-    <button class="btn primary">Approve</button>
-  </form>
-  {% else %}
-  <div class="buttons">
-    <form method="post" action="/settings/notifications/revoke"><button class="btn ghost">Revoke approval</button></form>
-    <form method="post" action="/settings/notifications/release"><button class="btn">Send held notifications</button></form>
-    <form method="post" action="/settings/notifications/test" class="inline"><label>Type SEND <input name="confirm" autocomplete="off"></label><button class="btn">Send a test email</button></form>
-  </div>{% endif %}
+  <h2>Set up in four steps</h2>
+  <p class="muted">One email per finished recording, with thumbnails, durations, opening quotes and links to your private dashboard. No video files are attached. <b>Nothing is ever sent until you complete step 3</b>; until then notifications are prepared and held ({{ held }} held now).</p>
+  <ol class="steps">
+    <li class="{{ 'done' if s.notify_to else '' }}"><b>Where to send.</b>
+      <form method="post" action="/settings/notifications/recipient" class="grid3">
+        <label>Send notifications to <input name="notify_to" type="email" value="{{ s.notify_to }}" placeholder="you@outlook.com" autocomplete="off"></label>
+        <label>Dashboard address used in links <input name="dashboard_url" type="url" value="{{ s.dashboard_url }}" placeholder="filled in by Settings → Phone access"></label>
+        <button class="btn">Save</button>
+      </form>
+      <small class="muted">Saved only in your local <code>.env</code>. {% if not s.dashboard_url %}Links will only work on this PC until <a href="/settings#phone">Phone access</a> is set up.{% endif %}</small>
+    </li>
+    <li class="{{ 'done' if mailer.connected else '' }}"><b>Connect a sending account.</b>
+      Currently: {{ 'Microsoft Graph (Outlook.com)' if transport == 'graph' else 'SMTP (' ~ (s.smtp_host or 'no server') ~ ')' }} —
+      {% if not mailer.configured %}<span class="warn">not set up</span>{% elif mailer.connected %}<b class="ok-text">connected</b>{% if mailer.account %} as {{ mailer.account }}{% endif %}{% else %}<span class="warn">not signed in</span>{% endif %}.
+      Choose <b>one</b> of the two supported ways:
+      <details {% if transport == 'smtp' %}open{% endif %}><summary><b>Option A (quickest, about 3 minutes): send from a Gmail account</b></summary>
+        <p class="muted">The email still arrives in your Outlook inbox; Gmail is only the sender. This needs no developer registration. (Outlook.com itself no longer accepts password or app-password sign-in for sending, so an Outlook address cannot be used this way.)</p>
+        <ol class="small-list">
+          <li>In a browser open <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a> and sign in to the Gmail account (2-Step Verification must be on; Google offers to turn it on).</li>
+          <li>Type the name <b>Clipping Engine</b>, press <b>Create</b>, and copy the 16-letter password Google shows.</li>
+          <li>Paste it below and press Save. It is stored in: {{ token_backend }} — not in any file you upload.</li>
+        </ol>
+        <form method="post" action="/settings/notifications/transport" class="grid3">
+          <input type="hidden" name="transport" value="smtp">
+          <label>Mail server <input name="smtp_host" value="{{ s.smtp_host or 'smtp.gmail.com' }}"></label>
+          <label>Port <input name="smtp_port" value="{{ s.smtp_port or 587 }}" inputmode="numeric"></label>
+          <label>Sending address <input name="smtp_user" type="email" value="{{ s.smtp_user }}" placeholder="yourname@gmail.com" autocomplete="off"></label>
+          <label>App password <input name="smtp_password" type="password" autocomplete="new-password" placeholder="{{ 'saved — leave empty to keep' if smtp_password_saved else '16 letters from Google' }}"></label>
+          <button class="btn primary">Save sending account</button>
+        </form>
+        {% if smtp_password_saved %}<form method="post" action="/settings/notifications/smtp/forget"><button class="btn ghost sm">Forget the stored password</button></form>{% endif %}
+        <p class="muted"><small>Any other provider that offers SMTP with an app password works the same way (enter its server and port).</small></p>
+      </details>
+      <details {% if transport == 'graph' and s.outlook_client_id %}open{% endif %}><summary><b>Option B: send from your Outlook.com account (Microsoft sign-in)</b></summary>
+        <p class="muted">Microsoft only lets an application send mail for you if it has an <i>Application (client) ID</i>. Creating one is free, but a personal Outlook.com account must first have an Azure “directory”, and Microsoft asks for a payment card to verify identity when creating it (nothing is charged for this). If you prefer not to do that, use Option A.</p>
+        <ol class="small-list">
+          <li>Only if you have never used Azure: open <a href="https://azure.microsoft.com/free" target="_blank" rel="noopener">azure.microsoft.com/free</a>, press <b>Try Azure for free</b> and sign in with your Outlook.com account. (Skip this if step 2 already shows a “New registration” form.)</li>
+          <li>Open <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">entra.microsoft.com → App registrations</a> → <b>New registration</b>. Name: <b>Clipping Engine</b>. Supported account types: <b>Personal Microsoft accounts only</b>. Leave Redirect URI empty. Press <b>Register</b>.</li>
+          <li>On the app's page: <b>Authentication</b> → <b>Allow public client flows</b> → <b>Yes</b> → <b>Save</b>.</li>
+          <li>On <b>Overview</b>, copy the <b>Application (client) ID</b> and paste it here. (There is no secret to create or store.)</li>
+        </ol>
+        <form method="post" action="/settings/notifications/transport" class="inline">
+          <input type="hidden" name="transport" value="graph">
+          <label>Application (client) ID <input name="outlook_client_id" value="{{ s.outlook_client_id }}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" size="38"></label>
+          <button class="btn">Save</button>
+        </form>
+        {% if transport == 'graph' and graph.configured and not graph.connected %}
+          <form method="post" action="/settings/outlook/connect"><button class="btn primary">Connect Outlook</button></form>
+          <p class="muted"><small>You sign in on Microsoft's own page with a one-time code; the engine never sees your password. It asks only for permission to send mail as you (Mail.Send) and to read your address.</small></p>
+        {% endif %}
+        {% if device.state %}<div class="flagbox"><p>{% if device.state == 'pending' %}On any device, open <a href="{{ device.uri }}" target="_blank" rel="noopener">{{ device.uri }}</a> and enter the code <b style="font-size:1.3em;letter-spacing:2px">{{ device.user_code }}</b>, then sign in with the Outlook account that should send the emails. This page updates by itself. <meta http-equiv="refresh" content="8">{% elif device.state == 'connected' %}Outlook connected.{% else %}Sign-in {{ device.state }}: {{ device.error or '' }}{% endif %}</p></div>{% endif %}
+        {% if graph.connected %}<p>Signed in{% if graph.account %} as {{ graph.account }}{% endif %}. <form method="post" action="/settings/outlook/disconnect" style="display:inline"><button class="btn ghost sm">Disconnect Outlook</button></form></p>{% endif %}
+      </details>
+    </li>
+    <li class="{{ 'done' if approved else '' }}"><b>Read the email and approve it.</b>
+      {% if not s.notify_enabled %}Sending is disabled (NOTIFY_ENABLED=0).{% elif approved %}<b class="ok-text">Approved</b> — wording v{{ template_version }} to {{ approval.to }} ({{ approval.approved_at|dt }}).{% else %}<b>Held</b> — nothing is sent until you approve.{% endif %}
+      <p><a class="btn" href="/settings/notifications/sample" target="_blank">Open the sample email</a>{% if sample %} <small>Subject: <b>{{ sample.subject }}</b></small>{% else %} <small class="muted">(a real sample appears once one recording has been processed)</small>{% endif %}</p>
+      {% if not approved %}
+      <form method="post" action="/settings/notifications/approve" class="inline">
+        <label>Type the recipient to confirm <input name="confirm_to" autocomplete="off" placeholder="{{ s.notify_to }}"></label>
+        <label class="check"><input type="checkbox" name="agree" value="yes"> I approve this wording and recipient for automatic notifications.</label>
+        <button class="btn primary">Approve</button>
+      </form>
+      <small class="muted">Changing the recipient, or a new version of the wording, cancels the approval automatically.</small>
+      {% else %}
+      <div class="buttons">
+        <form method="post" action="/settings/notifications/revoke"><button class="btn ghost">Revoke approval</button></form>
+        <form method="post" action="/settings/notifications/release"><button class="btn">Send held notifications</button></form>
+      </div>{% endif %}
+    </li>
+    <li><b>Optional: send yourself one test email.</b>
+      {% if approved %}<form method="post" action="/settings/notifications/test" class="inline"><label>Type SEND <input name="confirm" autocomplete="off"></label><button class="btn">Send a test email</button></form>
+      <small class="muted">“Sent” in the list below means the mail service accepted the message. Check the inbox (and Junk) to confirm it actually arrived.</small>{% else %}<small class="muted">Available after step 3.</small>{% endif %}
+    </li>
+  </ol>
+  <p class="muted"><small>Sent when a recording's clips are ready{% if s.notify_on_failure %}; one alert if processing fails; a disk-space warning at most once a day{% endif %}. Turn everything off with NOTIFY_ENABLED=0 in .env.</small></p>
 </section>
 <section class="card">
   <h2>Notifications ({{ rows|length }})</h2>

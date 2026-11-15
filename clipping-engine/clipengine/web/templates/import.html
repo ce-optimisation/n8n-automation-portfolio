@@ -12,6 +12,11 @@
     <label>Video file <input type="file" name="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" required></label>
     <label>Title (optional) <input name="title" placeholder="Defaults to the file name"></label>
     <label>Rights / provenance note (optional) <input name="rights" placeholder="e.g. Our own recording; council livestream, open licence"></label>
+    <details><summary>Older recording? Keep its history (original address and date)</summary>
+      <p class="muted">For a livestream or episode that happened before today: record where it was originally published and when. The address is stored as provenance only — <b>nothing is downloaded from it</b> — and the same address or the same file is never imported twice.</p>
+      <label>Original source address (optional) <input name="source_url" type="url" placeholder="https://… (the page the recording was published on)"></label>
+      <label>Original recording date (optional) <input name="recorded_at" type="date"></label>
+    </details>
     {% include "_proc_settings.html" %}
     <button class="btn primary">Analyse Video</button>
     <progress id="upprog" max="1" value="0" hidden></progress> <span id="upmsg" class="muted"></span>
@@ -53,6 +58,12 @@ document.getElementById('upform').addEventListener('submit', function (e) {
 });
 </script>
 
+<section class="card" id="inbox">
+  <h2>Many or very large files: use the inbox folder</h2>
+  <p class="muted">Copy or save video files into <code>{{ s.inbox }}</code>. Each file is imported automatically about 20 seconds after it has finished copying, without uploading through the browser (best for multi-gigabyte recordings). Duplicates are moved to <code>inbox\duplicates</code>, never deleted.</p>
+  <p class="muted"><b>Archive recordings:</b> a date in the file name (<code>2024-05-03</code> or <code>20240503</code>) is used as the original recording date. For full history, put a small text file next to the video with the same name plus <code>.json</code>, e.g. <code>episode.mp4.json</code> containing <code>{"source_url": "https://…", "recorded_at": "2024-05-03", "title": "…"}</code>.</p>
+</section>
+
 <section class="card" id="pending">
   <h2>Pending sources — awaiting a file ({{ pending|length }})</h2>
   <p class="muted">Inbox folder (files saved here are imported automatically within ~20 s): <code>{{ s.inbox }}</code>. Put <code>src-NUMBER</code> in a file's name to attach it to that pending source.</p>
@@ -63,6 +74,7 @@ document.getElementById('upform').addEventListener('submit', function (e) {
       <input type="hidden" name="pending_id" value="{{ p.id }}">
       <label>File for this link <input type="file" name="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" required></label>
       <label>Rights note <input name="rights" placeholder="e.g. File supplied by the creator on 12 May"></label>
+      <label>Original date <input name="recorded_at" type="date"></label>
       <button class="btn primary">Attach &amp; analyse</button>
     </form>
     <form method="post" action="/sources/{{ p.id }}/cancel"><button class="btn ghost sm">Remove</button></form>

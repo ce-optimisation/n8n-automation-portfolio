@@ -129,7 +129,20 @@ def fetch_text(settings: Settings, url: str, limit: int = 5_000_000, timeout: fl
 
 def parse_feed(text: str, base_url: str) -> list[dict]:
     """RSS 2.0 / Atom → [{key, title, url, published}] for items that carry a video."""
-    root = ET.fromstring(text)
+    # Feeds are data, not documents: refuse DTDs and entity declarations outright (entity-expansion
+    # and external-entity tricks), and anything implausibly large.
+    head = text[:20000].lower()
+    if "<!doctype" in head or "<!entity" in text.lower():
+        raise ingest.SourceError("unsafe_feed", "The feed contains a DTD/entity declaration, which is refused.")
+    if len(text) > 5_000_000:
+        raise ingest.SourceError("too_large", "The feed is too large.")
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        snippet = " ".join(text[:80].split())
+        raise ingest.SourceError("bad_feed", f"This address did not return a readable RSS/Atom feed ({e}). "
+                                             f"It starts with: “{snippet}”. Check that the address is the feed "
+                                             "itself, not a web page.") from e
     items = []
     for it in root.iter("item"):
         url = None
@@ -424,10 +437,42 @@ class SourceMonitor:
                 continue
             jid = self.queue.enqueue("download_url", max_attempts=6, dedupe_key=f"download:{ingest.normalize_url(it['url'])}",
                                      payload={"url": it["url"], "title": it["title"] or None, "source_item_id": iid,
+                                              "recorded_at": ingest.parse_recorded_at(it.get("published")),
                                               "rights_attestation": f"Monitored source '{src['name']}': {src['authorisation'] or 'authorised by configuration'}"})
             self.db.update("source_items", iid, job_id=jid)
             new += 1
         return new
+
+    def backfill(self, sid: int, count: int) -> dict:
+        """Owner action: import up to `count` of the OLDER items that were only noted as the
+        baseline when monitoring began (newest first). Each item is queued at most once: its
+        state moves from 'baseline' to 'queued', and the download job is de-duplicated by URL."""
+        src = self.db.one("SELECT * FROM sources WHERE id = ?", (sid,))
+        if not src:
+            return {"error": "Source not found."}
+        ok, msg = check_source_allowed(self.settings, self.db, src["url"])
+        if not ok:
+            return {"blocked": msg}
+        rows = self.db.query("SELECT * FROM source_items WHERE source_id=? AND state='baseline' AND kind='vod' "
+                             "ORDER BY id LIMIT ?", (sid, max(0, int(count))))
+        queued, refused = 0, 0
+        for it in rows:
+            decision = ingest.classify_url(it["url"], self.settings, self.db)
+            if not decision.ok:
+                self.db.update("source_items", it["id"], state="failed", error=decision.message)
+                refused += 1
+                continue
+            jid = self.queue.enqueue(
+                "download_url", max_attempts=6, dedupe_key=f"download:{ingest.normalize_url(it['url'])}",
+                payload={"url": it["url"], "title": it["title"] or None, "source_item_id": it["id"],
+                         "recorded_at": ingest.parse_recorded_at(it["published"]),
+                         "rights_attestation": f"Monitored source '{src['name']}' (historical backfill requested by "
+                                               f"the owner): {src['authorisation'] or 'authorised by configuration'}"})
+            self.db.update("source_items", it["id"], state="queued", job_id=jid)
+            queued += 1
+        left = self.db.one("SELECT COUNT(*) n FROM source_items WHERE source_id=? AND state='baseline' AND kind='vod'",
+                           (sid,))["n"]
+        return {"queued": queued, "refused": refused, "remaining": left}
 
     def _download_failed(self, ctx) -> None:
         iid = ctx.payload.get("source_item_id")

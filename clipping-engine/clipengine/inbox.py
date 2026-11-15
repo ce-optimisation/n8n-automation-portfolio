@@ -1,7 +1,10 @@
 """Watch folder: video files saved into the inbox folder are imported automatically.
 
 A file is imported once its size has been stable for two scans (so partially copied or
-still-downloading files are left alone). Files named like ``src-12 anything.mp4`` are
+still-downloading files are left alone). An older recording keeps its history: put a small
+JSON file next to it (same name + ".json") such as
+{"source_url": "https://…", "recorded_at": "2024-05-03", "title": "…"}; without one, a date in
+the file name (2024-05-03 or 20240503) is used as the original recording date. Files named like ``src-12 anything.mp4`` are
 attached to pending source #12 (keeping its original URL as provenance). Imported files
 are moved into data/recordings; duplicates go to inbox/duplicates and failures to
 inbox/failed with a .error.txt explanation. Owner files are never deleted.
@@ -45,6 +48,10 @@ def read_sidecar(f: Path) -> tuple[dict | None, Path | None]:
             meta["title"] = raw.get("title") or raw.get("fulltitle") or raw.get("stream_title")
             meta["source_name"] = (raw.get("source_name") or raw.get("channel") or raw.get("uploader")
                                    or raw.get("streamer") or raw.get("platform"))
+            # When it was originally recorded/broadcast (ours: started_at; yt-dlp: upload_date/timestamp)
+            meta["recorded_at"] = ingest.parse_recorded_at(
+                raw.get("recorded_at") or raw.get("started_at") or raw.get("release_date") or raw.get("upload_date")
+                or raw.get("timestamp") or raw.get("date"))
             if meta["source_url"] and urlparse(str(meta["source_url"])).scheme not in ("http", "https"):
                 meta["source_url"] = None
             return meta, c
@@ -107,6 +114,7 @@ class InboxWatcher:
                 else:
                     rid, dup = ingest.register_file(self.settings, self.db, f, original_name=f.name,
                                                     source_type="inbox", move=True,
+                                                    recorded_at=ingest.date_from_filename(f.name),
                                                     rights_attestation="Imported from the inbox folder by the owner.")
                 if dup:
                     if f.exists():
@@ -133,7 +141,9 @@ class InboxWatcher:
             self.settings, self.db, f, title=meta.get("title") or None, original_name=f.name,
             source_type="monitor" if ours else "recorder_import", source_url=url, source_site=meta.get("source_name"),
             source_media_id=meta.get("item_key"), extra_meta={"recorder_sidecar": meta}, move=True,
-            rights_attestation=note, dedupe_by_url=False)
+            rights_attestation=note, dedupe_by_url=False,
+            recorded_at=meta.get("recorded_at") or ingest.date_from_filename(f.name),
+            origin="live_capture" if ours else None)
         if not dup:
             rec = self.db.recording(rid)
             dest = Path(rec["file_path"]).parent / "recorder_sidecar.json"

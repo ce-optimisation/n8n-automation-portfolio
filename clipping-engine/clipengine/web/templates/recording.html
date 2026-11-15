@@ -1,19 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ rec.title }}</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
 <section class="card">
   <p><span class="badge {{ rec.status }}">{{ rec.status }}</span> {% if rec.error %}<span class="err">{{ rec.error }}</span>{% endif %}</p>
   {% if rec.selection_note %}<p class="muted">{{ rec.selection_note }}</p>{% endif %}
   {% set proc = meta.get('processing') %}{% if proc %}<p class="muted"><small>Processing: audio {{ proc.extract_audio_s }}s · model load {{ proc.model_load_s }}s · transcription {{ proc.transcribe_s }}s ({{ proc.speed_x_realtime }}× real time, {{ proc.chunks }} chunk(s)) · selection {{ proc.selection_s }}s</small></p>{% endif %}
   <dl class="meta">
     <dt>Source</dt><dd>{% if rec.source_url %}<a href="{{ rec.source_url }}" rel="noopener noreferrer" target="_blank">{{ rec.source_url }}</a>{% else %}Uploaded file: {{ rec.original_filename }}{% endif %}
-      <br><small class="muted">{{ {'url': 'Retrieved from the link', 'linked_file': 'File supplied by owner for this link (not downloaded by this tool)', 'upload': 'Uploaded file', 'inbox': 'Imported from inbox folder'}.get(rec.source_type, rec.source_type) }}{% if meta.get('retrieval') %} · {{ meta.retrieval.method }}{% endif %}</small></dd>
+      <br><small class="muted">{{ {'url': 'Retrieved from the link', 'linked_file': 'File supplied by owner for this link (not downloaded by this tool)', 'upload': 'Uploaded file', 'inbox': 'Imported from inbox folder', 'monitor': 'Recorded live by this engine from a monitored source', 'recorder_import': 'Imported from another recorder (sidecar provenance)'}.get(rec.source_type, rec.source_type) }}{% if meta.get('retrieval') %} · {{ meta.retrieval.method }}{% endif %}</small></dd>
+    <dt>Recorded</dt><dd>{{ rec.recorded_at or 'original date not recorded' }} <span class="badge">{{ {'live_capture': 'live capture', 'archive': 'archive recording', 'recent': 'recent recording'}.get(rec.origin, 'recording') }}</span></dd>
     <dt>Duration</dt><dd>{{ rec.duration|mmss }} · {{ rec.width }}×{{ rec.height }} · {{ rec.fps }} fps</dd>
     <dt>Imported</dt><dd>{{ rec.created_at|dt }}</dd>
     <dt>SHA-256</dt><dd><code>{{ rec.sha256 }}</code></dd>
     <dt>Transcription</dt><dd>{{ rec.whisper_model or '—' }} · language {{ rec.language or '—' }}</dd>
     {% if rec.rights_attestation %}<dt>Rights note</dt><dd>{{ rec.rights_attestation }}</dd>{% endif %}
   </dl>
+  <details><summary>Correct the source address or original date</summary>
+    <form method="post" action="/recordings/{{ rec.id }}/provenance" class="grid3">
+      <label>Original source address <input name="source_url" type="url" value="{{ rec.source_url or '' }}" placeholder="https://"></label>
+      <label>Original recording date <input name="recorded_at" type="date" value="{{ (rec.recorded_at or '')[:10] }}"></label>
+      <button class="btn">Save</button>
+    </form>
+    <p class="muted"><small>Stored as provenance only; nothing is downloaded. The change is noted in the recording's provenance.json.</small></p></details>
   <div class="buttons">
     {% if segments %}<a class="btn" href="/recordings/{{ rec.id }}/transcript.txt">Download transcript</a>{% endif %}
     <form method="post" action="/recordings/{{ rec.id }}/reanalyse"><button class="btn" title="Re-select excerpts from the stored transcript; approved and rejected clips are kept">Re-select excerpts</button></form>

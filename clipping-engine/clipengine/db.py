@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -263,6 +263,10 @@ MIGRATIONS = [
     ("publish_attempts", "confirmed_at", "REAL"),
     ("recordings", "selection_note", "TEXT"),
     ("source_items", "fingerprint", "TEXT"),
+    # v4: when the recording was originally made/broadcast (may be years before it was imported)
+    # and how it reached us: live_capture | archive | recent
+    ("recordings", "recorded_at", "TEXT"),
+    ("recordings", "origin", "TEXT"),
 ]
 
 

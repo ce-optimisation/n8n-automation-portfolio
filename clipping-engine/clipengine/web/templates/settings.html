@@ -31,13 +31,56 @@
   <form method="post" action="/settings/captions/reset"><button class="btn ghost sm">Reset to approved style</button></form>
 </section>
 
-<section class="card">
-  <h2>Notifications &amp; startup</h2>
+<section class="card" id="phone">
+  <h2>Phone access (private, through Tailscale)</h2>
+  {% if phone.password_created %}
+  <div class="flagbox"><p><b>Your new dashboard password — write it down now:</b></p>
+    <p style="font-size:1.25em;letter-spacing:1px"><code>{{ phone.password_created }}</code></p>
+    <p class="muted">It is also saved in <code>.env</code> as DASHBOARD_PASSWORD. You will be asked for it on this PC too from now on.</p>
+    <form method="post" action="/settings/phone/seen"><button class="btn sm">I have saved it — hide</button></form></div>
+  {% endif %}
+  <dl class="meta">
+    <dt>Tailscale on this PC</dt><dd>{% if not ts.installed %}<span class="warn">not installed</span>{% elif ts.running %}connected as <b>{{ ts.dns_name }}</b>{% if ts.tailnet %} (tailnet {{ ts.tailnet }}){% endif %}{% else %}<span class="warn">installed, not signed in ({{ ts.state }})</span>{% endif %}</dd>
+    <dt>Private address</dt><dd>{% if ts_serve and ts_serve.serving %}<a href="{{ ts_serve.url }}">{{ ts_serve.url }}</a>{% if ts_serve.funnel %} <b class="err">PUBLIC (Funnel is on — turn it off)</b>{% endif %}{% else %}not published{% endif %}</dd>
+    <dt>Dashboard password</dt><dd>{{ 'set' if s.dashboard_password else 'not set (the dashboard only answers on this PC)' }}</dd>
+    <dt>Link used in emails</dt><dd>{{ s.dashboard_url or 'this PC only (' ~ s.base_url() ~ ')' }}</dd>
+  </dl>
+  {% if not ts.installed %}
+    <p><b>Step 1 (you):</b> install Tailscale on this PC — <a href="https://tailscale.com/download/windows" target="_blank" rel="noopener">tailscale.com/download/windows</a> — and sign in (free personal plan). Then press the button.</p>
+  {% elif not ts.running %}
+    <p><b>Step 1 (you):</b> click the Tailscale icon next to the clock and choose <b>Log in</b>{% if ts.auth_url %} (or open <a href="{{ ts.auth_url }}" target="_blank" rel="noopener">this sign-in link</a>){% endif %}. Then press the button.</p>
+  {% endif %}
+  <div class="buttons">
+    <form method="post" action="/settings/phone/setup"><button class="btn primary">{{ 'Check / repair phone access' if (ts_serve and ts_serve.serving) else 'Set up phone access' }}</button></form>
+    {% if ts_serve and ts_serve.serving %}<form method="post" action="/settings/phone/disable" onsubmit="return confirm('Stop publishing the dashboard on your tailnet?')"><button class="btn ghost">Turn off</button></form>{% endif %}
+  </div>
+  <p class="muted"><small>The button does everything that does not need you: creates a dashboard password if there is none, runs <code>tailscale serve --bg {{ s.port }}</code>, reads back this PC's real address, checks it, and saves it for email links. The engine stays bound to 127.0.0.1; nothing is exposed to the public internet and Tailscale Funnel is never used.</small></p>
+  {% if phone.steps %}<ul class="small-list">{% for st in phone.steps %}<li>{{ st }}</li>{% endfor %}</ul>{% endif %}
+  {% if ts_serve and ts_serve.serving %}
+  <h3>On your iPhone</h3>
+  <ol class="small-list">{% for st in phone_steps %}<li>{{ st }}</li>{% endfor %}</ol>
+  <p class="muted"><small>Verified from this PC only. Whether the phone can reach it depends on the phone being signed in to the same Tailscale account.</small></p>
+  {% endif %}
+</section>
+
+<section class="card" id="unattended">
+  <h2>Running unattended</h2>
   <p><a class="btn" href="/settings/notifications">Email notifications…</a></p>
   {% if autostart_supported %}
   <form method="post" action="/settings/autostart" class="inline"><input type="hidden" name="enabled" value="{{ '0' if autostart_on else '1' }}">
     <span>Start automatically when I sign in to Windows: <b>{{ 'on' if autostart_on else 'off' }}</b></span> <button class="btn">{{ 'Turn off' if autostart_on else 'Turn on' }}</button></form>
   {% else %}<p class="muted">Automatic start at sign-in is available on Windows (or run Enable-Autostart.cmd).</p>{% endif %}
+  <form method="post" action="/settings/unattended" class="inline">
+    <label>Keep this PC awake
+      <select name="prevent_sleep">
+        <option value="active" {% if s.prevent_sleep == 'active' %}selected{% endif %}>while recording or processing (default)</option>
+        <option value="monitoring" {% if s.prevent_sleep == 'monitoring' %}selected{% endif %}>whenever a source is being monitored</option>
+        <option value="off" {% if s.prevent_sleep == 'off' %}selected{% endif %}>never</option>
+      </select></label>
+    <button class="btn">Save</button>
+  </form>
+  <p class="muted"><small>{% if keepawake.supported %}Right now: {{ 'holding the PC awake' if keepawake.holding else 'not holding the PC awake' }} ({{ keepawake.reason }}).{% else %}Keep-awake applies on Windows.{% endif %} This is a request made by the engine while it runs; it changes no Windows power setting and the screen can still turn off. It cannot wake a PC that is already asleep, and closing a laptop lid still sleeps it unless you change “When I close the lid” in Windows yourself. <b>Nothing runs while the PC is switched off.</b></small></p>
+  {% if downtime %}<details><summary>When the engine was not running (last 7 days)</summary><ul class="small-list">{% for d in downtime %}<li>{{ d.from|dt }} → {{ d.to|dt }} ({{ (d.seconds / 60)|round|int }} min, {{ 'PC asleep' if d.kind == 'asleep' else 'engine not running' }})</li>{% endfor %}</ul></details>{% endif %}
 </section>
 
 <section class="card">
@@ -55,13 +98,13 @@
     <dt>Local LLM</dt><dd>{{ llm }}</dd>
   </dl>
 </section>
-<section class="card">
+<section class="card" id="storage">
   <h2>Storage</h2>
   <p>Recordings {{ '%.2f'|format(storage.recordings_gb) }} GB · Clips {{ '%.2f'|format(storage.clips_gb) }} GB · Models {{ '%.2f'|format(storage.models_gb) }} GB · Free on disk {{ '%.1f'|format(storage.disk_free_gb) }} GB</p>
   <p class="muted">Retention: rejected renders removed after {{ s.delete_rejected_renders_after_days }} days (0 = never).
   Originals: {% if s.delete_originals_after_days %}deleted {{ s.delete_originals_after_days }} days after processing once no clip awaits review{% else %}never deleted automatically{% endif %}. Change in .env.</p>
 </section>
-<section class="card">
+<section class="card" id="connections">
   <h2>Publishing connections</h2>
   <p class="muted">TikTok app type: <b>{{ s.tiktok_app_type }}</b> · redirect URI: <code>{{ s.tiktok_redirect_uri or 'not set' }}</code><br>
   Instagram mode: <b>{{ instagram.mode }}</b> ({{ 'Facebook Login for Business — needs a linked Facebook Page; uploads the file directly' if instagram.mode == 'facebook' else 'Instagram Login — no Facebook Page; Meta fetches each clip from a one-time link under ' ~ (s.public_media_base_url or 'PUBLIC_MEDIA_BASE_URL (not set)') }})</p>
@@ -83,7 +126,7 @@
   <p class="muted">Until a platform is connected, use Download MP4 and Copy description on each clip.</p>
 </section>
 
-<section class="card">
+<section class="card" id="permissions">
   <h2>Source permissions</h2>
   <p class="muted">Some platforms (e.g. {{ restricted[:6]|join(', ') }}) forbid automated access unless <b>the platform</b> grants written permission. Record such permission here only if you actually hold it; it is cited in each import's provenance. Without it, links from these platforms are saved as pending sources and you attach the file yourself.</p>
   <ul class="list">{% for p in perms %}<li><b>{{ p.domain }}</b> — granted by {{ p.granted_by }} on {{ p.granted_on }}, ref {{ p.reference }}{% if p.scope %} ({{ p.scope }}){% endif %}
@@ -101,12 +144,7 @@
 </section>
 
 <section class="card">
-  <h2>Using the dashboard from your phone (securely)</h2>
-  <ol class="small-list">
-    <li>Set a strong <code>DASHBOARD_PASSWORD</code> in <code>.env</code> and restart. Without a password the dashboard only answers on this PC.</li>
-    <li><b>Recommended — Tailscale (free):</b> install Tailscale on this PC and your phone, sign in to both with the same account, then on the PC run <code>tailscale serve --bg 8765</code>. Open the <code>https://&lt;pc-name&gt;.&lt;tailnet&gt;.ts.net</code> address on your phone. Traffic is encrypted, nothing is exposed to the internet, and the app can stay bound to 127.0.0.1.</li>
-    <li><b>Home Wi-Fi only (simpler, unencrypted):</b> set <code>CLIPENGINE_HOST=0.0.0.0</code>, allow the Windows Firewall prompt for <i>Private networks</i> only, and open the address printed in the console. Only do this on a network you trust.</li>
-  </ol>
-  <p class="muted">Never port-forward this dashboard on your router or expose it on a public network.</p>
+  <h2>Other ways to reach the dashboard</h2>
+  <p class="muted"><b>Home Wi-Fi only (unencrypted, not recommended):</b> set <code>CLIPENGINE_HOST=0.0.0.0</code> and a <code>DASHBOARD_PASSWORD</code> in <code>.env</code>, allow the Windows Firewall prompt for <i>Private networks</i> only, and open the address printed in the console. Never port-forward this dashboard on your router or expose it on a public network — use “Phone access” above instead.</p>
 </section>
 {% endblock %}

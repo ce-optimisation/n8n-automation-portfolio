@@ -5,7 +5,8 @@
 <thead><tr><th>#</th><th>Title</th><th>Length</th><th>Status</th><th>Clips</th></tr></thead>
 <tbody>
 {% for r in recordings %}
-<tr><td>{{ r.id }}</td><td><a href="/recordings/{{ r.id }}">{{ r.title }}</a><br><small class="muted">{{ r.source_url or r.original_filename }}</small></td>
+<tr><td>{{ r.id }}</td><td><a href="/recordings/{{ r.id }}">{{ r.title }}</a><br><small class="muted">{{ r.source_url or r.original_filename }}</small>
+  <br><small><span class="badge">{{ {'live_capture': 'live capture', 'archive': 'archive', 'recent': 'recent'}.get(r.origin, 'recording') }}</span>{% if r.recorded_at %} recorded {{ r.recorded_at[:10] }}{% endif %} · imported {{ r.created_at|dt }}</small></td>
 <td>{{ r.duration|mmss }}</td><td><span class="badge {{ r.status }}">{{ r.status }}</span></td><td>{{ r.nclips }}</td></tr>
 {% else %}<tr><td colspan="5" class="muted">No recordings yet. <a href="/import">Import one</a>.</td></tr>{% endfor %}
 </tbody></table>

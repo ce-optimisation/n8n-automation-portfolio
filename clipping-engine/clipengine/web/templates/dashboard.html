@@ -2,6 +2,16 @@
 {% block content %}
 <h1>Dashboard</h1>
 {% include "_counts.html" %}
+{% if health %}
+<section class="card health" id="health">
+  <h2>Needs your attention</h2>
+  <ul class="health-list">
+  {% for h in health %}<li class="h-{{ h.level }}"><span class="dot"></span><span>{{ h.text }}{% if h.link %} <a href="{{ h.link }}">{{ h.link_text or 'Open' }} →</a>{% endif %}</span></li>{% endfor %}
+  </ul>
+  <form method="post" action="/health/dismiss"><button class="btn ghost sm">Mark “not running” periods as seen</button></form>
+</section>
+{% else %}<p class="ok">Engine running normally: nothing needs your attention.</p>{% endif %}
+<p class="muted"><small>This page can only report while the engine is running. If it does not load, the PC is off or asleep, or the engine is closed — start it with the “Clipping Engine” shortcut.</small></p>
 {% if storage.warning %}<p class="warn">Storage warning: {{ '%.1f'|format(storage.total_gb) }} GB used, {{ '%.1f'|format(storage.disk_free_gb) }} GB free on disk.</p>{% endif %}
 <div class="actions"><a class="btn primary" href="/import">+ Analyse a video</a> <a class="btn" href="/review">Open review queue</a></div>
 <section class="card">

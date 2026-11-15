@@ -35,6 +35,7 @@ def stub_transcript(sample_video, tmp_path_factory) -> Path:
 @pytest.fixture
 def settings(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPENGINE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CLIPENGINE_ENV_FILE", str(tmp_path / "test.env"))   # never touch the owner's .env
     s = get_settings(llm_provider="none", open_browser=False)
     s.data_dir = tmp_path / "data"
     s.allowed_url_domains = []
