@@ -99,8 +99,9 @@ Sessions 1–2: see git history (`f95fa7a` … `c54dab7`).
 |---|---|
 | #11 `43655906924` (push of `12ae89a`) | Ubuntu: all passed, including real Whisper and acceptance. Windows: launcher and autostart OK, but **one real Windows bug** (segment unlink, WinError 32), fixed in `e9c735a`. |
 | #12 `43655915197` (dispatch, 60 min) | Long-form real Whisper with crash test **passed**. Selection evaluation on the real transcript showed v3 ending mid-topic in 0.5 of clips, which led to the cohesion fix. |
-| RUN_PUSH_E9 | Push of `e9c735a`: see §1A.6 |
-| RUN_LF_E9 | Long-form dispatch after the fix: see §1A.6 |
+| #13 `43658247477` (push of `e9c735a`) | **Success** on Ubuntu and Windows (unit, integration, real Whisper, acceptance, launcher, autostart). The WinError 32 fix is confirmed. |
+| #14 `43658252185` (dispatch, 60 min, `e9c735a`) | **Success.** Real Whisper with crash/resume: 6/6 clips rendered, vocabulary recall 0.971, no failed jobs, work dir left empty. Real-transcript v3: ends_mid_topic **0.167** (was 0.5). |
+| #15 `43658369597` (push of `305bf24`) | **Success** on Ubuntu and Windows. |
 
 ---
 
@@ -187,7 +188,8 @@ Sessions 1–2: see git history (`f95fa7a` … `c54dab7`).
   | 58 min, Whisper-like, after the fix | v3 | 0.934 | 0.0 | **0.0** | 0.333 |
   | 9 min, exact, after the fix | v3 | 0.924 | 0.015 | **0.0** | 0.5 |
   | 9 min, Whisper-like, after the fix | v3 | 0.917 | 0.015 | **0.0** | 0.5 |
-  | Real Whisper, after the fix | v3 | see §1A.6 | | | |
+  | Real Whisper 58 min (CI #14), after the fix | v3 | 0.936 | 0.0 | **0.167** | 0.333 |
+  | Real Whisper 58 min (CI #14), for comparison | v2 | 0.935 | 0.0 | 0.167 | 0.333 |
 
   "Whisper-like" is a TEST-ONLY perturbation of the exact transcript: word ends stretched into pauses, timing
   jitter, merged segments. The script is in the session scratchpad and is not committed. Known weakness: v3 still
@@ -250,7 +252,22 @@ Sessions 1–2: see git history (`f95fa7a` … `c54dab7`).
   available / Upload failed / Platform-confirmed …. It never shows a mocked success.
 
 ### 1A.6 Final CI verification (filled in at the end of session 3)
-FINAL_CI_SUMMARY
+- **#13** (push `e9c735a`): success on Ubuntu and Windows.
+- **#14** (dispatch, 60-min long-form on `e9c735a`): success.
+  - The crash test hard-killed the worker after 1 checkpointed chunk; the restarted worker logged the resume and
+    reused the extracted audio.
+  - 6/6 clips rendered (4.8–13.5 s each); vocabulary recall 0.971.
+  - Real-transcript selection (57.7 min):
+
+    | Profile | Substantive | Procedural | Ends mid-topic | Starts mid-topic | Duration min/mean/max (s) |
+    |---|---|---|---|---|---|
+    | v1 | 0.800 | 0.114 | 0.500 | 0.333 | 52.5 / 54.8 / 57.1 |
+    | v2 | 0.935 | 0.0 | 0.167 | 0.333 | 41.3 / 50.7 / 58.2 |
+    | v3 | 0.936 | 0.0 | 0.167 | 0.333 | 19.3 / 37.9 / 58.2 |
+
+  - v3 (the default) matches v2's boundary quality with content-led lengths and no 55 s target.
+  - Starts mid-topic is still 1 in 3 clips; this is the main remaining selection weakness (§17).
+- **#15** (push `305bf24`): success on Ubuntu and Windows.
 
 ## 2. Environment facts that shaped decisions
 
