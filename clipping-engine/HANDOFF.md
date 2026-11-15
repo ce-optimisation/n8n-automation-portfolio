@@ -2,8 +2,9 @@
 
 > **For the next engineer or agent:** paste this whole file into a new Claude Code session, or say
 > "read `clipping-engine/HANDOFF.md` and continue". It is self-contained and consolidates **all** work from
-> session 1 (initial build) and session 2 (continuation). Earlier handoff versions are in git history
-> (`553c922`, then the session-2 version in `ce0ba89`). Treat this document as a map, not proof: re-inspect the
+> session 1 (initial build), session 2 (continuation) and session 3 (final automation and deployment batch).
+> Earlier handoff versions are in git history (`553c922`, the session-2 version in `ce0ba89`, then `c54dab7`).
+> The branch tip at the end of session 3 is `7449509`; CI on it and its parents is green (§1A.6). Treat this document as a map, not proof: re-inspect the
 > checkout and CI before relying on any claim.
 
 ---
@@ -91,7 +92,9 @@ Sessions 1–2: see git history (`f95fa7a` … `c54dab7`).
 |---|---|
 | `12ae89a` | Source monitoring, content-led selection v3, Anton captions, Ready to Review/Post, Sources, notifications, autostart, supervisor |
 | `e9c735a` | Windows-safe live-segment cleanup (WinError 32 found by CI); whole-clip cohesion in v3 boundaries (found by the real-Whisper long-form evaluation) |
-| *(this commit)* | Handoff and README refresh |
+| `305bf24` | Handoff and README refresh |
+| `881ca8f` | Handoff: final CI results (runs #13–#15) and real-transcript v3 metrics |
+| `7449509` | Ignore the local `.review/` screenshots folder (owner-review images, not committed) |
 
 ### 1.2 CI runs worth knowing (session 3)
 
@@ -1040,8 +1043,11 @@ PW_CHROMIUM=/opt/pw-browsers/chromium                # sandbox only, for the acc
    - Whether a personal Microsoft account can create the Entra app registration is unconfirmed; use the SMTP
      fallback if it can't.
    - Graph returns 202 "accepted", not proof of delivery.
-4. **v3 still starts one paragraph into a topic** in 33–50% of clips on synthetic data. Re-check the real-Whisper
-   figures in §1A.6.
+4. **v3 still starts one paragraph into a topic** in about 1 clip in 3. Confirmed on the real-Whisper 58-minute
+   transcript (CI #14): starts_mid_topic 0.333 and ends_mid_topic 0.167, the same as v2, so it is no regression.
+   The next selection improvement should target starts, e.g. pulling the start back to the strongest boundary
+   within the preceding 1–2 paragraphs when the cohesion between them and the window is high.
+   - Raising the lexical weight in `annotate_boundaries` made results worse; it was reverted to 0.5/0.5.
 5. **Live HLS restart overlap:** a restarted segment can repeat about 1 segment of content (`live_start_index -1`).
    It is not trimmed.
 6. **XML feeds** are parsed with stdlib ElementTree, which relies on expat's entity-expansion limits. Feeds come
@@ -1082,6 +1088,12 @@ PW_CHROMIUM=/opt/pw-browsers/chromium                # sandbox only, for the acc
    - Tailscale for phone access and HTTPS email links
    - TikTok and Instagram developer apps (unchanged from session 2)
    - `INSTALL_CUDA_LIBS=1` for an NVIDIA GPU
+
+**Pending owner decision at the end of session 3:** the owner was sent the sample "clips ready" email
+(`notify.build_ready`, TEMPLATE_VERSION 1), a rendered Anton caption frame and a Ready to Post phone screenshot,
+and was asked to reply "approve email wording" or request changes.
+- If the wording changes, bump `TEMPLATE_VERSION`. Approval is keyed to it, so any earlier approval lapses.
+- In-app approval (Settings → Notifications) is still required on the owner's PC, whatever is agreed in chat.
 
 **Readiness verdict:** local import → transcription → content-led clips → Anton captions → review → email is
 complete and verified in CI. Hands-off operation depends on C3 (approval to send) and C4 (an authorised
