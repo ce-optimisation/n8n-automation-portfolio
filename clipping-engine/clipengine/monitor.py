@@ -227,6 +227,86 @@ def verify_recording(path: Path, min_seconds: float) -> tuple[bool, list[str], d
     return not problems, problems, info
 
 
+# ---- restart overlap ----------------------------------------------------------------
+
+def _video_packets(path: Path, *, head: float | None = None, tail: float | None = None) -> list[tuple[float, str]]:
+    """(dts seconds, content hash) for the video packets at the start or end of a file.
+    Stream-copied packets from the same broadcast are byte-identical, so equal hashes mean
+    the same picture data."""
+    ffprobe = media.require("ffprobe")
+    args = [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_data_hash", "md5",
+            "-show_entries", "packet=dts_time,pts_time,data_hash", "-of", "csv=p=0"]
+    if head:
+        args += ["-read_intervals", f"%+{head:g}"]
+    elif tail:
+        fmt = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=start_time,duration", "-of",
+                              "csv=p=0", str(path)], capture_output=True, text=True, **media._popen_kwargs())
+        try:
+            start, dur = (float(x) for x in fmt.stdout.strip().split(",")[:2])
+            args += ["-read_intervals", f"{max(start, start + dur - tail):g}%"]
+        except ValueError:
+            pass                      # unknown duration: read the whole file
+    proc = subprocess.run(args + [str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          **media._popen_kwargs())
+    out: list[tuple[float, str]] = []
+    for ln in proc.stdout.splitlines():
+        parts = ln.strip().split(",")
+        digest = next((x for x in parts if x.startswith("MD5:")), None)
+        times = [x for x in parts[:2] if x and x != "N/A"]
+        if digest and times:
+            try:
+                out.append((float(times[0]), digest))
+            except ValueError:
+                continue
+    return out
+
+
+def find_overlap(prev: Path, nxt: Path, window: float = 180.0, min_run: int = 5) -> tuple[float, int] | None:
+    """Does `nxt` (a recording restarted after an interruption) begin with picture data that
+    `prev` already holds? Returns (time in `prev` where the repeated part begins, number of
+    repeated video packets), or None when there is no repeat.
+
+    A match needs an unbroken run of identical packets from the first packet of `nxt` either to
+    (within three packets of) the end of `prev` or for the whole inspected head, and at least
+    `min_run` of them, so a single coincidental frame can never trim footage."""
+    try:
+        heads = _video_packets(nxt, head=window)
+        tails = _video_packets(prev, tail=window)
+    except Exception:  # noqa: BLE001 - detection is best effort; never block finalisation
+        return None
+    if len(heads) < min_run or len(tails) < min_run:
+        return None
+    first = heads[0][1]
+    for k in range(len(tails)):
+        if tails[k][1] != first:
+            continue
+        m = 0
+        while k + m < len(tails) and m < len(heads) and tails[k + m][1] == heads[m][1]:
+            m += 1
+        # The interrupted recorder's very last packets may be cut short by the crash, so the run
+        # may stop a few packets before the end of `prev`; those damaged packets are dropped too.
+        if m >= min_run and (k + m >= len(tails) - 3 or m == len(heads)):
+            return tails[k][0], len(tails) - k
+    return None
+
+
+def concat_listing(segs: list[Path]) -> tuple[str, list[dict]]:
+    """Concat-demuxer listing for the recorded segments. Where a restarted segment repeats the
+    end of the previous one, the previous segment is cut at the point the repeat begins (a
+    keyframe, because a restarted HLS recording starts on a media-segment boundary), so the
+    joined recording contains each moment once. Nothing on disk is modified."""
+    lines, trims = [], []
+    for idx, p in enumerate(segs):
+        lines.append(f"file '{p.name}'")
+        if idx + 1 < len(segs):
+            hit = find_overlap(p, segs[idx + 1])
+            if hit:
+                cut, packets = hit
+                lines.append(f"outpoint {cut:.6f}")
+                trims.append({"segment": p.name, "cut_at": round(cut, 3), "repeated_video_packets": packets})
+    return "\n".join(lines) + "\n", trims
+
+
 # ---- monitor ------------------------------------------------------------------------
 
 class SourceMonitor:
@@ -409,7 +489,10 @@ class SourceMonitor:
         if method == "hls" or src["kind"] == "hls":
             return [media.require("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
                     "-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "20000000",
-                    "-live_start_index", "-1" if (it["restarts"] if "restarts" in it.keys() else 0) else "-3",
+                    # Always begin a few media segments back. After a restart this deliberately
+                    # re-fetches the last segments (so nothing is missed while the recorder was
+                    # down); the repeated part is removed exactly when the recording is joined.
+                    "-live_start_index", "-3",
                     "-i", it["url"], "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", str(seg)]
         return [sys.executable, "-m", "yt_dlp", "--no-part", "--hls-use-mpegts", "--no-progress", "--quiet",
                 "--user-agent", self.settings.http_user_agent, "-o", str(seg), it["url"]]
@@ -481,7 +564,11 @@ class SourceMonitor:
             return
         out = wd / "recording.mp4"
         listing = wd / "segments.txt"
-        listing.write_text("".join(f"file '{p.name}'\n" for p in segs), encoding="utf-8")
+        text, trims = concat_listing(segs)
+        listing.write_text(text, encoding="utf-8")
+        if trims:
+            self._log_item(iid, f"Removed repeated footage at {len(trims)} restart point(s): "
+                                + ", ".join(f"{t['segment']} cut at {t['cut_at']}s" for t in trims))
         try:
             media.run_ffmpeg(["-f", "concat", "-safe", "0", "-i", listing.name, "-map", "0:v:0?", "-map", "0:a:0?",
                               "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", out.name], cwd=wd)
@@ -503,7 +590,7 @@ class SourceMonitor:
                    "source_name": src["name"] if src else None, "source_url": it["url"],
                    "title": it["title"], "item_key": it["item_key"],
                    "started_at": it["started_at"], "ended_at": time.time(), "segments": len(segs),
-                   "restarts": it["restarts"], "duration": info.get("duration"),
+                   "restarts": it["restarts"], "duration": info.get("duration"), "overlap_trims": trims,
                    "authorisation": src["authorisation"] if src else None}
         (inbox / (name + ".source.json")).write_text(json.dumps(sidecar, indent=1), encoding="utf-8")
         tmp = inbox / (name + ".partial")

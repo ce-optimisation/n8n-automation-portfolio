@@ -121,6 +121,58 @@ def start_live_hls(sample_video: Path, out_dir: Path, seconds: int) -> subproces
                              str(out_dir / "live.m3u8")])
 
 
+def frame_hashes(path: Path) -> list[str]:
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:v:0", "-f", "framemd5", "-"],
+                         capture_output=True, text=True, check=True).stdout
+    return [ln.split(",")[-1].strip() for ln in out.splitlines() if ln and not ln.startswith("#")]
+
+
+def test_restart_overlap_is_detected_and_trimmed_exactly(tmp_path):
+    """Two stream-copied segments of the same broadcast that overlap by 4 s (what a restarted
+    recorder produces) are joined without repeating or losing a single frame; unrelated
+    segments are never trimmed."""
+    src = tmp_path / "src.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi",
+                    "-i", "sine=frequency=440:sample_rate=44100", "-t", "16", "-c:v", "libx264", "-preset",
+                    "ultrafast", "-g", "30", "-c:a", "aac", str(src)], check=True)
+    hls = tmp_path / "hls"
+    hls.mkdir()
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(src), "-c", "copy", "-f", "hls", "-hls_time", "2",
+                    "-hls_list_size", "0", "-hls_playlist_type", "vod", str(hls / "v.m3u8")], check=True)
+    parts = sorted(hls.glob("v*.ts"))
+    assert len(parts) >= 8
+
+    def record(names, out):          # what the recorder does: copy media segments into one MPEG-TS
+        lst = tmp_path / (out + ".txt")
+        lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in names), encoding="utf-8")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy",
+                        "-f", "mpegts", str(tmp_path / out)], check=True)
+        return tmp_path / out
+    a = record(parts[:5], "seg_001.ts")           # 0–10 s, then the recorder "crashed"
+    b = record(parts[3:], "seg_002.ts")           # restarted two media segments back: 6 s → end
+    hit = monitor.find_overlap(a, b)
+    assert hit and hit[1] >= 100                  # ~4 s of repeated video packets
+    text, trims = monitor.concat_listing([a, b])
+    assert "outpoint" in text and len(trims) == 1
+    (tmp_path / "segments.txt").write_text(text, encoding="utf-8")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "segments.txt", "-c", "copy",
+                    "-bsf:a", "aac_adtstoasc", "joined.mp4"], cwd=tmp_path, check=True)
+    got, want = frame_hashes(tmp_path / "joined.mp4"), frame_hashes(src)
+    assert got == want                            # every frame once, in order: nothing repeated, nothing lost
+    ok, problems, info = monitor.verify_recording(tmp_path / "joined.mp4", 5)
+    assert ok, problems
+    assert abs(info["duration"] - 16) < 0.5
+    # No overlap: consecutive, non-repeating segments are left untouched.
+    c = record(parts[5:], "seg_003.ts")
+    assert monitor.find_overlap(a, c) is None
+    assert "outpoint" not in monitor.concat_listing([a, c])[0]
+    # Unrelated material is never mistaken for a repeat.
+    other = tmp_path / "other.ts"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "smptebars=size=320x180:rate=30", "-t", "4",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-f", "mpegts", str(other)], check=True)
+    assert monitor.find_overlap(a, other) is None
+
+
 def wait_for(cond, timeout=90, step=0.5):
     t = time.time()
     while time.time() - t < timeout:
@@ -164,6 +216,12 @@ def test_live_hls_recorded_with_interruption_recovery_and_imported(env, sample_v
     rec = db.one("SELECT * FROM recordings")
     assert rec["source_type"] == "monitor" and rec["source_url"].endswith("/live/live.m3u8")
     assert rec["duration"] > 15
+    # The restart deliberately re-fetches the last media segments; the join must not repeat them.
+    assert rec["duration"] <= 24 + 1.5, rec["duration"]
+    hashes = frame_hashes(Path(rec["file_path"]))
+    assert len(hashes) == len(set(hashes)), f"{len(hashes) - len(set(hashes))} repeated frames after restart"
+    side = json.loads((Path(rec["file_path"]).parent / "recorder_sidecar.json").read_text(encoding="utf-8"))
+    assert "overlap_trims" in side
     assert db.one("SELECT state, recording_id FROM source_items")["state"] == "imported"
     q.drain(600)
     assert db.one("SELECT COUNT(*) n FROM clips WHERE recording_id=? AND status='ready'", (rec["id"],))["n"] >= 1
