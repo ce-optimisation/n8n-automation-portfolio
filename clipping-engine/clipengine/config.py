@@ -74,7 +74,7 @@ class Settings:
     clip_min_seconds: float = 15.0
     clip_max_seconds: float = 150.0
     clip_target_seconds: float = 0.0     # 0 = none. Only used by legacy profiles v1/v2.
-    selection_profile: str = "v3"        # v3 = content-led (default); v1/v2 kept for comparison
+    selection_profile: str = "v4"        # v4 = content-led + context boundaries (default); v1–v3 kept for comparison
     context_seconds: float = 25.0
     llm_provider: str = "auto"           # auto | ollama | none
     ollama_url: str = "http://127.0.0.1:11434"
@@ -199,7 +199,7 @@ def get_settings(**overrides) -> Settings:
         clip_min_seconds=_float("CLIP_MIN_SECONDS", 15.0),
         clip_max_seconds=_float("CLIP_MAX_SECONDS", 150.0),
         clip_target_seconds=_float("CLIP_TARGET_SECONDS", 0.0),
-        selection_profile=(os.environ.get("SELECTION_PROFILE", "v3") or "v3").lower(),
+        selection_profile=(os.environ.get("SELECTION_PROFILE", "v4") or "v4").lower(),
         context_seconds=_float("CONTEXT_SECONDS", 25.0),
         llm_provider=(os.environ.get("LLM_PROVIDER", "auto") or "auto").lower(),
         ollama_url=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),

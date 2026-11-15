@@ -1,0 +1,815 @@
+{
+"source": {
+"title": "Landsat 9 Media Briefing (NASA/USGS, 31 Aug 2021)",
+"nasa_id": "GSFC_20210831_Landsat_9_Briefing",
+"url": "https://images.nasa.gov/details/GSFC_20210831_Landsat_9_Briefing",
+"rights": "NASA-produced briefing; NASA material is generally not copyrighted (NASA Media Usage Guidelines). Used for testing only; no endorsement implied.",
+"annotation": "Hand-annotated discussion units. 'topic' = a self-contained discussion (a speaker's sub-topic, or a question with its answer); paragraphs sharing a topic continue the same discussion. 'procedural' = greetings, hand-offs, housekeeping."
+},
+"paragraphs": [
+{
+"start": 0.91,
+"label": "substantive",
+"topic": "intro",
+"end": 47.06
+},
+{
+"start": 48.6,
+"label": "substantive",
+"topic": "intro",
+"end": 70.92
+},
+{
+"start": 72.04,
+"label": "substantive",
+"topic": "intro",
+"end": 90.7
+},
+{
+"start": 92.88,
+"label": "substantive",
+"topic": "intro",
+"end": 105.3
+},
+{
+"start": 114.94,
+"label": "procedural",
+"topic": null,
+"end": 156.34
+},
+{
+"start": 157.32,
+"label": "substantive",
+"topic": "host_overview",
+"end": 188.0
+},
+{
+"start": 188.94,
+"label": "procedural",
+"topic": null,
+"end": 265.05
+},
+{
+"start": 267.76,
+"label": "procedural",
+"topic": null,
+"end": 288.66
+},
+{
+"start": 290.28,
+"label": "procedural",
+"topic": null,
+"end": 303.24
+},
+{
+"start": 304.14,
+"label": "substantive",
+"topic": "karen_fleet",
+"end": 350.88
+},
+{
+"start": 351.54,
+"label": "substantive",
+"topic": "karen_fleet",
+"end": 373.94
+},
+{
+"start": 375.74,
+"label": "substantive",
+"topic": "karen_fleet",
+"end": 408.78
+},
+{
+"start": 409.56,
+"label": "procedural",
+"topic": null,
+"end": 413.08
+},
+{
+"start": 413.72,
+"label": "substantive",
+"topic": "karen_landsat",
+"end": 434.98
+},
+{
+"start": 436.02,
+"label": "substantive",
+"topic": "karen_landsat",
+"end": 466.44
+},
+{
+"start": 467.18,
+"label": "substantive",
+"topic": "karen_landsat",
+"end": 482.88
+},
+{
+"start": 483.8,
+"label": "procedural",
+"topic": null,
+"end": 489.86
+},
+{
+"start": 491.34,
+"label": "procedural",
+"topic": null,
+"end": 498.78
+},
+{
+"start": 499.58,
+"label": "substantive",
+"topic": "del_design",
+"end": 513.7
+},
+{
+"start": 514.46,
+"label": "substantive",
+"topic": "del_design",
+"end": 533.94
+},
+{
+"start": 534.82,
+"label": "substantive",
+"topic": "del_design",
+"end": 553.48
+},
+{
+"start": 554.54,
+"label": "substantive",
+"topic": "del_design",
+"end": 576.54
+},
+{
+"start": 577.36,
+"label": "substantive",
+"topic": "del_spacecraft",
+"end": 588.96
+},
+{
+"start": 589.86,
+"label": "substantive",
+"topic": "del_spacecraft",
+"end": 602.56
+},
+{
+"start": 603.06,
+"label": "substantive",
+"topic": "del_spacecraft",
+"end": 619.42
+},
+{
+"start": 620.14,
+"label": "procedural",
+"topic": null,
+"end": 623.74
+},
+{
+"start": 625.18,
+"label": "procedural",
+"topic": null,
+"end": 633.62
+},
+{
+"start": 633.62,
+"label": "substantive",
+"topic": "jeff_instruments",
+"end": 658.02
+},
+{
+"start": 659.18,
+"label": "substantive",
+"topic": "jeff_instruments",
+"end": 681.34
+},
+{
+"start": 682.36,
+"label": "substantive",
+"topic": "jeff_instruments",
+"end": 690.86
+},
+{
+"start": 692.62,
+"label": "substantive",
+"topic": "jeff_instruments",
+"end": 714.78
+},
+{
+"start": 716.0,
+"label": "substantive",
+"topic": "jeff_instruments",
+"end": 722.76
+},
+{
+"start": 724.34,
+"label": "substantive",
+"topic": "jeff_uses",
+"end": 749.48
+},
+{
+"start": 750.54,
+"label": "substantive",
+"topic": "jeff_uses",
+"end": 764.46
+},
+{
+"start": 765.66,
+"label": "substantive",
+"topic": "jeff_examples",
+"end": 785.02
+},
+{
+"start": 786.42,
+"label": "substantive",
+"topic": "jeff_examples",
+"end": 800.94
+},
+{
+"start": 801.96,
+"label": "substantive",
+"topic": "jeff_examples",
+"end": 812.4
+},
+{
+"start": 814.1,
+"label": "substantive",
+"topic": "jeff_examples",
+"end": 836.38
+},
+{
+"start": 838.22,
+"label": "substantive",
+"topic": "jeff_examples",
+"end": 861.64
+},
+{
+"start": 863.24,
+"label": "substantive",
+"topic": "jeff_close",
+"end": 881.72
+},
+{
+"start": 883.24,
+"label": "procedural",
+"topic": null,
+"end": 892.8
+},
+{
+"start": 895.22,
+"label": "procedural",
+"topic": null,
+"end": 900.82
+},
+{
+"start": 901.96,
+"label": "substantive",
+"topic": "david_history",
+"end": 935.06
+},
+{
+"start": 936.1,
+"label": "substantive",
+"topic": "david_history",
+"end": 958.98
+},
+{
+"start": 959.78,
+"label": "substantive",
+"topic": "david_ops",
+"end": 1012.0
+},
+{
+"start": 1013.38,
+"label": "substantive",
+"topic": "david_opendata",
+"end": 1047.86
+},
+{
+"start": 1048.72,
+"label": "substantive",
+"topic": "david_opendata",
+"end": 1068.14
+},
+{
+"start": 1069.32,
+"label": "substantive",
+"topic": "david_opendata",
+"end": 1073.66
+},
+{
+"start": 1074.82,
+"label": "substantive",
+"topic": "david_future",
+"end": 1093.16
+},
+{
+"start": 1094.18,
+"label": "procedural",
+"topic": null,
+"end": 1102.66
+},
+{
+"start": 1105.06,
+"label": "procedural",
+"topic": null,
+"end": 1105.92
+},
+{
+"start": 1107.0,
+"label": "substantive",
+"topic": "birgit_fuels",
+"end": 1145.98
+},
+{
+"start": 1146.64,
+"label": "substantive",
+"topic": "birgit_fuels",
+"end": 1177.54
+},
+{
+"start": 1178.62,
+"label": "substantive",
+"topic": "birgit_fuels",
+"end": 1187.46
+},
+{
+"start": 1188.86,
+"label": "substantive",
+"topic": "birgit_severity",
+"end": 1203.94
+},
+{
+"start": 1205.32,
+"label": "substantive",
+"topic": "birgit_severity",
+"end": 1235.72
+},
+{
+"start": 1236.68,
+"label": "substantive",
+"topic": "birgit_severity",
+"end": 1247.76
+},
+{
+"start": 1248.86,
+"label": "substantive",
+"topic": "birgit_regen",
+"end": 1296.18
+},
+{
+"start": 1296.92,
+"label": "substantive",
+"topic": "birgit_regen",
+"end": 1300.18
+},
+{
+"start": 1301.0,
+"label": "procedural",
+"topic": null,
+"end": 1304.34
+},
+{
+"start": 1307.04,
+"label": "procedural",
+"topic": null,
+"end": 1308.68
+},
+{
+"start": 1308.88,
+"label": "substantive",
+"topic": "inbal_history",
+"end": 1338.68
+},
+{
+"start": 1339.6,
+"label": "substantive",
+"topic": "inbal_history",
+"end": 1364.68
+},
+{
+"start": 1365.6,
+"label": "substantive",
+"topic": "inbal_history",
+"end": 1383.84
+},
+{
+"start": 1385.24,
+"label": "substantive",
+"topic": "inbal_record",
+"end": 1409.96
+},
+{
+"start": 1411.36,
+"label": "substantive",
+"topic": "inbal_record",
+"end": 1444.1
+},
+{
+"start": 1445.0,
+"label": "substantive",
+"topic": "inbal_record",
+"end": 1475.44
+},
+{
+"start": 1476.44,
+"label": "substantive",
+"topic": "inbal_harvest",
+"end": 1485.78
+},
+{
+"start": 1486.8,
+"label": "procedural",
+"topic": null,
+"end": 1498.86
+},
+{
+"start": 1500.6,
+"label": "substantive",
+"topic": "q1",
+"end": 1523.66
+},
+{
+"start": 1526.3,
+"label": "substantive",
+"topic": "q1",
+"end": 1572.4
+},
+{
+"start": 1573.72,
+"label": "substantive",
+"topic": "q1",
+"end": 1625.08
+},
+{
+"start": 1625.82,
+"label": "substantive",
+"topic": "q1",
+"end": 1661.44
+},
+{
+"start": 1662.04,
+"label": "substantive",
+"topic": "q1",
+"end": 1688.66
+},
+{
+"start": 1688.9,
+"label": "substantive",
+"topic": "q1",
+"end": 1703.6
+},
+{
+"start": 1706.61,
+"label": "procedural",
+"topic": null,
+"end": 1710.87
+},
+{
+"start": 1712.05,
+"label": "substantive",
+"topic": "q2",
+"end": 1748.39
+},
+{
+"start": 1751.36,
+"label": "substantive",
+"topic": "q2",
+"end": 1773.1
+},
+{
+"start": 1773.88,
+"label": "substantive",
+"topic": "q2",
+"end": 1826.42
+},
+{
+"start": 1827.14,
+"label": "substantive",
+"topic": "q2",
+"end": 1857.98
+},
+{
+"start": 1859.54,
+"label": "substantive",
+"topic": "q2",
+"end": 1878.52
+},
+{
+"start": 1878.52,
+"label": "substantive",
+"topic": "q2",
+"end": 1936.28
+},
+{
+"start": 1938.44,
+"label": "substantive",
+"topic": "q2",
+"end": 1959.82
+},
+{
+"start": 1961.1,
+"label": "substantive",
+"topic": "q2",
+"end": 1989.0
+},
+{
+"start": 1990.12,
+"label": "substantive",
+"topic": "q2",
+"end": 2014.64
+},
+{
+"start": 2015.64,
+"label": "substantive",
+"topic": "q2",
+"end": 2024.96
+},
+{
+"start": 2027.72,
+"label": "procedural",
+"topic": null,
+"end": 2032.62
+},
+{
+"start": 2033.12,
+"label": "substantive",
+"topic": "q3",
+"end": 2047.9
+},
+{
+"start": 2050.24,
+"label": "substantive",
+"topic": "q3",
+"end": 2079.36
+},
+{
+"start": 2080.4,
+"label": "substantive",
+"topic": "q3",
+"end": 2093.0
+},
+{
+"start": 2093.46,
+"label": "substantive",
+"topic": "q3",
+"end": 2121.56
+},
+{
+"start": 2122.34,
+"label": "substantive",
+"topic": "q3",
+"end": 2148.02
+},
+{
+"start": 2150.21,
+"label": "procedural",
+"topic": null,
+"end": 2154.33
+},
+{
+"start": 2154.95,
+"label": "substantive",
+"topic": "q4",
+"end": 2193.85
+},
+{
+"start": 2196.42,
+"label": "substantive",
+"topic": "q4",
+"end": 2243.6
+},
+{
+"start": 2244.3,
+"label": "substantive",
+"topic": "q4",
+"end": 2263.8
+},
+{
+"start": 2264.44,
+"label": "substantive",
+"topic": "q4",
+"end": 2289.44
+},
+{
+"start": 2290.48,
+"label": "procedural",
+"topic": null,
+"end": 2296.54
+},
+{
+"start": 2297.14,
+"label": "substantive",
+"topic": "q5",
+"end": 2327.0
+},
+{
+"start": 2329.27,
+"label": "substantive",
+"topic": "q5",
+"end": 2375.53
+},
+{
+"start": 2376.27,
+"label": "substantive",
+"topic": "q5",
+"end": 2392.19
+},
+{
+"start": 2393.01,
+"label": "substantive",
+"topic": "q5",
+"end": 2476.73
+},
+{
+"start": 2477.91,
+"label": "substantive",
+"topic": "q5",
+"end": 2487.79
+},
+{
+"start": 2488.43,
+"label": "substantive",
+"topic": "q5",
+"end": 2518.19
+},
+{
+"start": 2521.49,
+"label": "procedural",
+"topic": null,
+"end": 2524.99
+},
+{
+"start": 2525.63,
+"label": "substantive",
+"topic": "q6",
+"end": 2550.35
+},
+{
+"start": 2554.61,
+"label": "substantive",
+"topic": "q6",
+"end": 2624.47
+},
+{
+"start": 2625.85,
+"label": "substantive",
+"topic": "q6",
+"end": 2635.31
+},
+{
+"start": 2636.81,
+"label": "substantive",
+"topic": "q6",
+"end": 2659.33
+},
+{
+"start": 2660.11,
+"label": "substantive",
+"topic": "q6",
+"end": 2694.39
+},
+{
+"start": 2694.77,
+"label": "substantive",
+"topic": "q6",
+"end": 2723.55
+},
+{
+"start": 2725.07,
+"label": "substantive",
+"topic": "q6_part2",
+"end": 2800.87
+},
+{
+"start": 2801.91,
+"label": "substantive",
+"topic": "q6_part2",
+"end": 2820.57
+},
+{
+"start": 2821.81,
+"label": "substantive",
+"topic": "q6_part2",
+"end": 2836.63
+},
+{
+"start": 2837.77,
+"label": "procedural",
+"topic": null,
+"end": 2844.75
+},
+{
+"start": 2845.01,
+"label": "substantive",
+"topic": "q7",
+"end": 2857.27
+},
+{
+"start": 2859.95,
+"label": "substantive",
+"topic": "q7",
+"end": 2892.41
+},
+{
+"start": 2896.2,
+"label": "procedural",
+"topic": null,
+"end": 2919.16
+},
+{
+"start": 2921.79,
+"label": "substantive",
+"topic": "hist_intro",
+"end": 2943.1
+},
+{
+"start": 2944.26,
+"label": "substantive",
+"topic": "hist_origins",
+"end": 2955.26
+},
+{
+"start": 2957.94,
+"label": "substantive",
+"topic": "hist_origins",
+"end": 2985.17
+},
+{
+"start": 2986.59,
+"label": "substantive",
+"topic": "hist_70s",
+"end": 3001.07
+},
+{
+"start": 3002.39,
+"label": "substantive",
+"topic": "hist_tm",
+"end": 3020.41
+},
+{
+"start": 3021.99,
+"label": "substantive",
+"topic": "hist_tm",
+"end": 3048.16
+},
+{
+"start": 3051.85,
+"label": "substantive",
+"topic": "hist_l7",
+"end": 3072.69
+},
+{
+"start": 3073.81,
+"label": "substantive",
+"topic": "hist_l7",
+"end": 3089.11
+},
+{
+"start": 3093.15,
+"label": "substantive",
+"topic": "hist_l7",
+"end": 3102.15
+},
+{
+"start": 3103.65,
+"label": "substantive",
+"topic": "hist_free",
+"end": 3120.71
+},
+{
+"start": 3124.54,
+"label": "substantive",
+"topic": "hist_l8",
+"end": 3148.86
+},
+{
+"start": 3149.78,
+"label": "substantive",
+"topic": "hist_l8",
+"end": 3163.06
+},
+{
+"start": 3165.46,
+"label": "substantive",
+"topic": "hist_l9",
+"end": 3176.9
+},
+{
+"start": 3179.28,
+"label": "substantive",
+"topic": "hist_l9",
+"end": 3191.2
+},
+{
+"start": 3207.95,
+"label": "substantive",
+"topic": "orbit",
+"end": 3223.59
+},
+{
+"start": 3224.75,
+"label": "substantive",
+"topic": "orbit",
+"end": 3268.11
+}
+]
+}
