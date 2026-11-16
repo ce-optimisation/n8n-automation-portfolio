@@ -39,6 +39,8 @@ from .db import Database
 log = logging.getLogger("clipengine.monitor")
 
 KINDS = ("feed", "channel", "hls")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+MIN_POLL_MINUTES = {"channel": 5}        # a channel listing is a full page fetch; be a polite client
 LIVE_STATES = ("recording", "finalizing")
 MEDIA_NS = "{http://search.yahoo.com/mrss/}"
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
@@ -78,7 +80,8 @@ def add_source(settings: Settings, db: Database, *, name: str, kind: str, url: s
         raise ValueError(f"kind must be one of {KINDS}")
     ok, msg = check_source_allowed(settings, db, url)
     sid = db.insert("sources", name=name.strip()[:200] or url, kind=kind, url=url.strip(),
-                    enabled=1 if ok else 0, poll_minutes=max(2, int(poll_minutes)), record_live=int(record_live),
+                    enabled=1 if ok else 0, poll_minutes=max(MIN_POLL_MINUTES.get(kind, 2), int(poll_minutes)),
+                    record_live=int(record_live),
                     backfill=max(0, int(backfill)), authorisation=authorisation.strip()[:1000],
                     status="new" if ok else "blocked", status_detail=msg, next_check=0)
     return sid, ok, msg
@@ -184,10 +187,19 @@ def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
     """yt-dlp flat listing of a channel/page (only called for authorised domains)."""
     import yt_dlp
     opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "playlistend": limit,
-            "skip_download": True, "http_headers": {"User-Agent": settings.http_user_agent}, "socket_timeout": 30}
+            "skip_download": True, "http_headers": {"User-Agent": settings.http_user_agent}, "socket_timeout": 30,
+            "color": "never", "retries": 1, "extractor_retries": 0}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
-    entries = info.get("entries") or [info]
+    if info.get("_type") == "playlist" or "entries" in info:
+        entries = list(info.get("entries") or [])
+        if not entries:
+            # A channel page that lists nothing is not "one video called <channel>": the site most
+            # likely served an empty or challenge page to an automated client.
+            raise ingest.SourceError("empty_listing", "The channel page listed no videos. The site may be limiting "
+                                                      "or filtering automated requests; nothing was imported.")
+    else:
+        entries = [info]            # the address is a single video page
     out = []
     for e in entries:
         if not e:
@@ -409,6 +421,9 @@ class SourceMonitor:
                 result["new"] = self._handle_vods(src, parse_feed(text, final), first)
             elif src["kind"] == "channel":
                 entries = self.lister(self.settings, src["url"])
+                # Drop a bogus "the channel itself" item left by an earlier empty listing.
+                self.db.execute("DELETE FROM source_items WHERE source_id=? AND state='baseline' AND kind='vod' "
+                                "AND (url=? OR url IS NULL)", (sid, src["url"]))
                 live = [e for e in entries if e.get("live")]
                 result["new"] = self._handle_vods(src, [e for e in entries if not e.get("live")], first)
                 if live and src["record_live"]:
@@ -424,9 +439,18 @@ class SourceMonitor:
         except Exception as e:  # noqa: BLE001 - recorded and backed off, never fatal
             n = src["consecutive_errors"] + 1
             delay = min(6 * 3600, src["poll_minutes"] * 60 * 2 ** min(n, 6))
+            text = ANSI_RE.sub("", f"{type(e).__name__}: {e}")
+            if "429" in text or "too many requests" in text.lower():
+                # The site is rate-limiting us. Hammering it makes that worse and is not what any
+                # permission covers: wait at least 30 minutes (longer after repeated refusals).
+                delay = max(delay, min(6 * 3600, 1800 * 2 ** min(n - 1, 3)))
+                text = (f"The site refused the request as too frequent (HTTP 429). The engine will wait "
+                        f"{int(delay // 60)} minutes before checking again; pressing “Check now” repeatedly makes "
+                        "this worse. If it persists, ask the site how they want automated access made (for "
+                        "example allow-listing this engine's User-Agent or your IP address). Details: " + text)
             self.db.update("sources", sid, status="error", last_checked=time.time(), consecutive_errors=n,
-                           last_error=f"{type(e).__name__}: {e}"[:1000], next_check=time.time() + delay)
-            result["error"] = str(e)
+                           last_error=text[:1000], next_check=time.time() + delay)
+            result["error"] = text
             log.warning("source %s poll failed: %s", sid, e)
         return result
 

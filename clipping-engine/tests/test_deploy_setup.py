@@ -523,3 +523,46 @@ def test_america_first_plus_and_rumble_are_never_fetched_without_written_permiss
                follow_redirects=False)
     assert r.status_code == 303
     assert db.one("SELECT COUNT(*) n FROM pending_sources")["n"] == 1 and db.one("SELECT COUNT(*) n FROM jobs")["n"] == 0
+
+
+def test_rate_limited_or_empty_channel_listing_backs_off_and_imports_nothing(settings, monkeypatch):
+    """What happened on the owner's first real check: the site answered 429 / an empty listing."""
+    import sys
+    import types
+    from clipengine import ingest as ing
+    monkeypatch.setattr(ing, "resolve_host", lambda h: ["93.184.216.34"])
+    settings.allowed_url_domains = ["example.org"]
+    db = Database(settings.db_path)
+    mon = monitor.SourceMonitor(settings, db, JobQueue(db))
+    sid, ok, _ = monitor.add_source(settings, db, name="Chan", kind="channel", url="https://example.org/c/x",
+                                    poll_minutes=2)
+    assert ok and db.one("SELECT poll_minutes FROM sources")["poll_minutes"] == 5      # polite minimum for channels
+
+    class FakeYDL:                                       # MOCK yt-dlp: a channel page that lists nothing
+        result = {"_type": "playlist", "id": "x", "title": "x", "entries": []}
+
+        def __init__(self, opts): self.opts = opts
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=False): return dict(self.result)
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYDL))
+    res = mon.poll(sid)
+    assert "listed no videos" in res["error"]
+    assert db.one("SELECT COUNT(*) n FROM source_items")["n"] == 0       # never "one video called <channel>"
+    FakeYDL.result = {"id": "v1", "title": "A single video", "webpage_url": "https://example.org/v1"}
+    assert [e["key"] for e in monitor.list_channel(settings, "https://example.org/v1")] == ["v1"]
+
+    def limited(settings_, url, limit=15):
+        raise RuntimeError("\x1b[0;31mERROR:\x1b[0m x: Unable to download webpage: HTTP Error 429: Too Many Requests")
+    mon.lister = limited
+    db.execute("UPDATE sources SET next_check=0, consecutive_errors=0")
+    before = time.time()
+    res = mon.poll(sid)
+    src = db.one("SELECT * FROM sources")
+    assert "too frequent (HTTP 429)" in src["last_error"] and "\x1b" not in src["last_error"]
+    assert src["next_check"] - before >= 1800 - 5                         # waits at least 30 minutes
+    # a leftover bogus item from an earlier empty listing is removed by the next good listing
+    db.insert("source_items", source_id=sid, item_key="x", title="x", url="https://example.org/c/x", state="baseline")
+    mon.lister = lambda s_, u, limit=15: [{"key": "a", "title": "Ep", "url": "https://example.org/a.mp4", "live": False}]
+    mon.poll(sid)
+    assert [r["item_key"] for r in db.query("SELECT item_key FROM source_items")] == ["a"]
