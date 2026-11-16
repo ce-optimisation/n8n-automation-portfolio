@@ -152,7 +152,19 @@ def supervise(child_args: list[str], max_restarts_per_10min: int = 5, sleep=time
         sleep(delay)
 
 
+def _tolerant_console() -> None:
+    """When output is redirected on Windows (installer -NonInteractive, autostart, logs), Python writes
+    cp1252 and a character such as an arrow or a dash would raise UnicodeEncodeError and stop setup.
+    Replace what the console cannot show instead of crashing."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001 - not a text stream (tests, embedded)
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerant_console()
     ap = argparse.ArgumentParser(prog="clipengine")
     ap.add_argument("--check", action="store_true", help="validate dependencies and exit")
     ap.add_argument("--no-browser", action="store_true")

@@ -655,3 +655,16 @@ def test_download_resolution_fits_free_disk_space():
     assert exc.value.retry_after == 3600 and "1.8 GB is free" in str(exc.value)
     # no duration or formats known: the previous default is kept
     assert ingest.fit_format_to_disk({}, 0) == "bv*[height<=1080]+ba/b[height<=1080]/b"
+
+
+def test_setup_output_survives_a_cp1252_console():
+    """Regression (owner's PC, 16 Nov 2026): the installer's -NonInteractive run redirects output, so Python
+    wrote cp1252 and the low-disk warning's arrow raised UnicodeEncodeError, stopping setup at step 1."""
+    import subprocess
+    code = ("import sys; from clipengine.__main__ import _tolerant_console; _tolerant_console(); "
+            "print('[WARN] Disk: 1.8 GB free → free some space — then retry')")
+    env = dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONUTF8="0")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, env=env,
+                       cwd=str(Path(__file__).resolve().parents[1]))
+    assert r.returncode == 0, r.stderr.decode("cp1252", "replace")
+    assert b"free some space" in r.stdout
