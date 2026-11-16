@@ -49,7 +49,8 @@ USER_AGENT = "LocalClippingEngine/1.1 (local editorial review tool)"
 RESTRICTED_PLATFORMS = {
     "youtube.com": "YouTube's Terms of Service prohibit downloading except through a feature YouTube provides. Creators can download their own uploads from YouTube Studio.",
     "youtu.be": "YouTube's Terms of Service prohibit downloading except through a feature YouTube provides.",
-    "rumble.com": "Rumble's Terms of Use prohibit automated access to the site without Rumble's prior written permission. Obtain the original file from the creator/rights holder, or record Rumble's written permission in Settings.",
+    "rumble.com": "Rumble's Terms of Use (section “Restrictions on automated software”) prohibit any automated access to the site without Rumble's prior written permission. Obtain the original file from the creator/rights holder, or record Rumble's written permission in Settings.",
+    "americafirst.plus": "America First Plus is a paid subscription archive (NJF LLC) whose Terms of Service forbid copying, scraping or extracting its content without the owner's express prior written consent. Nothing is fetched from it. Ask the rights holder for the file (or their written consent, recorded in Settings), then attach the file to this link.",
     "tiktok.com": "TikTok's terms prohibit automated scraping/downloading.",
     "instagram.com": "Instagram's terms prohibit automated collection of content.",
     "facebook.com": "Meta's terms prohibit automated collection of content.",

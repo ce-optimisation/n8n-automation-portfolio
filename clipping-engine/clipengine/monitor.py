@@ -243,34 +243,39 @@ def verify_recording(path: Path, min_seconds: float) -> tuple[bool, list[str], d
 # ---- restart overlap ----------------------------------------------------------------
 
 def _video_packets(path: Path, *, head: float | None = None, tail: float | None = None) -> list[tuple[float, str]]:
-    """(dts seconds, content hash) for the video packets at the start or end of a file.
-    Stream-copied packets from the same broadcast are byte-identical, so equal hashes mean
-    the same picture data."""
+    """(dts seconds, signature) for the video packets at the start or end of a file.
+    The signature is the packet's content hash when ffprobe provides one (stream-copied packets
+    of the same broadcast are byte-identical), otherwise its size and flags."""
     ffprobe = media.require("ffprobe")
     args = [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_data_hash", "md5",
-            "-show_entries", "packet=dts_time,pts_time,data_hash", "-of", "csv=p=0"]
+            "-show_entries", "packet=dts_time,pts_time,size,flags,data_hash", "-of", "json"]
     if head:
-        args += ["-read_intervals", f"%+{head:g}"]
+        args += ["-read_intervals", f"%+{head:.3f}"]
     elif tail:
-        fmt = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=start_time,duration", "-of",
-                              "csv=p=0", str(path)], capture_output=True, text=True, **media._popen_kwargs())
+        fmt = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=start_time,duration", "-of", "json",
+                              str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             **media._popen_kwargs())
         try:
-            start, dur = (float(x) for x in fmt.stdout.strip().split(",")[:2])
-            args += ["-read_intervals", f"{max(start, start + dur - tail):g}%"]
-        except ValueError:
+            f = json.loads(fmt.stdout or "{}").get("format", {})
+            start, dur = float(f.get("start_time") or 0.0), float(f["duration"])
+            args += ["-read_intervals", f"{max(start, start + dur - tail):.3f}%"]
+        except (ValueError, KeyError, TypeError):
             pass                      # unknown duration: read the whole file
     proc = subprocess.run(args + [str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                           **media._popen_kwargs())
+    try:
+        packets = json.loads(proc.stdout or "{}").get("packets", [])
+    except ValueError:
+        return []
     out: list[tuple[float, str]] = []
-    for ln in proc.stdout.splitlines():
-        parts = ln.strip().split(",")
-        digest = next((x for x in parts if x.startswith("MD5:")), None)
-        times = [x for x in parts[:2] if x and x != "N/A"]
-        if digest and times:
-            try:
-                out.append((float(times[0]), digest))
-            except ValueError:
-                continue
+    for pk in packets:
+        t = pk.get("dts_time") if pk.get("dts_time") not in (None, "N/A") else pk.get("pts_time")
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            continue
+        sig = pk.get("data_hash") or f"size:{pk.get('size')}:{(pk.get('flags') or '')[:1]}"
+        out.append((t, sig))
     return out
 
 
@@ -279,27 +284,34 @@ def find_overlap(prev: Path, nxt: Path, window: float = 180.0, min_run: int = 5)
     `prev` already holds? Returns (time in `prev` where the repeated part begins, number of
     repeated video packets), or None when there is no repeat.
 
-    A match needs an unbroken run of identical packets from the first packet of `nxt` either to
-    (within three packets of) the end of `prev` or for the whole inspected head, and at least
-    `min_run` of them, so a single coincidental frame can never trim footage."""
+    A match needs an unbroken run of identical packets starting at the first packet of `nxt`
+    and reaching (to within three packets of) the end of `prev` or the end of the inspected
+    head — and at least `min_run` of them (30 when only packet sizes are available) — so a
+    coincidental frame can never trim footage. The crash that interrupted `prev` may have cut
+    its last packets short; those are dropped with the repeat. The latest qualifying position
+    is used, so the smallest possible amount is ever removed."""
     try:
         heads = _video_packets(nxt, head=window)
         tails = _video_packets(prev, tail=window)
     except Exception:  # noqa: BLE001 - detection is best effort; never block finalisation
         return None
+    if heads and not heads[0][1].startswith("MD5:") and not heads[0][1].startswith("md5:"):
+        min_run = max(min_run, 30)            # size-only signatures need a much longer run
     if len(heads) < min_run or len(tails) < min_run:
         return None
-    first = heads[0][1]
-    for k in range(len(tails)):
-        if tails[k][1] != first:
-            continue
-        m = 0
-        while k + m < len(tails) and m < len(heads) and tails[k + m][1] == heads[m][1]:
-            m += 1
-        # The interrupted recorder's very last packets may be cut short by the crash, so the run
-        # may stop a few packets before the end of `prev`; those damaged packets are dropped too.
-        if m >= min_run and (k + m >= len(tails) - 3 or m == len(heads)):
-            return tails[k][0], len(tails) - k
+    # Some FFmpeg versions write the very first packet of a file slightly differently (parameter
+    # sets are repeated in front of the first keyframe), so if anchoring on packet 0 finds
+    # nothing, anchor on packet 1 and step the cut point back by one.
+    for anchor in (0, 1):
+        first = heads[anchor][1]
+        for k in range(len(tails) - 1, anchor - 1, -1):
+            if tails[k][1] != first:
+                continue
+            m = 0
+            while k + m < len(tails) and anchor + m < len(heads) and tails[k + m][1] == heads[anchor + m][1]:
+                m += 1
+            if m >= min_run and (k + m >= len(tails) - 3 or anchor + m == len(heads)):
+                return tails[k - anchor][0], len(tails) - (k - anchor)
     return None
 
 

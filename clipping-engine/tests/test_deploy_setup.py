@@ -499,3 +499,27 @@ def test_launcher_and_installer_files_are_well_formed():
     assert "/XD .venv data tools" in ps and "/XF .env" in ps              # an update never overwrites owner data
     assert "LOCALAPPDATA" in ps and "RunAs" not in ps                    # no administrator elevation
     assert sys.version_info >= (3, 10)
+
+
+def test_america_first_plus_and_rumble_are_never_fetched_without_written_permission(settings, monkeypatch):
+    """The owner's stated sources: the verified Rumble channel and the paid AF+ archive."""
+    from clipengine import ingest as ing
+    monkeypatch.setattr(ing, "resolve_host", lambda h: ["93.184.216.34"])
+    db = Database(settings.db_path)
+    for url, word in (("https://rumble.com/c/nickjfuentes", "Rumble"),
+                      ("https://rumble.com/v7i48ms-america-first-ep.-1776.html", "Rumble"),
+                      ("https://americafirst.plus/", "subscription"),
+                      ("https://www.americafirst.plus/live", "subscription")):
+        d = ingest.classify_url(url, settings, db)
+        assert d.method == "link_only" and d.code == "restricted_platform" and word in d.message, url
+        sid, ok, msg = monitor.add_source(settings, db, name=url, kind="channel", url=url)
+        assert not ok and "written" in msg
+        assert monitor.set_enabled(settings, db, sid, True)[0] is False
+    settings.allowed_url_domains = ["rumble.com", "americafirst.plus"]      # an allowlist entry is NOT enough
+    assert ingest.classify_url("https://rumble.com/c/nickjfuentes", settings, db).method == "link_only"
+    assert monitor.check_source_allowed(settings, db, "https://americafirst.plus/")[0] is False
+    c = TestClient(create_app(settings, start_worker=False))
+    r = c.post("/import/url", data={"url": "https://rumble.com/v7i48ms-america-first-ep.-1776.html", "attest": "yes"},
+               follow_redirects=False)
+    assert r.status_code == 303
+    assert db.one("SELECT COUNT(*) n FROM pending_sources")["n"] == 1 and db.one("SELECT COUNT(*) n FROM jobs")["n"] == 0

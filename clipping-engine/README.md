@@ -14,7 +14,7 @@ provenance kept throughout. It is not a growth or promotion engine.
 | UI | Server-rendered HTML, HTMX and responsive CSS; works on a phone |
 | Media | FFmpeg / FFprobe: x264 + AAC, libass captions, EBU R128 loudness |
 | Speech | faster-whisper with Silero VAD, word timestamps, CPU or NVIDIA GPU; long recordings are transcribed in checkpointed chunks |
-| Selection | Content-led scorer (profile v3): clip length follows natural topic boundaries; optional local Ollama re-ranking among real candidates only |
+| Selection | Content-led scorer (profile v4): clip length follows natural topic boundaries, and a clip must begin where a thought begins; optional local Ollama re-ranking among real candidates only |
 | Captions | Approved minimalist style: bundled **Anton** font, sentence case, white with a black outline, compact, lower-middle |
 | Automation | Authorised source monitoring (feeds, live HLS streams, permitted channels) → automatic import, clipping and an email when clips are ready |
 | Publishing | Official TikTok Content Posting API (upload to inbox) and Instagram Graph API (Reels), run as resumable background jobs |
@@ -25,21 +25,47 @@ There is no Docker, Redis, Postgres, cloud service, paid API or subscription.
 
 ## 1. Install and launch (Windows)
 
-1. Download the repository and extract it to a local folder. Avoid OneDrive-synced folders for the data, because
-   videos are large.
-2. Double-click **`clipping-engine\Start-Clipping-Engine.cmd`**. The launcher:
-   - finds Python 3.12, 3.13, 3.11 or 3.10. If none is found, it offers `winget install Python.Python.3.12`, which
-     needs no admin rights.
-   - creates a private `.venv` and installs the packages. This happens on first run and again only when
-     `requirements.txt` changes.
-   - finds FFmpeg in `tools\ffmpeg\bin`, on PATH, or in the WinGet links folder. If it is missing, it offers
-     `winget install Gyan.FFmpeg`.
-   - creates `.env` from `.env.example`.
-   - prints the detected hardware, the chosen speech model and practical tips.
-   - opens **http://127.0.0.1:8765**.
-3. Open **Settings → Setup checklist**. It shows what is ready and the next action for anything that isn't. Use
-   **Download Whisper model now** to fetch the speech model (75 MB–3 GB) once while you are online. The launcher
-   option `--download-model` does the same.
+**Easiest: the one-click installer.**
+
+1. Open <https://github.com/ce-optimisation/n8n-automation-portfolio/tree/claude/optimistic-noether-k52qjf/clipping-engine>,
+   click **`Install-Clipping-Engine.cmd`**, then the **Download raw file** button (top right of the file view).
+2. Double-click the downloaded file. If Windows SmartScreen appears, choose **More info → Run anyway**.
+   No administrator rights are needed. The installer:
+   - downloads the project and copies it to **`%LOCALAPPDATA%\ClippingEngine`** (a local folder, not OneDrive);
+   - creates a **Clipping Engine** shortcut on the Desktop and in the Start menu;
+   - starts the launcher with the setup assistant (below).
+3. Running the installer again later **updates** the engine. Your `.env`, `data\` (recordings, clips, database),
+   `.venv\` and `tools\` are never overwritten.
+
+You can instead download the branch ZIP, extract it anywhere and double-click
+`clipping-engine\Install-Clipping-Engine.cmd` (installs from the extracted copy) or
+`clipping-engine\Start-Clipping-Engine.cmd` (runs in place).
+
+**What the launcher (`Start-Clipping-Engine.cmd`) does every time:**
+
+- finds Python 3.10–3.13. If none is found it offers to install Python 3.12 for your user account (winget, or
+  the official python.org installer when winget is unavailable);
+- creates a private `.venv` and installs the packages (first run, and again only when `requirements.txt` changes);
+- finds FFmpeg in `tools\ffmpeg\bin`, on PATH or in the WinGet links folder. If it is missing it offers to
+  install it (winget, falling back to a portable download into `tools\ffmpeg` — `scripts\get_ffmpeg.py`);
+- creates `.env` from `.env.example`;
+- **on the first start, runs the setup assistant**, then starts the engine under a crash supervisor and opens
+  **http://127.0.0.1:8765**.
+
+**The setup assistant** (`Start-Clipping-Engine.cmd --setup` to run it again) is safe to close and re-run; it
+detects what is already done:
+
+1. reports this computer's CPU, RAM and GPU and the speech model chosen for it;
+2. downloads that speech model (once);
+3. **proves the whole workflow on this PC**: a bundled 32-second NASA briefing excerpt (genuine speech) is
+   transcribed with the real model, clipped and rendered with the approved captions; the result is saved to
+   `data\selftest\selftest_clip.mp4`;
+4. optional — phone access through Tailscale (§9);
+5. optional — the address for email notifications (§7b);
+6. optional — start at Windows sign-in and keep-awake while monitoring (§8).
+
+**Diagnostics:** `Start-Clipping-Engine.cmd --doctor` prints every check with its exact fix;
+add `--selftest` to repeat the real end-to-end run.
 
 If the launcher finds port 8765 in use, it either opens the engine that is already running or moves to the next
 free port. `Start-Clipping-Engine.cmd --check` validates the installation without starting the app. On
@@ -190,7 +216,7 @@ Rekordly (rekordly.in) couldn't be reached or found during evaluation, so it is 
   - Selection took 3.2 s. Six clips rendered in 8–13 s each, and no jobs failed.
   - 97.7% of the spoken vocabulary appeared in the transcript.
 
-## 5. How excerpts are chosen (profile v3, content-led)
+## 5. How excerpts are chosen (profile v4, content-led with context boundaries)
 
 There is **no preferred clip length.** A clip runs from a natural beginning to a natural end, which might be 15 s,
 40 s or two minutes. `CLIP_MIN_SECONDS` (15) and `CLIP_MAX_SECONDS` (150) are only safety limits.
@@ -235,6 +261,46 @@ real-Whisper long-form CI job reports the same metrics on a genuine transcript.
 
 **Measured:** v3 removes the duration target and never cut a topic's discussion short. It sometimes starts one
 paragraph into a topic. `SELECTION_PROFILE=v2` restores the previous behaviour.
+
+### Context boundaries (profile v4, the default)
+
+Profile v3 measured breaks only from vocabulary change and pauses. On genuine speech that was not enough: tested
+on a real 55-minute NASA/USGS briefing, v3 began a third of its clips in the middle of a sentence, ran half of them
+across several topics, and ended some on a hand-over ("I'd like to introduce…"). Profile v4 adds discourse cues that
+hold across formats (talks, panels, interviews, monologues):
+
+- a clip **never starts mid-sentence**;
+- a sentence that leans on earlier material is a poor first line and is scored down: "And/But/Because…", "also /
+  another / finally / for example…", "as I said earlier", "that question", a reply ("Yes…", "Thanks for the
+  question"), a short follow-up question ("Why does this matter?"), or an answer whose question would be cut off;
+- a **question stays with its answer**; a change of speaker, a hand-over, an announced new subject or a long
+  silence is a strong break that a clip should not straddle;
+- a clip does not open or close on greetings, thanks, hand-overs, housekeeping or stray fragments, and does not
+  end by announcing the next point;
+- substance is measured per unit of time, so length alone earns nothing;
+- after selection, each clip is checked against the one or two paragraphs around it: if a clean opening of the
+  same point lies just before the chosen start (or the point closes just after the chosen end), the clip is moved
+  to it — only when the enlarged clip still fits the limits and scores about as well. Clips are never padded.
+
+Durations stay content-led (15 s minimum, 150 s maximum, no target). `SELECTION_PROFILE=v3` restores the previous
+behaviour. Measured results (6 clips per recording; lower is better except the first two columns):
+
+| Transcript | Profile | Starts at a paragraph opening | Ends at a paragraph end | Starts mid-sentence | Spans >1 topic | Housekeeping at an edge | Starts mid-topic | Ends mid-topic |
+|---|---|---|---|---|---|---|---|---|
+| **Real speech**, NASA briefing 55 min, Whisper base.en | v3 | 0.67 | 0.83 | 0.17 | 0.50 | 0.0 | 0.0 ¹ | 0.33 |
+| | **v4** | **1.0** | **1.0** | **0.0** | 0.33 | 0.0 | 0.33 | **0.17** |
+| **Real speech**, same recording, Whisper small.en | v3 | 0.50 | 1.0 | 0.33 | 0.33 | 0.0 | 0.0 ¹ | 0.33 |
+| | **v4** | **0.83** | 0.83 | **0.0** | **0.17** | 0.0 | 0.33 | 0.50 |
+| Synthetic 58 min, exact timings | v3 | 1.0 | 1.0 | 0.0 | 0.0 | 0.0 | 0.33 | 0.0 |
+| | **v4** | 1.0 | 1.0 | 0.0 | 0.0 | 0.0 | **0.17** | 0.0 |
+| Synthetic 58 min, Whisper-like (TEST-ONLY perturbation) | v3 | 1.0 | 0.33 | 0.0 | 0.17 | 0.17 | 0.50 | 0.0 |
+| | **v4** | 1.0 | 0.0 | 0.0 | **0.0** | **0.0** | **0.17** | 0.17 |
+
+¹ v3's "0.0 starts mid-topic" on real speech is not a strength: those clips began mid-sentence or ran across whole
+topics. Each clip is one sixth (0.17) of a row, so single-step differences are within noise. **Still unresolved:**
+about one clip in three still ends while the same discussion continues (usually a complete sub-point of a longer
+answer), and long question-and-answer exchanges (over 150 s) cannot be kept whole. Reproduce with
+`python scripts/evaluate_selection.py tests/fixtures/landsat9_topics.json --transcript tests/fixtures/landsat9_whisper_base_en.json.gz`.
 
 ## 5b. Captions (approved style)
 
@@ -384,41 +450,39 @@ few minutes, whereas the alternative requires exposing a public endpoint.
 
 Meta allows 100 API-published posts per 24 hours.
 
-## 7b. Email notifications (Outlook)
+## 7b. Email notifications
 
-When all of a recording's clips are ready, **one** email lists them. It includes:
+When all of a recording's clips are ready, **one** email lists them: the title, the original recording date, the
+number of clips, and for each clip a small thumbnail, its duration, the opening words as a direct quote, and a link
+into your private dashboard (sign-in required). No MP4s are attached and no public media links are created.
+Optional alerts cover failed processing and low disk space.
 
-- the title, date and number of clips
-- a small thumbnail, duration and direct quote for each clip
-- links into your private dashboard (sign-in required)
-
-No MP4s are attached and no public media links are created. Optional alerts cover failed processing and low disk
-space. No "ready" email is sent if processing fails before clips exist.
-
-**Nothing is sent until you approve it.** Notifications are created as *held* until you open Settings →
-Notifications, preview a real sample, type the recipient and approve that wording. Changing the recipient or the
-template revokes the approval. Each notification has a duplicate-proof key, and sending runs as a retrying,
+**Nothing is sent until you approve it.** Notifications are prepared and *held* until you open **Settings →
+Notifications**, read a real sample, type the recipient and approve that wording. Changing the recipient, or a new
+version of the wording, cancels the approval. Each notification has a duplicate-proof key; sending is a retrying,
 restart-safe job.
 
-**Set-up (one-time, free):**
+Everything is set up on the **Settings → Notifications** page (no file editing):
 
-1. Sign in at <https://entra.microsoft.com> (or <https://portal.azure.com>) with your Microsoft account, then go to
-   **App registrations → New registration**.
-2. Name it `Clipping Engine`. Under supported account types, choose **Personal Microsoft accounts only** (or
-   *Any … and personal Microsoft accounts*). No redirect URI is needed.
-3. Under **Authentication**, set **Allow public client flows** to **Yes**.
-4. Under **API permissions**, add Microsoft Graph delegated permissions: `Mail.Send`, `User.Read` and
-   `offline_access`.
-5. Copy the **Application (client) ID** into `.env` as `OUTLOOK_CLIENT_ID`. It is not a secret, and no client
-   secret is needed.
-6. In `.env`, set `NOTIFY_TO` to your address and `DASHBOARD_URL` to the address you open the dashboard at (for
-   example, your Tailscale HTTPS address).
-7. Restart, then go to **Settings → Notifications → Connect Outlook**. On any device, open the Microsoft link
-   shown, enter the code, and sign in.
-8. Preview the sample, approve it, and optionally send yourself a test (you must type `SEND`).
+1. **Where to send** — your address and the dashboard address used in links (filled in automatically by Phone
+   access, §9).
+2. **Connect a sending account** — one of two supported ways:
+   - **Option A (about 3 minutes): send from a Gmail account** with a Google *app password*
+     (<https://myaccount.google.com/apppasswords>). The email still arrives in your Outlook inbox. The password is
+     kept in Windows Credential Manager, not in `.env`.
+   - **Option B: send from your Outlook.com account** through Microsoft Graph with a one-time device-code sign-in.
+     Microsoft requires an *Application (client) ID* for this. A personal Outlook.com account can only create one
+     after it has an Azure directory (<https://azure.microsoft.com/free>; Microsoft asks for a payment card to
+     verify identity; app registrations themselves are free). Then: entra.microsoft.com → App registrations → New
+     registration → **Personal Microsoft accounts only** → Authentication → **Allow public client flows: Yes** →
+     copy the Application (client) ID into the page → **Connect Outlook**.
 
-If Microsoft won't let a personal account create an app registration, set `NOTIFY_TRANSPORT=smtp` and use the
-`SMTP_*` settings with a mail account that allows authenticated SMTP submission.
+   Why two options: since 2024 Microsoft no longer lets an Outlook.com account register an application without a
+   directory, and Outlook.com no longer accepts passwords or app passwords for SMTP, so "just enter your Outlook
+   password" is not possible with any tool.
+3. **Read the sample and approve it.**
+4. **Optional test** (type `SEND`). "Sent" means the mail service accepted the message; check the inbox to
+   confirm delivery.
 
 ## 8. Reliability and storage
 
@@ -439,36 +503,56 @@ If Microsoft won't let a personal account create an app registration, set `NOTIF
   engine minimised in the background. It needs no administrator rights or Task Scheduler. The PC must be on for
   monitoring and processing to happen.
 - Disk space is checked hourly. Warnings appear on the dashboard, and in a daily email if approved.
+- **Keep-awake:** Windows suspends every program when the PC sleeps. While a recording or a processing job is
+  running the engine asks Windows not to sleep (a per-process request; no power setting is changed and the screen
+  can still turn off). Settings → *Running unattended* can extend this to "whenever a source is being monitored".
+  It cannot wake a sleeping PC, and a closed laptop lid still sleeps the machine unless you change that Windows
+  setting yourself. **Nothing runs while the PC is off.**
+- **The dashboard says what needs attention:** periods when the engine was not running (and that live broadcasts
+  in them were not recorded), monitoring switched off, sources lacking permission or failing, failed recordings or
+  jobs, expired email sign-in, and low disk space.
+- **Live recording restarts:** if the recorder is interrupted mid-broadcast it restarts three media segments
+  back, and the repeated footage is removed exactly when the recording is joined (verified frame-for-frame).
 
-## 9. Phone access, securely
+## 9. Phone access (private, through Tailscale)
 
-- **Without a password,** the dashboard only answers requests addressed to `localhost` on this PC. This also
-  blocks DNS-rebinding attacks.
-- **Recommended: Tailscale** (free, private, encrypted):
-  1. Install Tailscale on the PC and on your phone, and sign in with the same account. Download it from
-     <https://tailscale.com/download>.
-  2. Set `DASHBOARD_PASSWORD` in `.env` and restart.
-  3. On the PC, run `tailscale serve --bg 8765`.
-  4. On your phone, open `https://<pc-name>.<tailnet>.ts.net`.
+The PC does all recording and processing; the phone is a window onto its dashboard: status, clip previews,
+approve/reject, MP4 downloads and Ready to Post.
 
-  Nothing is exposed to the internet, and the app stays bound to 127.0.0.1.
-- **Home Wi-Fi only** (unencrypted): set `CLIPENGINE_HOST=0.0.0.0` and `DASHBOARD_PASSWORD`, and allow the
-  firewall prompt for *Private networks* only. The launcher refuses `0.0.0.0` without a password.
-- Login attempts are rate-limited (5 per 10 minutes). Cookies are HttpOnly, SameSite=strict, and Secure over
-  HTTPS. Cross-origin POSTs are refused.
-- Never port-forward the dashboard.
+1. Install **Tailscale** on the PC (<https://tailscale.com/download/windows>, or let the setup assistant run
+   `winget install Tailscale.Tailscale`) and sign in (free personal plan).
+2. In the dashboard open **Settings → Phone access → Set up phone access**. The engine then:
+   - creates a strong dashboard password if there is none (shown once; also saved in `.env`);
+   - runs `tailscale serve --bg 8765`, which publishes the dashboard **only inside your tailnet** over HTTPS;
+   - reads back this PC's real address (`https://<pc-name>.<tailnet>.ts.net`) from Tailscale, checks that it
+     answers, and saves it as `DASHBOARD_URL` so email links point to it.
+   If your tailnet has HTTPS switched off, the page shows Tailscale's own link to enable it; press the button again
+   afterwards.
+3. On the iPhone: install Tailscale from the App Store, sign in with the **same account**, leave it switched on,
+   open the address in Safari and sign in with the dashboard password. *Share → Add to Home Screen* gives an
+   app-like icon.
 
-## 9b. First run on Windows (shortest path)
+The engine stays bound to 127.0.0.1. Nothing is port-forwarded, and Tailscale *Funnel* (public exposure) is never
+enabled — if it is found switched on, the page says so and refuses to continue. Without a password the dashboard
+only answers on the PC itself. Sign-in attempts are rate-limited; cookies are HttpOnly, SameSite=strict and Secure
+over HTTPS; cross-origin POSTs are refused. Never port-forward the dashboard.
 
-1. Download the repository ZIP from GitHub (green **Code** button → Download ZIP, choosing the
-   `claude/optimistic-noether-k52qjf` branch) and extract it to a local folder, for example `C:\ClippingEngine`.
-2. Double-click `clipping-engine\Start-Clipping-Engine.cmd`, and answer **Y** if it offers to install Python or
-   FFmpeg.
-3. When the dashboard opens, go to **Settings**, click **Download Whisper model now**, and check the Setup
-   checklist.
-4. **Import → Upload** a short recording you are authorised to use, then wait for **Ready to Review** to show its
-   clips.
-5. Optional: enable start at sign-in, add authorised sources, and connect Outlook (§7b).
+## 9b. Older recordings and historical backfill
+
+- **A file you already have:** Import → Upload → *Older recording? Keep its history* — enter the original source
+  address and date. The address is stored as provenance only (nothing is downloaded from it), and the same file or
+  the same address is never imported twice.
+- **Many or large files:** copy them into the inbox folder. A date in the file name (`2024-05-03` or `20240503`)
+  becomes the original recording date; for full history add `<video name>.json` containing
+  `{"source_url": "https://…", "recorded_at": "2024-05-03", "title": "…"}`.
+- **A restricted platform's episode** (e.g. Rumble): paste the episode link on the Import page. It is saved as a
+  *pending source*; attach the file supplied by the rights holder. The link is kept as provenance.
+- **An authorised feed or channel:** the first check only *notes* what is already published (the baseline). Use
+  **Import older items** on the Sources page (or "Import existing items on first check" when adding the source) to
+  bring in earlier recordings. Every item is imported at most once.
+- Recordings are labelled **live capture** (recorded by the engine as broadcast), **archive** (an older recording
+  brought in later) or **recent**, with both the original date and the import date. Correct either on the
+  recording's page.
 
 ## 10. Tests
 

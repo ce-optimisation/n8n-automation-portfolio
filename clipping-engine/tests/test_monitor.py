@@ -151,7 +151,8 @@ def test_restart_overlap_is_detected_and_trimmed_exactly(tmp_path):
     a = record(parts[:5], "seg_001.ts")           # 0–10 s, then the recorder "crashed"
     b = record(parts[3:], "seg_002.ts")           # restarted two media segments back: 6 s → end
     hit = monitor.find_overlap(a, b)
-    assert hit and hit[1] >= 100                  # ~4 s of repeated video packets
+    pa, pb = monitor._video_packets(a, tail=180), monitor._video_packets(b, head=180)
+    assert hit and hit[1] >= 100, (len(pa), len(pb), pa[:2], pa[-2:], pb[:2])   # ~4 s of repeated video packets
     text, trims = monitor.concat_listing([a, b])
     assert "outpoint" in text and len(trims) == 1
     (tmp_path / "segments.txt").write_text(text, encoding="utf-8")
@@ -171,6 +172,20 @@ def test_restart_overlap_is_detected_and_trimmed_exactly(tmp_path):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "smptebars=size=320x180:rate=30", "-t", "4",
                     "-c:v", "libx264", "-preset", "ultrafast", "-f", "mpegts", str(other)], check=True)
     assert monitor.find_overlap(a, other) is None
+    # Without content hashes (older ffprobe), packet sizes still identify the repeat.
+    real = monitor._video_packets
+
+    def sizes_only(path, **kw):
+        import json as _j
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_entries",
+                              "packet=dts_time,size,flags", "-of", "json", str(path)], capture_output=True, text=True)
+        return [(float(p["dts_time"]), f"size:{p['size']}:{p['flags'][:1]}") for p in _j.loads(out.stdout)["packets"]]
+    monitor._video_packets = sizes_only
+    try:
+        hit2 = monitor.find_overlap(a, b)
+        assert hit2 and abs(hit2[0] - hit[0]) < 0.01 and monitor.find_overlap(a, c) is None
+    finally:
+        monitor._video_packets = real
 
 
 def wait_for(cond, timeout=90, step=0.5):

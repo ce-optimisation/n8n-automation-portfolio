@@ -77,6 +77,9 @@ jobs:
           python -m pip install -r requirements.txt playwright
           python -m playwright install chromium
 
+      - name: FFmpeg version on this runner
+        run: ffmpeg -hide_banner -version
+
       - name: Unit and integration tests (includes REAL Whisper transcription test)
         run: python -m pytest -v -rs
 

@@ -2,10 +2,11 @@
 
 > **For the next engineer or agent:** paste this whole file into a new Claude Code session, or say
 > "read `clipping-engine/HANDOFF.md` and continue". It is self-contained and consolidates **all** work from
-> session 1 (initial build), session 2 (continuation) and session 3 (final automation and deployment batch).
+> session 1 (initial build), session 2 (continuation), session 3 (automation batch) and **session 4 (Windows
+> deployment, onboarding and refinement — read §1B first)**.
 > Earlier handoff versions are in git history (`553c922`, the session-2 version in `ce0ba89`, then `c54dab7`).
-> The branch tip at the end of session 3 is `7449509`; CI on it and its parents is green (§1A.6). Treat this document as a map, not proof: re-inspect the
-> checkout and CI before relying on any claim.
+> Session 3 ended at `337c833`. Session 4's commits and CI runs are listed in §1B.9. Treat this document as a map,
+> not proof: re-inspect the checkout and CI before relying on any claim.
 
 ---
 
@@ -105,6 +106,161 @@ Sessions 1–2: see git history (`f95fa7a` … `c54dab7`).
 | #13 `43658247477` (push of `e9c735a`) | **Success** on Ubuntu and Windows (unit, integration, real Whisper, acceptance, launcher, autostart). The WinError 32 fix is confirmed. |
 | #14 `43658252185` (dispatch, 60 min, `e9c735a`) | **Success.** Real Whisper with crash/resume: 6/6 clips rendered, vocabulary recall 0.971, no failed jobs, work dir left empty. Real-transcript v3: ends_mid_topic **0.167** (was 0.5). |
 | #15 `43658369597` (push of `305bf24`) | **Success** on Ubuntu and Windows. |
+
+---
+
+## 1B. Session 4: deployment, onboarding and refinement (read this first)
+
+Session 4 ran in a **remote Linux container with no access to the owner's PC** (no computer was attached to the
+session). Everything Windows-specific was therefore verified on GitHub's `windows-latest` runner, not on the
+owner's machine. **The owner's PC has still never run the engine.**
+
+### 1B.1 Status after session 4
+
+| Area | Status | Evidence |
+|---|---|---|
+| One-click Windows install/update | **Verified on a clean Windows CI runner**; never run on the owner's PC | `windows-install` job: `Install-Clipping-Engine.cmd` → copy to install dir → venv → **portable FFmpeg downloaded** (none on PATH) → model → real self-test → shortcuts → update keeps `.env`/`data` → installed engine answers on :8765 |
+| Setup assistant + doctor + real self-test | **Verified** (Linux sandbox, Windows + Ubuntu CI) | 32 s bundled NASA speech: real Whisper 8/8 expected words, 1080×1920, Anton captions |
+| Genuine recording end to end | **Verified** with real Whisper (sandbox; CI on both OSes) | `scripts/real_recording_test.py`: 8-min NASA/USGS briefing, 11 checks |
+| Selection v4 (default) | **Verified; partly improved** (§1B.4) | real-speech fixture + synthetic sets; ends-mid-topic NOT resolved |
+| HLS restart overlap | **Fixed and verified** on a local real-time HLS stream with a hard-killed recorder | 0 repeated frames, frame-identical to source (§1B.5) |
+| Phone access (Tailscale) | **Implemented; tested against a labelled FAKE CLI only** | No real tailnet was available. Owner must install/sign in, then press one button |
+| Email notifications | **Implemented; mock-tested; NEVER SENT** | Guided page; template v2 awaits in-app approval |
+| Historical imports / backfill | **Verified** (tests + genuine run) | recorded date, origin, dedupe, explicit backfill |
+| Rumble / America First Plus | **Blocked by design; facts verified by web research** | §1B.7 |
+| TikTok / Instagram | Unchanged: implemented, mock-tested, **not connected**; nothing published | tests still green |
+
+### 1B.2 New files
+
+```
+Install-Clipping-Engine.cmd   one-click installer/updater (CRLF, ASCII). Works standalone (downloads install.ps1).
+scripts/install.ps1           copy/download → %LOCALAPPDATA%\ClippingEngine (robocopy /XD .venv data tools /XF .env),
+                              INSTALLED.txt, Desktop + Start-menu shortcuts, then launcher --setup. No elevation.
+scripts/get_ffmpeg.py         portable FFmpeg (BtbN GitHub build, fallback gyan.dev) into tools/ffmpeg/bin; verifies
+                              it runs and has libass + libx264.
+scripts/real_recording_test.py  genuine-recording acceptance (NASA Landsat 9 briefing excerpt, real Whisper).
+scripts/perturb_transcript.py   TEST-ONLY Whisper-like perturbation (was uncommitted in session 3).
+clipengine/setup_wizard.py    `--setup [--yes]`: resumable guided setup (6 steps).
+clipengine/doctor.py          `--doctor [--selftest]`: checks() + selftest() (own temp data dir; shares models).
+clipengine/tailscale.py       status(), serve_status(), enable_serve(), setup_phone_access(), verify().
+clipengine/health.py          Heartbeat (downtime log), items() for the dashboard banner, summary() for /api/status.
+clipengine/power.py           KeepAwake thread (SetThreadExecutionState; per-process, no system change).
+clipengine/assets/selftest/   nasa_landsat9_excerpt.m4a (32 s, 132 KB) + README.txt (source and rights).
+tests/test_selection_context.py, tests/test_deploy_setup.py, tests/fake_tailscale.py (TEST-ONLY fake CLI),
+tests/fixtures/landsat9_topics.json (hand annotation), landsat9_whisper_base_en.json.gz (real transcript).
+```
+
+### 1B.3 Launcher, installer, setup
+
+- `Start-Clipping-Engine.cmd` (still CRLF): `:find_python` also checks `%LOCALAPPDATA%\Programs\Python\Python3xx`
+  (a just-installed per-user Python is not on PATH yet); Python install via winget **or** the python.org installer
+  (`/quiet InstallAllUsers=0 PrependPath=1`) when winget is missing; FFmpeg via winget, falling back to
+  `scripts\get_ffmpeg.py`; first start (no `data\setup_state.json`, no arguments, interactive) runs `--setup`;
+  `--setup` is consumed by the launcher; other arguments pass through. `CLIPENGINE_AUTO_FFMPEG=1` allows the portable
+  download in non-interactive mode (used by the installer's `-NonInteractive`).
+- `__main__`: `--doctor`, `--selftest`, `--setup`, `--yes`. **Doctor/setup bypass `--supervise`** (a non-zero exit
+  would otherwise be "restarted" forever).
+- `config.py`: `env_file_path()` (`CLIPENGINE_ENV_FILE` override — tests set it; never write the real `.env` in tests),
+  `EDITABLE` map, `update_env_file()` (keeps comments/other keys; refuses newlines), `apply_settings()` (live +
+  `.env`), `Settings.prevent_sleep`, `.env_file`, `.models_path`.
+- Self-test: `doctor.selftest()` builds a test video from the bundled NASA audio + testsrc2, runs the real pipeline
+  in `work/selftest_*` with `models_path` shared, requires ≥4 of 8 expected words, a rendered 1080×1920 clip and
+  Anton `Dialogue:` lines, copies the clip to `data/selftest/`. It refuses to pass with the stub transcriber.
+
+### 1B.4 Selection profile v4 (`segment.py`, default; v3 kept)
+
+- `annotate_context()` after `annotate_boundaries()`: per sentence `follows_terminal`, `dependency` (0–1 with
+  reasons), `edge` (turn | handoff | fragment | aside), `opener`, `ctx`. Cue regexes at the top of the file
+  (TURN_START, HANDOFF, REPLY_START, ADDITIVE, LIST_CONTINUATION, BACK_REFERENCE, OPENER).
+- Boundary sharpening: pause ≥2.5 s → ≥0.85, ≥6 s → 1.0; next is a turn → ≥0.9; after a hand-over → ≥0.95; next is
+  an opener → ≥0.75; after a greeting/thanks → ≥0.8; non-terminal → ≤0.05; **after a question → ≤0.3**; next sentence
+  dependent → weakened.
+- `score_window` (v4): `context` penalty (head dependency, edge greeting/hand-over/fragment/aside, tail hand-over or
+  fragment, next sentence continues, inner boundary ≥0.9, tail announces the next point); legacy `start_pen` only
+  for un-annotated sentences; `density_substance` (markers / (2.5 + dur/15)); topic bonus needs low dependency and a
+  strong lead or opener. `generate_candidates` skips starts that are mid-sentence.
+- `refine_context()`: per chosen clip, look back ≤60 s for the nearest clean opening behind a clearly stronger
+  break (no crossing of a ≥0.85 boundary, turn or hand-over), likewise extend a weak end; accept only if it fits
+  `max_s`, does not collide, and scores within 0.08. Report key `context_adjusted`.
+- **Results** (6 clips/recording; README §5 has the full table):
+  - Real speech (NASA 55 min, Whisper base.en): starts at a paragraph opening 0.67→**1.0**, ends at a paragraph end
+    0.83→**1.0**, mid-sentence starts 0.17→**0**, multi-topic 0.50→0.33, ends mid-topic 0.33→0.17,
+    strict starts-mid-topic 0.0→0.33 (v3's 0.0 came from mid-sentence/multi-topic clips).
+  - Real speech, small.en: para start 0.50→0.83, mid-sentence 0.33→0, multi-topic 0.33→0.17, **ends mid-topic
+    0.33→0.50 (worse)**.
+  - Synthetic 58 min exact: starts mid-topic 0.33→**0.17**, ends 0→0. Whisper-like: starts 0.50→0.17, ends 0→0.17,
+    housekeeping edge 0.17→0.
+  - Each clip is 0.17 of a row; a parameter sweep (density 15/25/40 s, continuation 0.45–0.65) moved nothing
+    reliably. **Unresolved:** clip *endings* inside a longer discussion; Q&A exchanges longer than 150 s.
+  - The real-Whisper 58-min synthetic CI number for v4 is in §1B.9.
+- Evaluate: `evaluate_selection.py` now reports `mid_sentence_start`, `multi_topic`, `procedural_edge`, accepts `.gz`.
+
+### 1B.5 Live restart overlap (`monitor.py`)
+
+- The recorder always starts with `-live_start_index -3` (also after a restart: deliberate overlap instead of a gap).
+- `_video_packets()` (ffprobe `-show_data_hash md5`), `find_overlap(prev, nxt)` (unbroken run of identical packets
+  from the first packet of `nxt` to within 3 packets of the end of `prev`, ≥5 packets — crash-truncated last packets
+  are tolerated), `concat_listing()` writes `outpoint` on the previous segment. Segment files are not modified.
+  Sidecar gets `overlap_trims`.
+- Evidence: 40 s local HLS, recorder `kill -9` mid-stream: naive join 1305 frames (105 repeated) → fixed join 1200
+  frames, 0 repeated, frame-for-frame equal to the source; the live integration test asserts no repeated frames.
+
+### 1B.6 Dashboard and unattended running
+
+- Routes added: `/health/dismiss`, `/recordings/{id}/provenance`, `/sources/{id}/backfill`,
+  `/settings/phone/setup|disable|seen`, `/settings/unattended`, `/settings/notifications/recipient|transport`,
+  `/settings/notifications/smtp/forget`. `/api/status` now includes `health` and `keep_awake`.
+- Dashboard "Needs your attention": downtime periods (heartbeat), monitoring off, blocked/erroring sources, failed
+  source items/jobs, held/failed notifications, expired mail sign-in, storage, password missing with a phone URL.
+- OAuth state is stored in the `meta` table (15 min) instead of memory.
+- Historical: `recordings.recorded_at`, `recordings.origin` (schema v4 migrations); `ingest.parse_recorded_at`,
+  `date_from_filename`, `classify_origin`, `set_provenance`; `SourceMonitor.backfill()`.
+- Feeds: DTD/entity declarations refused (`unsafe_feed`); a non-feed gives `bad_feed` with a readable explanation.
+- Notifications: `TEMPLATE_VERSION = "2"` (recorded date line). SMTP password can live in the TokenStore (`smtp`),
+  entered in the dashboard. **Any earlier chat "approval" of v1 wording is void; in-app approval is still required.**
+
+### 1B.7 Source facts established in session 4 (web research; the sandbox cannot reach these sites)
+
+- **Rumble channel (verified):** `https://rumble.com/c/nickjfuentes` — "Nicholas J. Fuentes", Verified badge, joined
+  4 Mar 2021, description "America First with Nicholas J. Fuentes is LIVE Mon-Fri @9pm CT … Stream Archive:
+  https://americafirst.plus/". The owner's example `https://rumble.com/v7i48ms-america-first-ep.-1776.html` matches
+  AF 1776 (9 Nov 2026) in the AF+ archive listing.
+- **Rumble terms** (last modified 1 Sep 2026), section "Restrictions on automated software": automated access is
+  prohibited "without the prior written permission of Rumble". The engine's gate is unchanged.
+- **America First Plus:** `https://americafirst.plus/`, operated by **NJF LLC**; a paid subscription archive (a
+  July 2025 clip describes $15/$30/$100 monthly tiers — unverified against the site's own pricing page). Its Terms
+  forbid copying, reproducing, scraping or extracting content "without the express prior written consent of the
+  owner". No official download, feed or export was found. Now listed in `RESTRICTED_PLATFORMS` with that reason.
+- **What the owner needs:** (a) for Rumble monitoring — Rumble's written permission for automated access to that
+  channel, recorded in Settings → Source permissions (domain `rumble.com`); (b) for AF+ — NJF LLC's written consent
+  (and it would still need a non-paywalled delivery method: the engine has no login/cookie support by design);
+  (c) simplest and available today — files supplied by the rights holder, attached to the episode link (pending
+  source) or dropped in the inbox with a sidecar. No permission request was sent in this session.
+
+### 1B.8 Outlook / email facts (web research)
+
+- Since mid-2024 a personal Microsoft account **without a directory** cannot create an app registration ("The
+  ability to create applications outside of a directory has been deprecated"). A free Azure sign-up creates a
+  Default Directory but asks for a payment card for identity verification. The M365 Developer Program rarely
+  qualifies personal accounts.
+- Outlook.com no longer accepts basic auth or app passwords for SMTP (OAuth2 only), so "SMTP with the Outlook
+  password" is not an option.
+- Therefore the page offers: **A** a Gmail (or other) sender with an app password → recipient stays the Outlook
+  address; **B** Graph device-code with the owner's own client ID (needs the Azure directory; "Personal Microsoft
+  accounts only"; **Allow public client flows = Yes**).
+- No sign-in was performed and no email was sent in session 4.
+
+### 1B.9 Commits and CI (session 4)
+
+| SHA | Summary |
+|---|---|
+| `687df11` | Selection v4, real-speech fixture, perturbation script |
+| `38d826b` | Live restart overlap removal |
+| `ebf7f78` | Installer, launcher, setup assistant, doctor, Tailscale, health, keep-awake, historical imports, notifications page |
+| `48efb1f` | Genuine-recording test, `windows-install` CI job, doctor/setup bypass supervisor |
+| (later) | AF+ restriction, README/HANDOFF — see `git log` |
+
+CI results are appended below (§1B.10) once the runs complete.
 
 ---
 
@@ -1033,6 +1189,16 @@ PW_CHROMIUM=/opt/pw-browsers/chromium                # sandbox only, for the acc
 
 ## 17. Remaining engineering issues
 
+**Status after session 4** (details in §1B): item 3 (Outlook) — set-up flow rebuilt, still never sent live;
+item 4 (selection starts) — improved by v4, **endings remain the weak point**; item 5 (HLS overlap) — **fixed**;
+item 6 (XML) — DTD/entities now refused; item 7 — OAuth state now persisted; Ollama re-ranker still unevaluated
+(no Ollama available; deliberately deferred — it is optional and off unless a local server runs); multipart upload
+still spools to the system temp folder before being copied (deferred: the Import page now steers large files to the
+inbox folder, which involves no upload); item 8 (Multi-Stream-Recorder sidecar) — still unverified against real
+output, though the sidecar reader now also takes dates. New open items: Tailscale flow untested against a real
+tailnet; the installer's "no Python at all" and "no winget" branches are untested (the CI runner has Python);
+keep-awake is unit-tested with a replaceable setter but its real effect on Windows sleep is unverified.
+
 1. **No third-party source has been monitored live.** Monitoring is verified only against local test feeds and
    streams.
    - The `channel` kind's yt-dlp listing is mock-tested.
@@ -1057,6 +1223,21 @@ PW_CHROMIUM=/opt/pw-browsers/chromium                # sandbox only, for the acc
 8. Multi-Stream-Recorder's sidecar format is untested against real output.
 
 ## 18. Owner action checklist (prioritised; present it once, at the end)
+
+**Session 4 version (supersedes the list below where they differ):**
+
+1. **Install.** Download `Install-Clipping-Engine.cmd` (GitHub → branch `claude/optimistic-noether-k52qjf` →
+   `clipping-engine` → the file → *Download raw file*), double-click it, accept the prompts. *Return:* the last
+   lines of the setup assistant ("Setup complete" or the failing step) and the "Computer:" line.
+2. **Watch** `%LOCALAPPDATA%\ClippingEngine\data\selftest\selftest_clip.mp4` and confirm the captions look right.
+3. **Phone:** install Tailscale on PC + iPhone, sign in on both, then Settings → Phone access → *Set up phone
+   access*. *Return:* whether the address opens on the phone.
+4. **Email:** Settings → Notifications → steps 1–3 (Option A Gmail app password, or Option B Outlook client ID).
+   *Return:* "approve" in-app; optionally type SEND and say whether it arrived.
+5. **Sources:** obtain written permission (Rumble) or files from the rights holder; see §1B.7.
+6. Optional: TikTok / Instagram developer apps (unchanged).
+
+Earlier checklist (session 3), kept for reference:
 
 1. **C1 — Install and launch on the Windows PC (mandatory).**
    - Download the branch ZIP, extract it, and double-click `clipping-engine\Start-Clipping-Engine.cmd`.
