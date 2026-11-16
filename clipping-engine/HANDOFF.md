@@ -377,6 +377,8 @@ Fixes:
 Tests: `test_rumble_channel_grid_is_read_from_one_request`, `test_download_resolution_fits_free_disk_space`.
 Live detection from the grid is inferred from field names; a real live broadcast has not yet been observed.
 
+**Verified on the owner's PC after reinstalling `33bd000`:** setup 6/6 non-interactive (self-test 8/8 words, clip decodes); Rumble "Check now" -> status ok, 15 real videos stored as baseline from one request, nothing mass-queued; one real Rumble video (25.6 min) imported by URL -> downloaded at 1080p (768 MB) -> real Whisper base.en -> 6 clips 1080x1920 (26-91 s), all decode, in Ready to Review. `33bd000` also fixed setup crashing on a cp1252 redirected console (UnicodeEncodeError on "→"). Two libass font tests fail only when run from a very long checkout path on that PC; the installed doctor reports Anton loaded. Not yet seen: a live broadcast in the grid, live recording, replay pickup by the monitor.
+
 **Still unverified against the real site:** whether Rumble serves the engine a real listing at all (the 429 may
 persist; the answer is a sanctioned access method from Rumble, never a disguised client), whether a live
 broadcast appears in the channel listing, recording via `yt_dlp --hls-use-mpegts`, and replay download.
