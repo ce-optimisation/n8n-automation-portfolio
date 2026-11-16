@@ -264,9 +264,25 @@ tests/fixtures/landsat9_topics.json (hand annotation), landsat9_whisper_base_en.
 | `38d826b` | Live restart overlap removal |
 | `ebf7f78` | Installer, launcher, setup assistant, doctor, Tailscale, health, keep-awake, historical imports, notifications page |
 | `48efb1f` | Genuine-recording test, `windows-install` CI job, doctor/setup bypass supervisor |
-| (later) | AF+ restriction, README/HANDOFF — see `git log` |
+| `d3e7b6c` | Overlap detection robust across FFmpeg versions; AF+ restriction; README/HANDOFF |
+| `120e4b1` | Selection v4 final (hard-break penalty, end extension) and the full v3-vs-v4 table |
 
-CI results are appended below (§1B.10) once the runs complete.
+### 1B.10 CI results (session 4)
+
+| Run | Commit | Result |
+|---|---|---|
+| #19 / #20 (push) | `48efb1f` | **Failed on Ubuntu only**: the new overlap detection found nothing on the runner's newer FFmpeg (ubuntu-latest is now 26.04) — a real compatibility bug, fixed in `d3e7b6c`. Windows tests, Windows installer job: passed. |
+| #21 (dispatch, 60 min) | `48efb1f` | Long-form job **passed** (real Whisper, crash/resume). Selection on the real transcript: v3 ends 0.167 / starts 0.333; first v4 build ends 0.667 / starts 0.167 → led to the final v4 changes. Same Ubuntu unit-test failure as #19. |
+| #22 / #23 (push) | `d3e7b6c` | **Success** on both branches: Ubuntu + Windows unit/integration (real Whisper), acceptance, **genuine-recording 11/11 on both OSes**, `windows-install` job. |
+| #24 / #25 (push) | `120e4b1` | **Success** on both branches (same jobs). |
+
+Artifacts per run (Actions → run → Artifacts): `genuine-recording-windows-latest` / `-ubuntu-latest` (the clips, a
+frame of each, `report.json`), `windows-install-selftest` (the self-test clip rendered on Windows),
+`acceptance-*`. The long-form job was **not** re-run on the final v4 build; its numbers for the final build were
+reproduced locally with real Whisper (§1B.4).
+
+Both `claude/optimistic-noether-k52qjf` and the session branch `claude/wonderful-galileo-vbbfln` carry identical
+commits (the session's environment designated the latter; the owner's brief named the former).
 
 ---
 
