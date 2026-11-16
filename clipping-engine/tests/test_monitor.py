@@ -389,6 +389,8 @@ def test_rumble_channel_listing_is_bounded_and_marks_live_unknown(monkeypatch):
             raise HTTPError(Response(io.BytesIO(b""), url, {}, status=404))
         return Response(io.BytesIO(pages["html"].encode()), url, {"Content-Type": "text/html"}, status=200)
     monkeypatch.setattr(yt_dlp.YoutubeDL, "urlopen", fake_urlopen)
+    # the engine's own first read of the page (no embedded video grid on these older-layout pages)
+    monkeypatch.setattr(monitor, "fetch_text", lambda settings, url, **k: (200, url, pages["html"]))
     s = SimpleNamespace(http_user_agent="LocalClippingEngine/test")
     with pytest.raises(ingest.SourceError) as exc:
         monitor.list_channel(s, "https://rumble.com/c/examplechannel")
@@ -420,3 +422,88 @@ def test_rumble_channel_listing_is_bounded_and_marks_live_unknown(monkeypatch):
     assert [e["url"] for e in entries] == ["https://rumble.com/v7aaa11-episode-2.html",
                                            "https://rumble.com/v7aaa10-episode-1.html"]
     assert all(e["live"] is None for e in entries) and len(requested) <= 2
+
+
+def _rumble_item(pid, title, date, channel="/c/examplechannel", **kw):
+    item = {"object_type": "video", "id": 1, "permalink_id": pid, "title": title, "upload_date": date,
+            "url": f"https://rumble.com/{pid}-{title.lower().replace(' ', '-')}.html",
+            "by": {"type": "channel", "relative_url": channel}, "live": False, "live_placeholder": False,
+            "livestream_status": None, "is_short": False}
+    item.update(kw)
+    return item
+
+
+def _rumble_page(*grids) -> str:
+    """MOCK Rumble channel page in the late-2026 layout: videos as JSON in <rum-videos-grid>, no
+    videostream__link anchors, and a recommendation link to another channel's video."""
+    parts = ['<html><head><title>Example Channel</title></head><body>',
+             '<a href="/v7zzz99-other-channels-radio.html?e9s=src_v1_cllr">recommended</a>']
+    for items in grids:
+        parts.append('<rum-videos-grid>\n    <script type="application/json">\n' + json.dumps({"items": items})
+                     + '\n</script></rum-videos-grid>')
+    return "".join(parts) + "</body></html>"
+
+
+def test_rumble_channel_grid_is_read_from_one_request(monkeypatch):
+    """Regression (owner's PC, 16 Nov 2026): Rumble answered 200 with the real channel page, but the
+    videos now live only in embedded JSON, so yt-dlp listed nothing and every check ended in
+    "empty_listing". The engine reads that JSON from a single request: the channel's own videos with
+    titles, dates and live status; other channels' videos, shorts and scheduled broadcasts are left out.
+    MOCK page; rumble.com is never contacted."""
+    import yt_dlp
+    from types import SimpleNamespace
+    calls = []
+    page = {"html": _rumble_page(
+        [_rumble_item("v7aaa03", "Episode 3", "2026-11-16T04:00:00+00:00"),
+         _rumble_item("v7aaa02", "Episode 2", "2026-11-12T01:00:00+00:00", livestream_status=0)],
+        [_rumble_item("v7aaa02", "Episode 2", "2026-11-12T01:00:00+00:00"),
+         _rumble_item("v7aaa01", "Episode 1", "2026-11-10T01:00:00+00:00"),
+         _rumble_item("v7bbb01", "Somebody Else", "2026-11-15T01:00:00+00:00", channel="/c/other"),
+         _rumble_item("v7sss01", "A Short", "2026-11-15T02:00:00+00:00", is_short=True),
+         _rumble_item("v7ppp01", "Tonight", "2026-11-17T03:00:00+00:00", live_placeholder=True),
+         _rumble_item("v7lll01", "Live Now", "2026-11-16T03:00:00+00:00", live=True, livestream_status=2)])}
+
+    def fake_fetch(settings, url, **k):
+        calls.append(url)
+        return 200, url, page["html"]
+    monkeypatch.setattr(monitor, "fetch_text", fake_fetch)
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "urlopen", lambda self, req: pytest.fail("yt-dlp must not be used"))
+    s = SimpleNamespace(http_user_agent="LocalClippingEngine/test")
+    entries = monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert calls == ["https://rumble.com/c/examplechannel"]
+    assert [(e["key"], e["live"]) for e in entries] == [("v7lll01", True), ("v7aaa03", False), ("v7aaa02", False),
+                                                        ("v7aaa01", False)]
+    assert entries[1]["title"] == "Episode 3" and entries[1]["url"].startswith("https://rumble.com/v7aaa03-")
+    assert entries[1]["published"].startswith("2026-11-16")
+
+    page["html"] = _rumble_page([])
+    with pytest.raises(ingest.SourceError) as exc:
+        monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert exc.value.code == "empty_listing" and "Example Channel" in str(exc.value)
+
+    page["html"] = "Too many requests"
+    monkeypatch.setattr(monitor, "fetch_text", lambda settings, url, **k: (429, url, page["html"]))
+    with pytest.raises(ingest.SourceError) as exc:
+        monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert "429" in str(exc.value)
+
+
+def test_repaired_channel_listing_takes_a_baseline_instead_of_queuing_everything(env):
+    """Regression (owner's PC, 16 Nov 2026): an old build stored the channel itself as one bogus item and
+    set last_success. When the listing was repaired, every listed video (several 4-hour episodes) would
+    have counted as new and been queued. A channel with no real items yet takes a baseline. MOCK lister."""
+    s, db, q, p, mon, root, srv = env
+    sid, ok, _ = monitor.add_source(s, db, name="Repaired", kind="channel", url=f"{srv.url}/c/show")
+    db.execute("UPDATE sources SET last_success=? WHERE id=?", (time.time() - 3600, sid))
+    db.insert("source_items", source_id=sid, item_key="show", title="show", url=f"{srv.url}/c/show", state="failed")
+    listing = [{"key": f"v{i}", "title": f"Episode {i}", "url": f"{srv.url}/v{i}.html", "live": False}
+               for i in range(1, 6)]
+    mon.lister = lambda settings, url, limit=15: [dict(e) for e in listing]
+    res = mon.poll(sid)
+    assert "error" not in res and res["new"] == 0
+    assert db.one("SELECT COUNT(*) n FROM jobs WHERE kind='download_url'")["n"] == 0
+    assert db.one("SELECT COUNT(*) n FROM source_items WHERE source_id=? AND state='baseline'", (sid,))["n"] == 5
+
+    listing.insert(0, {"key": "v6", "title": "Episode 6", "url": f"{srv.url}/v6.html", "live": False})
+    db.execute("UPDATE sources SET next_check = 0")
+    assert mon.poll(sid)["new"] == 1                       # later uploads are imported as usual

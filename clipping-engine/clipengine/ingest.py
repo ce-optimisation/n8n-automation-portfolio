@@ -502,6 +502,55 @@ def _is_collection_url(yt_dlp, url: str) -> bool:
     return False
 
 
+DISK_RESERVE_BYTES = 1_000_000_000      # always left free on the data drive after a download
+DOWNLOAD_HEIGHTS = (1080, 720, 480, 360)
+
+
+def fit_format_to_disk(info: dict, free_bytes: int, ctx=None) -> str:
+    """Pick the highest resolution (≤1080p) whose download, plus the 16 kHz WAV made for transcription
+    and a fixed reserve, fits in the free space. Sites that stream over HLS (Rumble, for example)
+    publish no file size, so yt-dlp's own max_filesize cannot protect the disk: the size is estimated
+    from each format's bitrate and the duration. Raises TransientError (retried in 1 h) when even the
+    smallest choice does not fit, so a full disk is reported plainly instead of failing mid-download."""
+    duration = float(info.get("duration") or 0)
+    formats = info.get("formats") or []
+    if duration <= 0 or not formats:
+        return "bv*[height<=1080]+ba/b[height<=1080]/b"
+    budget = free_bytes - DISK_RESERVE_BYTES - duration * 32_000          # WAV: 16 kHz mono s16
+    audio_kbps = max([f.get("abr") or f.get("tbr") or 0 for f in formats
+                      if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")] or [128])
+
+    def size(h):
+        sizes = []
+        for f in formats:
+            if not f.get("height") or f["height"] > h:
+                continue
+            if f.get("filesize") or f.get("filesize_approx"):
+                sizes.append(f.get("filesize") or f.get("filesize_approx"))
+            elif f.get("tbr"):
+                extra = audio_kbps if f.get("acodec") == "none" else 0
+                sizes.append((f["tbr"] + extra) * 1000 / 8 * duration)
+        return min(sizes) if sizes else None    # smallest format at or below h (what "b[height<=h]" can fall to)
+
+    for h in DOWNLOAD_HEIGHTS:
+        best = max([s for f in formats if f.get("height") == h
+                    for s in [(f.get("filesize") or f.get("filesize_approx")
+                               or ((f.get("tbr") or 0) + (audio_kbps if f.get("acodec") == "none" else 0))
+                               * 1000 / 8 * duration)] if s] or [0])
+        if best and best * 1.1 <= budget:
+            if h < 1080 and ctx is not None:
+                ctx.progress(0.0, f"Low disk space: downloading at {h}p")
+            return f"bv*[height<={h}]+ba/b[height<={h}]"
+    smallest = size(DOWNLOAD_HEIGHTS[-1])
+    if smallest is not None and smallest * 1.1 <= budget:
+        return "wv*[height>=240]+ba/w[height>=240]/w"
+    need = ((smallest or 0) * 1.1 + DISK_RESERVE_BYTES + duration * 32_000) / 1e9
+    raise TransientError(f"Not enough free disk space for this {duration / 3600:.1f}-hour video: about "
+                         f"{need:.1f} GB is needed and {free_bytes / 1e9:.1f} GB is free on the data drive. Free some "
+                         "space (or move the data folder to a bigger drive); the download is retried in 1 hour.",
+                         retry_after=3600)
+
+
 def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple[Path, dict]:
     try:
         import yt_dlp
@@ -530,8 +579,11 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
         "max_filesize": settings.max_upload_mb * 1024 * 1024, "http_headers": {"User-Agent": settings.http_user_agent or USER_AGENT},
     }
     try:
+        with yt_dlp.YoutubeDL(dict(opts, skip_download=True)) as ydl:
+            info = ydl.extract_info(url, download=False)
+        opts["format"] = fit_format_to_disk(info, shutil.disk_usage(settings.data_dir).free, ctx)
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.process_ie_result(info, download=True)
     except yt_dlp.utils.DownloadCancelled as e:
         raise TransientError("cancelled") from e
     except yt_dlp.utils.DownloadError as e:

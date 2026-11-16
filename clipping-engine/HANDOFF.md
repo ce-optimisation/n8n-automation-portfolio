@@ -356,6 +356,27 @@ reports what the site sent (`_describe_page`: HTTP status, size, page title, ser
 yt-dlp also printed "Support for Python version 3.10 has been deprecated": moving the owner's PC to Python 3.12
 is advisable before yt-dlp drops 3.10 (the launcher keeps an existing 3.10 `.venv`).
 
+**Session 6 (run ON the owner's PC, 16 Nov 2026): Rumble diagnosed against the real site.** One request with the
+engine's honest User-Agent returned **HTTP 200 and the real 464 KB channel page** (no robot check, no 429). The page
+no longer has `videostream__link` anchors: the channel's videos are JSON inside `<rum-videos-grid><script
+type="application/json">{"items":[...]}` (fields: `url`, `title`, `upload_date`, `permalink_id`, `by.relative_url`,
+`live`, `live_placeholder`, `livestream_status`, `is_short`, `duration`). yt-dlp 2026.10.26 (latest) still looks for
+the old class, so it found nothing and paged ?page=2..4. The `_links_from_page` fallback from `0ed7655` would have
+picked up only `href="/v..."` anchors — on the real page that was a single recommendation from **another channel**.
+Fixes:
+- `monitor.list_channel`: for `rumble.com/c/<name>` (or `/user/`) it now calls `fetch_text` once and parses the grid
+  (`rumble_grid_entries`): own-channel only, shorts dropped, `live` true → live, `live_placeholder` → skipped (re-checked
+  next poll), `livestream_status` 0/None → not live, any other value → None (probed). One request per check; no
+  per-video probes needed. 429 raises with "429" in the text (existing back-off). No grid → old yt-dlp path.
+- `ingest.fit_format_to_disk`: Rumble video pages work with yt-dlp (HLS 360–1080p, no file size published), so
+  `max_filesize` never applied. The format is now chosen from bitrate × duration + 16 kHz WAV + 1 GB reserve; if
+  even 360p does not fit, a plain `TransientError` (retry in 1 h). On the owner's PC (1.8 GB free) a 25-min video
+  downloads at 720p; a 4.4-hour episode is refused with "about 3.0 GB is needed and 1.8 GB is free".
+- `test_dashboard_states_problems_plainly` fails on the owner's PC only because its disk really is low (the
+  dashboard correctly shows the storage warning); it passes on CI.
+Tests: `test_rumble_channel_grid_is_read_from_one_request`, `test_download_resolution_fits_free_disk_space`.
+Live detection from the grid is inferred from field names; a real live broadcast has not yet been observed.
+
 **Still unverified against the real site:** whether Rumble serves the engine a real listing at all (the 429 may
 persist; the answer is a sanctioned access method from Rumble, never a disguised client), whether a live
 broadcast appears in the channel listing, recording via `yt_dlp --hls-use-mpegts`, and replay download.

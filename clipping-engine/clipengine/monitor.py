@@ -191,8 +191,84 @@ class _ListingCapReached(Exception):
     pass
 
 
+_RUMBLE_GRID_RE = re.compile(r'<rum-videos-grid[^>]*>\s*<script[^>]*type=["\']application/json["\'][^>]*>(.*?)</script>',
+                             re.S | re.I)
+_RUMBLE_CHANNEL_PATH = re.compile(r"^/(c|user)/([^/?#]+)/?(videos|livestreams)?/?$", re.I)
+
+
+def _is_rumble_channel(url: str) -> bool:
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    return (host == "rumble.com" or host.endswith(".rumble.com")) and bool(_RUMBLE_CHANNEL_PATH.match(p.path or "/"))
+
+
+def rumble_grid_entries(url: str, body: str, limit: int = 15) -> list[dict] | None:
+    """Rumble channel pages (since their late-2026 redesign) carry the channel's videos as JSON inside
+    <rum-videos-grid> elements, with title, upload date and live status; there are no
+    `videostream__link` anchors any more, which is what yt-dlp's channel extractor looks for.
+
+    Returns None when the page has no such grid (an older layout: the caller falls back to yt-dlp),
+    otherwise the channel's own videos, newest first. Videos by other channels (recommendations),
+    shorts and scheduled-but-not-started broadcasts are left out; a scheduled broadcast is therefore
+    looked at again on the next check and recorded once it is live."""
+    blocks = _RUMBLE_GRID_RE.findall(body or "")
+    if not blocks:
+        return None
+    m = _RUMBLE_CHANNEL_PATH.match(urlparse(url).path or "/")
+    channel = f"/{m.group(1)}/{m.group(2)}".lower() if m else ""
+    seen, items = set(), []
+    for block in blocks:
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        for it in data.get("items") or [] if isinstance(data, dict) else []:
+            if not isinstance(it, dict) or it.get("object_type", "video") != "video":
+                continue
+            by = it.get("by") or {}
+            owner = (by.get("relative_url") or urlparse(by.get("url") or "").path or "").rstrip("/").lower()
+            if channel and owner and owner != channel:
+                continue
+            if it.get("is_short"):
+                continue
+            link = it.get("url") or ("https://rumble.com" + it["relative_url"] if it.get("relative_url") else "")
+            key = str(it.get("permalink_id") or it.get("id") or link)
+            if not link or key in seen:
+                continue
+            seen.add(key)
+            status = it.get("livestream_status")
+            if it.get("live") is True:
+                live = True
+            elif it.get("live_placeholder"):
+                continue                                # scheduled, not started: look again next check
+            elif status in (None, 0, "0"):
+                live = False
+            else:
+                live = None                             # unfamiliar state: the monitor asks the video page
+            items.append({"key": key, "title": it.get("title") or "", "url": link, "live": live,
+                          "published": str(it.get("upload_date") or "")})
+    items.sort(key=lambda e: (e["live"] is True, e["published"]), reverse=True)
+    return items[:limit]
+
+
 def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
-    """yt-dlp flat listing of a channel/page (only called for authorised domains)."""
+    """Listing of a channel/page (only called for authorised domains).
+
+    Rumble channel pages are read directly: ONE request, then the video grid embedded in the page.
+    Everything else (and a Rumble page without that grid) goes through yt-dlp's flat listing."""
+    if _is_rumble_channel(url):
+        status, final, body = fetch_text(settings, url)
+        if status == 429:
+            raise ingest.SourceError("rate_limited", "HTTP Error 429: Too Many Requests")
+        if status != 200:
+            raise ingest.SourceError("http_error", f"The channel page returned HTTP {status}, so nothing was "
+                                                   "imported. " + _describe_page({"status": status, "body": body}))
+        entries = rumble_grid_entries(final, body, limit)
+        if entries:
+            return entries
+        if entries is not None:
+            raise ingest.SourceError("empty_listing", "The channel page's video list was empty, so nothing was "
+                                                      "imported. " + _describe_page({"status": status, "body": body}))
     import yt_dlp
     first_page: dict = {}
 
@@ -525,7 +601,13 @@ class SourceMonitor:
             return {"blocked": msg}
         result = {"new": 0, "live": False}
         try:
-            first = src["last_success"] is None
+            # First real listing: what is already published becomes the baseline (noted, not downloaded).
+            # A channel whose only "success" was an earlier bogus/empty listing (no real items stored; an
+            # empty channel listing is an error since 5edc464) still counts as first, so a repaired
+            # listing never queues the whole back catalogue at once.
+            first = src["last_success"] is None or src["kind"] == "channel" and self.db.one(
+                "SELECT 1 FROM source_items WHERE source_id=? AND (url IS NULL OR url<>?) LIMIT 1",
+                (sid, src["url"])) is None
             if src["kind"] == "feed":
                 status, final, text = fetch_text(self.settings, src["url"])
                 if status != 200:

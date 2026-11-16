@@ -636,3 +636,22 @@ def test_channel_address_is_never_downloaded_as_one_video():
     assert ingest._is_collection_url(yt_dlp, "https://www.youtube.com/playlist?list=PL0000000000")
     assert not ingest._is_collection_url(yt_dlp, "https://rumble.com/v7i48ms-america-first-ep.-1776.html")
     assert not ingest._is_collection_url(yt_dlp, "https://example.org/clip.mp4")
+
+
+def test_download_resolution_fits_free_disk_space():
+    """Regression (owner's PC, Nov 2026: 1.8 GB free on C:). Rumble serves HLS with no file size, so
+    yt-dlp's max_filesize never applies; a 4-hour episode at 1080p (~8 GB) would fill the disk. The
+    format is chosen from bitrate x duration, and a video that cannot fit is a plain, retryable error."""
+    from clipengine import ingest
+    from clipengine.jobs import TransientError
+    fmts = [{"format_id": "audio", "vcodec": "none", "acodec": "aac", "tbr": 195}] + [
+        {"format_id": f"hls-{t}", "height": h, "tbr": t, "vcodec": "h264", "acodec": "none"}
+        for h, t in [(360, 681), (480, 1059), (720, 2146), (1080, 4121)]]
+    assert ingest.fit_format_to_disk({"duration": 1534, "formats": fmts}, 30_000_000_000) ==         "bv*[height<=1080]+ba/b[height<=1080]"
+    assert ingest.fit_format_to_disk({"duration": 1534, "formats": fmts}, 1_800_000_000) ==         "bv*[height<=720]+ba/b[height<=720]"
+    assert ingest.fit_format_to_disk({"duration": 15877, "formats": fmts}, 3_500_000_000) ==         "bv*[height<=360]+ba/b[height<=360]"
+    with pytest.raises(TransientError) as exc:
+        ingest.fit_format_to_disk({"duration": 15877, "formats": fmts}, 1_800_000_000)
+    assert exc.value.retry_after == 3600 and "1.8 GB is free" in str(exc.value)
+    # no duration or formats known: the previous default is kept
+    assert ingest.fit_format_to_disk({}, 0) == "bv*[height<=1080]+ba/b[height<=1080]/b"
