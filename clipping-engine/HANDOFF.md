@@ -2,8 +2,8 @@
 
 > **For the next engineer or agent:** paste this whole file into a new Claude Code session, or say
 > "read `clipping-engine/HANDOFF.md` and continue". It is self-contained and consolidates **all** work from
-> session 1 (initial build), session 2 (continuation), session 3 (automation batch) and **session 4 (Windows
-> deployment, onboarding and refinement — read §1B first)**.
+> session 1 (initial build), session 2 (continuation), session 3 (automation batch), **session 4 (Windows
+> deployment, onboarding and refinement — read §1B first)** and **session 6 (multi-niche expansion — §1C)**.
 > Earlier handoff versions are in git history (`553c922`, the session-2 version in `ce0ba89`, then `c54dab7`).
 > Session 3 ended at `337c833`. Session 4's commits and CI runs are listed in §1B.9. Treat this document as a map,
 > not proof: re-inspect the checkout and CI before relying on any claim.
@@ -388,6 +388,96 @@ Per check, a Rumble source now costs 1 listing request (2 for a channel with few
 3 lookups of about 2 requests each when new videos appear.
 
 ---
+
+## 1C. Session 6 (16 Nov 2026, run ON the owner's PC): multi-niche expansion
+
+Owner directive: turn the single-source engine into a multi-niche, multi-creator, multi-platform operation without
+breaking what works; addendum 001: commercial discovery (separate from authorisation) and first-class Twitch, Kick
+and YouTube Live source support. Everything below lives in the same engine (no second install, no new services).
+
+### 1C.1 Status (be exact about evidence)
+
+| Feature | Evidence level |
+|---|---|
+| Rumble listing (embedded grid), download, **automatic pick-up of a new upload**, disk-aware 480p download | **Verified on the owner's PC** |
+| Captions 73 px, same centre (0.72), real-glyph-width side-margin fitting, no burned-in label | **Verified on the owner's PC** (12 real clips re-rendered/rendered; frame measured: caption y≈1324–1445 below the video band, x within 120–960) |
+| Niche profiles (14 presets, versioned), creator profiles, combined policy, quality scores, rejection reasons, review flags, Whisper vocabulary hints | Unit-tested locally (`tests/test_expansion.py`); pages checked with TestClient |
+| Selection v5 (ending completion) | Measured locally on 4 sets (below); **opt-in per niche**; v4 remains the global default |
+| Queue: priority (live first), pause/resume, move, heavy jobs held during live capture | Unit-tested; existing queue tests green |
+| Storage: stage estimates, live preflight, low-disk stop, pre-migration DB backup, relocation | Unit-tested; migration proven on a **copy of the owner's real DB** |
+| Google Drive (drive.file): resumable, MD5-verified, idempotent uploads, quota holds | **MOCK-tested only** — READY FOR OWNER CONNECTION |
+| Raw-recording deletion (8 gates, engine-acquired only, never retroactive), held recordings, clip retention | Unit-tested with a MOCK Drive; in production it stays inactive until Drive is connected (gate 6) |
+| Publication packages, niche-based account isolation, manual handoffs | Unit-tested |
+| YouTube private upload (official resumable API, privacyStatus=private) | **MOCK-tested only** — READY FOR OWNER CONNECTION |
+| Twitch (Helix) / Kick (public v1) / YouTube Data API discovery adapters | **MOCK-tested only** — READY FOR OWNER CONNECTION (free developer apps) |
+| Twitch official clip download, Kick/Twitch/YouTube footage acquisition | **Not implemented as working**: Twitch's endpoint needs broadcaster/editor authorisation (Model A); others only via yt-dlp under recorded permission, unverified on those platforms |
+| Facebook Reels draft upload | Not implemented (Meta lists DRAFT for video_reels but no official example; manual handoff instead) |
+| X | Manual handoff only (pay-per-use API; no costs introduced) |
+| Full-length live recording on the owner's PC | **BLOCKED by disk space** (~1.4 GB free; a 4-hour show needs ~8 GB incl. transcription, clips and the 1 GB reserve). The new preflight refuses to start rather than produce a broken file. |
+| Live Rumble broadcast | Still **never observed** |
+
+**Test evidence (owner's PC, Python 3.10, 16 Nov 2026):** full `pytest`: **151 passed, 3 skipped, 3 failed** — the 3 are
+the known host-only failures (dashboard storage warning because the disk really is low; two libass font checks that fail
+only from a very long checkout path — the installed doctor reports Anton loaded); they fail identically on the code before
+this session. `tests/test_expansion.py`: 25 passed. `scripts/acceptance_test.py --stub`: 9/9 PASS (TEST-ONLY stub
+transcript). CI: runs #46/#47 failed only in the genuine-recording step, which still asserted the old 52 px caption size;
+fixed in this commit (asserts 73 px and no burned-in label).
+
+### 1C.2 Architecture (shared, not per platform)
+
+```
+creators (research | shortlisted | active ...) ──┐            niches (versioned profiles)
+platforms.py adapters (discovery only) ──────────┤                     │
+sources (+creator_id) → monitor.py ──► ingest (classify_url gate) ──► recordings (+creator, niche, engine_owned)
+                                                                        │
+             jobs.py: ONE heavy job at a time, priority order, paused/held while recording
+                                                                        │
+  transcribe (creator/niche vocabulary hint) → segment.select (v4|v5) → editorial.assess (quality, reject, flags)
+                                                                        │
+                       render (Anton 73 px, fitted) → cloud.py (Drive, verified) → lifecycle.py (8 gates)
+                                                                        │
+            review (filters) → clip workspace → publication_packages (account isolation) → YouTube private /
+            TikTok inbox / Instagram (existing) / manual handoff → metrics & commercial_entries (Results page)
+```
+
+New files: `editorial.py`, `platforms.py`, `storage.py`, `cloud.py`, `lifecycle.py`, `research.py`,
+`publishing/packages.py`, `web/workspace.py`, templates `niches, niche_edit, creators, creator, research, queue,
+storage, accounts, analytics, platforms, handoff, _clip_workspace`, `research/research_dataset.json`,
+`research/RESEARCH_REPORT_2026-11.md`, `tests/test_expansion.py`. Schema **v5** (tables niches, niche_history,
+creators, social_accounts, publication_packages, cloud_objects, metrics, commercial_entries, niche_scores; new
+columns via `MIGRATIONS`). Settings: `TWITCH_CLIENT_ID/SECRET`, `KICK_CLIENT_ID/SECRET`, `YOUTUBE_API_KEY`,
+`CLIPENGINE_GOOGLE_CLIENT_ID/SECRET` (**prefixed on purpose**: the owner's PC has an unrelated machine-wide
+`GOOGLE_CLIENT_ID` that must never be picked up), `RAW_DELETE_AFTER_CLOUD=1`, `REJECTED_CLIP_HOURS=24`,
+`PUBLISHED_CLIP_DAYS=7`, `CLOUD_MIN_FREE_GB=2`, `DEFER_HEAVY_WHILE_RECORDING=1`, `DISK_RESERVE_GB=1`,
+`RECORD_GB_PER_HOUR=1.5`, `MAX_CONCURRENT_JOBS=1` (only 1 supported).
+
+### 1C.3 Selection v5 results (6 clips per recording; lower is better for "ends mid-topic")
+
+| Set | v4 ends mid-topic | v5 ends mid-topic | other metrics |
+|---|---|---|---|
+| Real speech, NASA 55 min, Whisper base.en | 0.167 | 0.167 | identical |
+| Synthetic 58 min, exact timings | 0.0 | 0.0 | identical |
+| Synthetic 9 min, exact timings | 0.333 | **0.167** | substantive 0.935 → 0.933, otherwise identical |
+| Synthetic 58 min, Whisper-like perturbation | 0.167 | 0.167 | identical |
+
+v5 = v4 + (a) a concluding-line reward and a penalty for cutting just before a meaning-changing qualification,
+(b) carrying the end through a question's answer, a qualification ("but/however/to be fair…"), a debate reply, and
+(c) following the clip's distinctive subject (salient terms) across paragraph breaks to the furthest paragraph end
+that still scores within 0.15. A modest, real improvement with no regressions; niche presets use v5, the global
+default stays v4 (one setting away), and politics stays on v4.
+
+### 1C.4 Rules added this session (keep them)
+
+- Discovery never authorises retrieval; licensing is not a research score; research creators never get sources.
+- Raw deletion only for `engine_owned=1` recordings created after `meta.engine_owned_since`; owner uploads, inbox
+  files and older recordings are never deleted automatically. The decision is written before the file is removed.
+- Only engine-created Drive objects (rows in `cloud_objects`) are ever deleted; scope `drive.file`.
+- Accounts receive only clips of niches mapped to them; YouTube uploads are always private; nothing is posted publicly.
+- Tests must not depend on the host's disk or environment (conftest pins tiny storage figures and clears platform
+  credentials).
+- Long streams: chunked, checkpointed transcription with resume, selection before any rendering, dedupe keys and
+  SHA-256 dedupe, live restart-overlap trimming are in place. **Not implemented:** skipping low-value sections and
+  cross-stream clip de-duplication (no reliable signal yet; would risk losing material).
 
 ## 1A. Session 3: what was built (read this first)
 

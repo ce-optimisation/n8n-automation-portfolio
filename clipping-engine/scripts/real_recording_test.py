@@ -230,9 +230,11 @@ def main() -> int:
                                     "closing": x["transcript_text"][-110:], "file": f.name, "frame": frame.name})
             assert srt.count("-->") >= 2, f"clip {cid} has no captions"
         styles = [p.read_text(encoding="utf-8") for p in (data / "clips").rglob("captions.ass")]
-        assert styles and all("Anton" in s_ and ",52," in s_ for s_ in styles), "captions are not in the approved Anton style"
+        # owner-approved style (16 Nov 2026): Anton 73 px, no burned-in source label
+        assert styles and all("Style: Caption,Anton,73," in s_ for s_ in styles), "captions are not in the approved Anton style"
+        assert not any("Dialogue: 1," in s_ for s_ in styles), "a source label was burned into a clip"
         ok["6_all_clips_rendered"] = "PASS"
-        ok["7_captions_anton_52px"] = "PASS"
+        ok["7_captions_anton_73px_no_label"] = "PASS"
         ok["8_valid_1080x1920_h264_aac_with_audio"] = "PASS"
         for k in report["clips"]:
             log(f"clip #{k['id']}: {k['duration']}s  “{k['opening'][:80]}…”")

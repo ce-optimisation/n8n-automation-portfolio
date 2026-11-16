@@ -437,10 +437,13 @@ def save_niche(db, p: NicheProfile, note: str = "edited") -> NicheProfile:
 def policy_for(db, niche_key: str | None, creator_row=None) -> EditorialPolicy | None:
     """The combined policy for a recording: its niche (or the creator's first niche) + creator profile."""
     creator = CreatorProfile.from_dict(json.loads(creator_row["profile_json"] or "{}")) if creator_row else CreatorProfile()
-    if not niche_key and creator_row:
-        niches = json.loads(creator_row["niches_json"] or "[]")
-        niche_key = niches[0] if niches else None
     niche = load_niche(db, niche_key)
+    if not niche and creator_row:
+        # research categories can be finer than the editorial profiles: use the first niche that has one
+        for key in json.loads(creator_row["niches_json"] or "[]"):
+            niche = load_niche(db, key)
+            if niche:
+                break
     if not niche:
         return None
     return EditorialPolicy(niche=niche, creator=creator, creator_name=creator_row["name"] if creator_row else "")

@@ -323,9 +323,9 @@ set `SELECTION_PROFILE=v3`. Reproduce:
 - **Anton** (official Google Fonts build, SIL OFL 1.1, bundled in `clipengine/assets/fonts`)
 - normal sentence case, never forced to uppercase
 - solid white with a modest solid black outline; no shadow, background, colour effects or animation
-- 52 px on a 1080×1920 frame
+- 73 px on a 1080×1920 frame (enlarged 40% at the owner's request, Nov 2026); no burned-in source label by default
 - centred, with the caption block at 72% of the height (lower-middle, clear of the TikTok/Instagram overlays)
-- at most two lines, wrapped at word boundaries using Anton's measured glyph widths
+- at most two lines, wrapped at word boundaries; any line wider than the 120 px side margins (real glyph widths) is shrunk for that caption only
 
 **Verification:**
 
