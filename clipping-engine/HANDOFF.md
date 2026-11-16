@@ -284,6 +284,32 @@ reproduced locally with real Whisper (§1B.4).
 Both `claude/optimistic-noether-k52qjf` and the session branch `claude/wonderful-galileo-vbbfln` carry identical
 commits (the session's environment designated the latter; the owner's brief named the former).
 
+### 1B.11 After the first install on the owner's PC (end of session 4)
+
+- **The owner installed and started the engine on their Windows PC** (user `James`, install folder
+  `C:\Users\James\AppData\Local\ClippingEngine`, **Python 3.10**). Not yet confirmed by the owner: that the
+  self-test clip plays and that a real recording was processed there.
+- First start crashed with `SyntaxError: f-string: unmatched '['` in `notify.py`: two nested same-quote f-strings,
+  valid only on Python 3.12+. Fixed in `669f7ef`; CI now has an `oldest-python` job (3.10: compile, tests, real
+  self-test). **Rule: code must run on Python 3.10** (no nested same-quote f-strings, no backslashes in f-string
+  expressions).
+- The owner states they hold **Rumble's written permission** and recorded it in-app (Settings → Source permissions:
+  granted by "Rumble exec", reference "Email"), then added source `https://rumble.com/c/nickjfuentes` (channel,
+  record live, every 2 min). First "Check now": the listing came back **empty** and was stored as one bogus baseline
+  item named `nickjfuentes`; the next check got **HTTP 429 Too Many Requests** from Rumble.
+- Fixed in `5edc464`: empty channel listing is an error (`empty_listing`), nothing stored; 429 backs off ≥30 min
+  with a plain message; channel sources poll no faster than 5 min; ANSI codes stripped; bogus item removed on the
+  next good listing. **The owner had not yet updated to this build.**
+- **Open problem:** Rumble is throttling/filtering the engine's requests. Real Rumble compatibility remains
+  unverified. Do NOT work around it with browser impersonation, cookies or a disguised User-Agent. The supported
+  route is for the owner to ask their Rumble contact how automated access should be made (allow-list the engine's
+  User-Agent `LocalClippingEngine/1.1 (self-hosted editorial review tool)` or the owner's IP, or an official
+  API/feed). Fallbacks: replay picked up later by the same source if listing works; owner-supplied files.
+- The owner also says they hold permission for **americafirst.plus** and wants it as a failsafe. Advised: record the
+  permission, add `https://americafirst.plus/live` as a channel source and press Check now; it will probably fail
+  because the site is subscription/sign-in and the engine has no login support by design. Clean alternatives: a
+  direct `.m3u8`, an RSS feed, or files from the rights holder. Outcome not yet reported.
+
 ---
 
 ## 1A. Session 3: what was built (read this first)
