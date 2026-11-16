@@ -106,6 +106,7 @@ def build_ready(settings, db, rid: int) -> dict | None:
         flag = (" <b style='color:#b42318'>⚑ flagged for editorial review</b>" if c["safety_status"] == "flagged"
                 else "")
         quote = _short(c["transcript_text"], 180)
+        clip_url = _link(settings, "/clips/%d" % c["id"])
         if c["thumb_path"] and Path(c["thumb_path"]).is_file():
             images.append({"cid": cid, "path": c["thumb_path"], "clip_id": c["id"]})
             img = (f"<img src='cid:{cid}' width='96' style='border-radius:6px;display:block' "
@@ -117,10 +118,10 @@ def build_ready(settings, db, rid: int) -> dict | None:
             f"<td style='padding:8px 0;vertical-align:top;font:14px/1.45 Segoe UI,Arial,sans-serif;color:#1d2330'>"
             f"<b>Clip #{c['id']}</b> · {render.mmss(c['start'])}–{render.mmss(c['end'])} · {dur:.0f}s{flag}<br>"
             f"<span style='color:#555'>Direct quote (opening): “{html.escape(quote)}”</span><br>"
-            f"<a href='{html.escape(_link(settings, f'/clips/{c['id']}'))}'>Review clip #{c['id']}</a></td></tr>")
+            f"<a href='{html.escape(clip_url)}'>Review clip #{c['id']}</a></td></tr>")
         rows_t.append(f"- Clip #{c['id']} {render.mmss(c['start'])}-{render.mmss(c['end'])} ({dur:.0f}s)"
                       f"{' [flagged for editorial review]' if c['safety_status'] == 'flagged' else ''}\n"
-                      f"  \"{quote}\"\n  {_link(settings, f'/clips/{c['id']}')}")
+                      f"  \"{quote}\"\n  {clip_url}")
     source = rec["source_url"] or rec["original_filename"] or ""
     review = _link(settings, f"/review?status=ready")
     body_html = (

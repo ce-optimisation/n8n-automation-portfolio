@@ -105,6 +105,33 @@ jobs:
           path: clipping-engine/genuine-artifacts
           if-no-files-found: ignore
 
+  oldest-python:
+    name: oldest supported Python (3.10) - compile, tests, real self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: clipping-engine
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: clipping-engine/requirements.txt
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install Python packages
+        run: python -m pip install -r requirements.txt
+      - name: Every file must compile on Python 3.10 (the launcher accepts 3.10 - 3.13)
+        run: python -m compileall -q clipengine scripts tests
+      - name: Unit and integration tests on Python 3.10
+        run: python -m pytest -q
+      - name: Real self-test on Python 3.10 (genuine speech, real Whisper)
+        run: python -m clipengine --doctor --selftest
+
   windows-install:
     name: Windows one-click installer on a clean runner (no FFmpeg preinstalled by us)
     runs-on: windows-latest
