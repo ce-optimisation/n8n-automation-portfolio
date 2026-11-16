@@ -8,10 +8,11 @@ Approved default ("anton"):
   * Sentence case exactly as transcribed. Text is never upper-cased.
   * Solid white text with a modest solid black outline; no shadow, no background box,
     no colour effects, no animation.
-  * Relatively small (52 px on a 1080×1920 frame; Anton's capitals are ~45 px tall).
+  * 73 px on a 1080×1920 frame (was 52; enlarged 40% at the owner's request, Nov 2026).
   * Centred horizontally; caption block centred at 72% of the frame height (lower-middle),
     clear of TikTok/Instagram overlays at the bottom and the right-hand button column.
-  * At most two lines, wrapped at word boundaries using Anton's measured average glyph width.
+  * At most two lines, wrapped at word boundaries using Anton's average glyph width; any line still
+    wider than the space between the side margins (real glyph widths, FontMetrics) is shrunk to fit.
 An optional subtle dark backing exists for difficult footage; it is off by default.
 """
 from __future__ import annotations
@@ -31,17 +32,100 @@ AVG_EM = {"Anton": 0.391, "Arial": 0.50}
 SIDE_MARGIN = 120          # px each side: clears TikTok's right-hand action buttons
 
 
+class FontMetrics:
+    """Real advance widths from a TrueType file (cmap format 4 + hmtx), read with the standard
+    library only. Used to guarantee that no caption line is wider than the safe area: the
+    average-width wrap in max_chars() is only an estimate, and a line of wide glyphs could
+    otherwise run off the sides of the frame."""
+
+    def __init__(self, path: Path):
+        import struct
+        data = path.read_bytes()
+        n = struct.unpack(">H", data[4:6])[0]
+        tables = {data[12 + 16 * i:16 + 16 * i].decode("latin-1"):
+                  struct.unpack(">II", data[20 + 16 * i:28 + 16 * i]) for i in range(n)}
+        head, hhea, hmtx, cmap = (tables[t][0] for t in ("head", "hhea", "hmtx", "cmap"))
+        self.units = struct.unpack(">H", data[head + 18:head + 20])[0]
+        n_hmetrics = struct.unpack(">H", data[hhea + 34:hhea + 36])[0]
+        adv = [struct.unpack(">H", data[hmtx + 4 * i:hmtx + 4 * i + 2])[0] for i in range(n_hmetrics)]
+        # libass sizes a font so that its ascent + descent equals the ASS font size (OS/2 win
+        # metrics where present, else hhea).
+        if "OS/2" in tables:
+            o = tables["OS/2"][0]
+            asc, desc = struct.unpack(">HH", data[o + 74:o + 78])
+        else:
+            asc, desc = struct.unpack(">hh", data[hhea + 4:hhea + 8])
+            desc = -desc
+        self.size_units = asc + desc
+        self.cmap: dict[int, int] = {}
+        for i in range(struct.unpack(">H", data[cmap + 2:cmap + 4])[0]):
+            pid, eid, off = struct.unpack(">HHI", data[cmap + 4 + 8 * i:cmap + 12 + 8 * i])
+            sub = cmap + off
+            if pid in (0, 3) and struct.unpack(">H", data[sub:sub + 2])[0] == 4:
+                seg2 = struct.unpack(">H", data[sub + 6:sub + 8])[0]
+                ends = sub + 14
+                starts = ends + seg2 + 2
+                deltas, ranges = starts + seg2, starts + 2 * seg2
+                for s in range(seg2 // 2):
+                    end, start = (struct.unpack(">H", data[b + 2 * s:b + 2 * s + 2])[0] for b in (ends, starts))
+                    delta, roff = (struct.unpack(">H", data[b + 2 * s:b + 2 * s + 2])[0] for b in (deltas, ranges))
+                    for c in range(start, min(end, 0xFFFE) + 1):
+                        if roff:
+                            p = ranges + 2 * s + roff + 2 * (c - start)
+                            g = struct.unpack(">H", data[p:p + 2])[0]
+                            g = (g + delta) & 0xFFFF if g else 0
+                        else:
+                            g = (c + delta) & 0xFFFF
+                        self.cmap.setdefault(c, g)
+                break
+        self.adv = [adv[min(g, len(adv) - 1)] for g in range(max(self.cmap.values(), default=0) + 1)]
+        self.missing = adv[0]
+
+    def width(self, text: str, size: float) -> float:
+        """Rendered width in pixels of `text` at ASS font size `size` (no outline)."""
+        units = sum(self.adv[g] if (g := self.cmap.get(ord(ch), 0)) < len(self.adv) else self.missing for ch in text)
+        return units * size / self.size_units
+
+
+_METRICS: dict[str, FontMetrics | None] = {}
+
+
+def font_metrics(font: str) -> FontMetrics | None:
+    if font not in _METRICS:
+        path = ANTON_FILE if font == "Anton" else None
+        try:
+            _METRICS[font] = FontMetrics(path) if path and path.exists() else None
+        except Exception:  # noqa: BLE001 - fall back to the average-width estimate
+            _METRICS[font] = None
+    return _METRICS[font]
+
+
+def fitted_size(lines: list[str], style: "CaptionStyle", width: int = 1080) -> int:
+    """Largest font size <= style.size at which every line, including its outline, fits between
+    the side margins. Uses the real glyph widths for Anton, the average estimate otherwise."""
+    usable = width - 2 * SIDE_MARGIN - 2 * style.outline
+    m = font_metrics(style.font)
+    widest = max((m.width(l, style.size) if m else len(l) * AVG_EM.get(style.font, 0.5) * style.size)
+                 for l in lines) if lines else 0
+    if widest <= usable:
+        return style.size
+    return max(12, int(style.size * usable / widest))
+
+
 @dataclass
 class CaptionStyle:
     preset: str = "anton"
     enabled: bool = True
     font: str = "Anton"
-    size: int = 52
+    size: int = 73              # was 52; enlarged 40% at the owner's request (16 Nov 2026), same centre line
     outline: float = 3.0
     position: float = 0.72      # vertical centre of the caption block, as a fraction of frame height
     backing: bool = False       # optional subtle dark box behind text (off by default)
     bold: bool = False          # Anton is a single heavy weight; faux-bold would distort it
-    source_label: bool = True   # small provenance line at the top ("Excerpt · title · m:ss")
+    # Small provenance line at the top ("Excerpt · title · m:ss"). Off by default at the owner's request
+    # (16 Nov 2026); the source and timestamps stay in each clip's description and provenance record.
+    # Settings -> Caption style -> "Small source label at top" turns it back on.
+    source_label: bool = False
 
     def max_chars(self, width: int = 1080) -> int:
         usable = width - 2 * SIDE_MARGIN
@@ -121,8 +205,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if label and style.source_label and phrases:
         out.append(f"Dialogue: 1,{_ts(0)},{_ts(phrases[-1]['end'] + 5)},Label,,0,0,0,,{_esc(label)}")
     for p in phrases:
-        text = "\\N".join(_esc(line) for line in p["lines"][:2])
-        out.append(f"Dialogue: 0,{_ts(p['start'])},{_ts(p['end'])},Caption,,0,0,0,,{{\\an5\\pos({x},{y})}}{text}")
+        lines = p["lines"][:2]
+        text = "\\N".join(_esc(line) for line in lines)
+        fs = fitted_size(lines, style, width)
+        shrink = f"\\fs{fs}" if fs < style.size else ""         # only a line that would cross the margins
+        out.append(f"Dialogue: 0,{_ts(p['start'])},{_ts(p['end'])},Caption,,0,0,0,,"
+                   f"{{\\an5\\pos({x},{y}){shrink}}}{text}")
     return header + "\n".join(out) + "\n"
 
 

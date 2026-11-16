@@ -496,13 +496,18 @@ def test_repaired_channel_listing_takes_a_baseline_instead_of_queuing_everything
     sid, ok, _ = monitor.add_source(s, db, name="Repaired", kind="channel", url=f"{srv.url}/c/show")
     db.execute("UPDATE sources SET last_success=? WHERE id=?", (time.time() - 3600, sid))
     db.insert("source_items", source_id=sid, item_key="show", title="show", url=f"{srv.url}/c/show", state="failed")
+    jid = db.insert("jobs", kind="download_url", status="failed", payload_json="{}", attempts=1, max_attempts=6,
+                    dedupe_key=f"download:{ingest.normalize_url(f'{srv.url}/c/show')}", error="SourceError: login")
     listing = [{"key": f"v{i}", "title": f"Episode {i}", "url": f"{srv.url}/v{i}.html", "live": False}
                for i in range(1, 6)]
     mon.lister = lambda settings, url, limit=15: [dict(e) for e in listing]
     res = mon.poll(sid)
     assert "error" not in res and res["new"] == 0
-    assert db.one("SELECT COUNT(*) n FROM jobs WHERE kind='download_url'")["n"] == 0
+    assert db.one("SELECT COUNT(*) n FROM jobs WHERE kind='download_url' AND status<>'cancelled'")["n"] == 0
     assert db.one("SELECT COUNT(*) n FROM source_items WHERE source_id=? AND state='baseline'", (sid,))["n"] == 5
+    # the leftover "channel as one video" item and its failed download are gone from the dashboard counts
+    assert db.one("SELECT COUNT(*) n FROM source_items WHERE source_id=? AND state='failed'", (sid,))["n"] == 0
+    assert db.one("SELECT status FROM jobs WHERE id=?", (jid,))["status"] == "cancelled"
 
     listing.insert(0, {"key": "v6", "title": "Episode 6", "url": f"{srv.url}/v6.html", "live": False})
     db.execute("UPDATE sources SET next_check = 0")

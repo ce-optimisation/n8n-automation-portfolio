@@ -28,7 +28,13 @@ def test_srt_and_ass_output(tmp_path, settings):
     assert (tmp_path / "c.srt").read_text(encoding="utf-8").startswith("1\n00:00:00,000 --> ")
     render.write_ass(ph, tmp_path / "c.ass", settings, 1920, 1080, "Excerpt · Test")
     ass = (tmp_path / "c.ass").read_text(encoding="utf-8")
-    assert "PlayResY: 1920" in ass and "{Braces}" not in ass and "Excerpt · Test" in ass
+    assert "PlayResY: 1920" in ass and "{Braces}" not in ass
+    assert "Excerpt · Test" not in ass                      # no source label on the video by default (owner request)
+    from dataclasses import replace
+    from clipengine import captions
+    render.write_ass(ph, tmp_path / "l.ass", settings, 1920, 1080, "Excerpt · Test",
+                     style=replace(captions.load_style(None), source_label=True))
+    assert "Excerpt · Test" in (tmp_path / "l.ass").read_text(encoding="utf-8")   # still available in Settings
 
 
 def test_layout_places_captions_below_landscape_video(settings):

@@ -615,9 +615,16 @@ class SourceMonitor:
                 result["new"] = self._handle_vods(src, parse_feed(text, final), first)
             elif src["kind"] == "channel":
                 entries = self.lister(self.settings, src["url"])
-                # Drop a bogus "the channel itself" item left by an earlier empty listing.
-                self.db.execute("DELETE FROM source_items WHERE source_id=? AND state='baseline' AND kind='vod' "
-                                "AND (url=? OR url IS NULL)", (sid, src["url"]))
+                # Drop a bogus "the channel itself" item left by an earlier empty listing (stored as
+                # baseline, or queued and then failed), and retire the download job it caused: that job
+                # can never succeed (a channel address is refused as a single video) and would otherwise
+                # stay on the dashboard as a failed download with a Retry button.
+                self.db.execute("DELETE FROM source_items WHERE source_id=? AND kind='vod' AND state IN "
+                                "('baseline', 'queued', 'failed') AND (url=? OR url IS NULL)", (sid, src["url"]))
+                self.db.execute("UPDATE jobs SET status='cancelled', message='Obsolete: the channel address was "
+                                "never a single video; the channel is now listed correctly', updated_at=? "
+                                "WHERE kind='download_url' AND status IN ('failed', 'queued') AND dedupe_key=?",
+                                (time.time(), f"download:{ingest.normalize_url(src['url'])}"))
                 entries = self._resolve_unknown(src, entries, first)
                 live = [e for e in entries if e.get("live")]
                 result["new"] = self._handle_vods(src, [e for e in entries if not e.get("live")], first)

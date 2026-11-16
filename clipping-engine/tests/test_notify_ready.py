@@ -203,7 +203,7 @@ def test_ass_uses_anton_sentence_case_two_lines_and_safe_position():
     doc = captions.build_ass(ph, style, label="Excerpt · Test · 0:00")
     caption_style = next(l for l in doc.splitlines() if l.startswith("Style: Caption"))
     f = caption_style.split(",")
-    assert f[1] == "Anton" and f[2] == "52" and f[3] == "&H00FFFFFF" and f[5] == "&H00000000"
+    assert f[1] == "Anton" and f[2] == "73" and f[3] == "&H00FFFFFF" and f[5] == "&H00000000"
     assert f[7] == "0" and f[15] == "1" and float(f[16]) == 3.0 and f[17] == "0"   # no faux bold, outline, no shadow
     events = [l for l in doc.splitlines() if l.startswith("Dialogue: 0")]
     assert all("\\an5\\pos(540,1382)" in e for e in events)
@@ -277,3 +277,23 @@ def test_supervisor_restarts_after_crash(tmp_path):
     rc = supervise(["--no-browser"], sleep=lambda s: None,
                    cmd_factory=lambda args: [sys.executable, str(script), str(counter)])
     assert rc == 0 and counter.read_text() == "2"
+
+
+def test_caption_lines_never_cross_the_side_margins():
+    """Owner request (16 Nov 2026): captions 40% larger (52 -> 73) at the same centre line, and they must
+    never run off either side. Real Anton glyph widths (read from the bundled TTF) decide; a line that
+    would cross the side margins is shrunk for that caption only."""
+    style = captions.CaptionStyle()
+    assert style.size == 73 and style.position == 0.72 and style.source_label is False
+    m = captions.font_metrics("Anton")
+    assert m is not None
+    usable = 1080 - 2 * captions.SIDE_MARGIN - 2 * style.outline
+    normal = ["The data are collected in a", "series of swaths, each of"]
+    assert captions.fitted_size(normal, style) == 73
+    wide = ["W" * 35, "Representatives"]
+    fs = captions.fitted_size(wide, style)
+    assert fs < 73 and m.width(wide[0], fs) <= usable
+    doc = captions.build_ass([{"start": 0, "end": 1, "lines": normal}, {"start": 1, "end": 2, "lines": wide}], style)
+    events = [l for l in doc.splitlines() if l.startswith("Dialogue: 0")]
+    assert r"\fs" not in events[0] and rf"\fs{fs}" in events[1]
+    assert "Label" not in "\n".join(l for l in doc.splitlines() if l.startswith("Dialogue"))
