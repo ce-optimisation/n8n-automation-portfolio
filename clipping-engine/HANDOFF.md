@@ -479,6 +479,19 @@ default stays v4 (one setting away), and politics stays on v4.
   SHA-256 dedupe, live restart-overlap trimming are in place. **Not implemented:** skipping low-value sections and
   cross-stream clip de-duplication (no reliable signal yet; would risk losing material).
 
+### 1C.5 Operational readiness for the first real livestream (16 Nov 2026, evening)
+
+| Item | State | Evidence |
+|---|---|---|
+| Phone dashboard | **Working over Tailscale** (iPhone sign-in itself still to be confirmed by the owner) | `DASHBOARD_PASSWORD` set in `.env` (strong random, also in Windows Credential Manager, service `local-clipping-engine`, user `dashboard_password`; never in Git/logs). Tested from the PC via `https://laptop-rcinkek2.taildd0ae9.ts.net`: unauthenticated → /login, wrong password refused, right password → HttpOnly + SameSite=Strict + Secure cookie (30 days), pages 200, cross-origin POST 403. Tailscale serve is tailnet-only. |
+| Live detection on Rumble | **Verified against real Rumble data** (another channel's live stream; same page layout) | Channel grid item `live: true, livestream_status: 2` → engine parses live=True; yt-dlp on a live Rumble page: `is_live`, 1080p HLS selected by the recorder's format. Fuentes' own broadcast not yet observed. |
+| 1080p minimum (owner requirement) | Implemented | `LIVE_MIN_HEIGHT=1080`: live capture and downloads never drop below 1080p for disk reasons; `storage.live_plan` records what fits at 1080p, the low-disk stop keeps what was captured; preflight needs ≥0.5 h at 1080p. A full 4.5 h show needs ~10.5 GB free. |
+| Unattended lifecycle | **Verified end to end on disposable engine-generated media** (real FFmpeg live HLS, real recorder, real render; stub transcript; MOCK Drive) | `test_live_capture_to_verified_cloud_copy_then_safe_raw_deletion`: detection → recording (heavy work held) → finalise → automatic import → transcribe/select/render → upload/verify → raw deleted; clips, transcript, provenance kept; nothing published. Drive full → raw kept. `test_failed_render_or_pending_job_blocks_raw_deletion`. |
+| Google Drive | **Awaiting owner OAuth client** | Not set up. `scripts/cloud_selftest.py` runs the REAL test (upload, size/MD5 verify, retry-no-duplicate, byte-identical retrieval, deletes only its own test files) once connected. Raw deletion stays inactive until then (gate 6). |
+| Windows unattended | Ready, with caveats | Engine starts at sign-in (Startup folder `ClippingEngine.cmd`); runs detached from any Claude session; AC sleep = never (High performance plan); plugged in; no Windows Update restart pending. Lid-close action not exposed by this PC's power plan: keep the lid open. Engine does not start before sign-in (after a reboot someone must sign in). Wi-Fi only (recorder restarts on reconnect while the stream is live; restart limit 30). |
+| Disk | See the readiness report | Safe cleanup of test artefacts (1.55 GB), Claude VM bundle cleanup (owner-approved), the two raw test recordings deleted at the owner's request (clips kept). |
+| Evidence after the show | `scripts/live_report.py` (read-only) | Prints detection/recording times, size, restarts, transcription time, clips, Drive ids, deletion gates, review queue. "PENDING" until a broadcast is detected. |
+
 ## 1A. Session 3: what was built (read this first)
 
 ### 1A.1 Source monitoring (`clipengine/monitor.py`, Sources page)

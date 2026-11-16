@@ -1,7 +1,7 @@
 # Handoff prompt for ChatGPT — Local AI Video Clipping & Editorial Review Engine
 
 > Paste everything below the line into ChatGPT (ideally with the repository attached or connected).
-> State as of **16 November 2026, end of session 6** (multi-niche expansion), branch
+> State as of **16 November 2026, evening — ready for the first real livestream test** (session 6), branch
 > `claude/optimistic-noether-k52qjf`. The detailed engineering record is `clipping-engine/HANDOFF.md`
 > (read §0, §1B, **§1C** and §17–19). The code is the source of truth where documents disagree.
 
@@ -60,7 +60,11 @@ niche, platform, date, status), Ready to Post, Sources, **Creators**, **Research
 | Captions 73 px, same centre, side-margin fitting, no top label | Verified on the owner's PC (12 real clips) |
 | Profiles, selection v5, queue, storage, lifecycle gates, packages, research | Unit/integration-tested locally; see §1C of HANDOFF.md for test counts |
 | Google Drive, YouTube private upload, Twitch/Kick/YouTube discovery | **MOCK-tested only — READY FOR OWNER CONNECTION** |
-| Full-length live recording on the PC | **Blocked by disk space** (~1.4 GB free; ~8 GB needed for a 4-hour show) |
+| Phone dashboard over Tailscale | Working (password set; tested via the tailnet address); iPhone sign-in to be confirmed by the owner |
+| Live detection on Rumble | Verified on real Rumble data (live grid flag, 1080p live HLS); Fuentes' own broadcast not yet observed |
+| Unattended lifecycle (live → record → process → upload → verify → raw deletion) | Verified end to end on engine-generated media with a MOCK Drive |
+| Live recording quality | 1080p minimum (owner requirement); a full 4.5 h show needs ~10.5 GB free |
+| CI | Green (runs #49, #50) |
 | Live Rumble broadcast | Never observed yet |
 | Facebook Reels draft, X API | Not implemented (manual handoff; X API is paid) |
 
@@ -91,6 +95,13 @@ niche, platform, date, status), Ready to Post, Sources, **Creators**, **Research
 5. **Permissions**: written permission (or campaign terms) for any creator you want to clip; record it on the
    creator page and add an authorised source.
 6. Approve the email wording in Settings → Notifications; optional Tailscale for phone review.
+
+## The first real livestream (pending at handoff)
+
+Target: America First, early hours of Tue 17 Nov UK time. After it, run `.venv\Scripts\python.exe scripts\live_report.py`
+in `%LOCALAPPDATA%\ClippingEngine` for the evidence (detection/recording times, size, restarts, transcription, clips,
+Drive ids, deletion gates, review queue). Do not report the test as passed until that report shows a real broadcast.
+Once Drive is connected, `scripts\cloud_selftest.py` performs the real Drive test with disposable assets.
 
 ## Next engineering steps
 
