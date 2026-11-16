@@ -27,6 +27,17 @@ def test_login_rate_limited_and_cookie(settings):
         assert "secure" in r.headers["set-cookie"].lower() and "httponly" in r.headers["set-cookie"].lower()
 
 
+def test_google_oauth_callback_reachable_without_login_cookie(settings):
+    """Google redirects back cross-site, so the SameSite=Strict login cookie is absent. The callback must still be
+    reached (it is guarded by one-time state + PKCE); an unknown state is refused, not bounced to /login."""
+    settings.dashboard_password = "pw-pw-pw-pw"
+    with TestClient(create_app(settings, start_worker=False), base_url="http://127.0.0.1:8765") as c:
+        r = c.get("/google/oauth/callback", params={"state": "forged", "code": "x"}, follow_redirects=False)
+        assert r.status_code in (302, 303) and "/login" not in r.headers["location"]
+        assert "/storage" in r.headers["location"]
+        assert c.get("/storage", follow_redirects=False).headers["location"].endswith("/login")
+
+
 def test_setup_checklist_is_honest(settings):
     app = create_app(settings, start_worker=False)
     with TestClient(app) as c:

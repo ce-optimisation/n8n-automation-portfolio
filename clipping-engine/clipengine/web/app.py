@@ -193,7 +193,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             if origin and urlparse(origin).netloc != request.headers.get("host"):
                 return PlainTextResponse("Cross-origin request refused", status_code=403)
         if settings.dashboard_password and not (path.startswith("/static") or path in ("/login", "/healthz")
-                                                or path.startswith("/oauth/")):
+                                                or path.startswith("/oauth/") or path == "/google/oauth/callback"):
+            # OAuth callbacks are reached by a cross-site redirect, so the SameSite=Strict login cookie is not
+            # sent. They are protected instead by a one-time state value plus a PKCE verifier held in memory.
             if not hmac.compare_digest(request.cookies.get("ce_auth", ""), _auth_token()):
                 return RedirectResponse("/login", status_code=303)
         return await call_next(request)
