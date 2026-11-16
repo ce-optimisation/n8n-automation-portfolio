@@ -17,7 +17,8 @@ from .transcribe import get_transcriber
 log = logging.getLogger("clipengine.pipeline")
 
 OVERRIDABLE = {"clips_per_recording": int, "clip_min_seconds": float, "clip_max_seconds": float,
-               "clip_target_seconds": float, "language": str, "llm_provider": str, "selection_profile": str}
+               "clip_target_seconds": float, "language": str, "llm_provider": str, "selection_profile": str,
+               "whisper_prompt": str}
 
 
 def effective_settings(settings: Settings, overrides: dict | None) -> Settings:
@@ -101,6 +102,43 @@ class Pipeline:
         queue.register("process_recording:failed", self._recording_failed)
         queue.register("render_clip", self.render_clip)
         queue.register("render_clip:failed", self._render_failed)
+        self.on_clip_rendered: list = []      # callbacks(clip_id): cloud upload
+        self.on_recording_done: list = []     # callbacks(recording_id): lifecycle check
+        self.on_recording_started: list = []  # callbacks(recording_id): engine-ownership flag
+        queue.priority_for = self.priority_for
+
+    # ---- creators, niches and priority -------------------------------------------------------
+    def creator_for(self, rec):
+        """The creator a recording belongs to: set explicitly, or via the monitored source it came from."""
+        if rec["creator_id"]:
+            return self.db.one("SELECT * FROM creators WHERE id=?", (rec["creator_id"],))
+        row = self.db.one("SELECT s.creator_id FROM source_items i JOIN sources s ON s.id=i.source_id "
+                          "WHERE i.recording_id=? AND s.creator_id IS NOT NULL", (rec["id"],))
+        if row:
+            self.db.update("recordings", rec["id"], creator_id=row["creator_id"])
+            return self.db.one("SELECT * FROM creators WHERE id=?", (row["creator_id"],))
+        return None
+
+    def policy_for(self, rec):
+        from . import editorial
+        creator = self.creator_for(rec)
+        pol = editorial.policy_for(self.db, rec["niche_key"], creator)
+        if pol and not rec["niche_key"]:
+            self.db.update("recordings", rec["id"], niche_key=pol.niche.key)
+        return pol
+
+    def priority_for(self, recording_id):
+        """Live captures first, then by creator priority; back-catalogue (backfill) last."""
+        from .jobs import PRIORITY_BACKFILL, PRIORITY_LIVE
+        rec = self.db.recording(recording_id) if recording_id else None
+        if not rec:
+            return None
+        if rec["origin"] == "live_capture":
+            return PRIORITY_LIVE
+        if rec["origin"] == "archive":
+            return PRIORITY_BACKFILL
+        creator = self.creator_for(rec)
+        return int(creator["priority"]) if creator else None
 
     # ---- recording -------------------------------------------------------
     def _recording_failed(self, ctx: JobContext) -> None:
@@ -204,7 +242,16 @@ class Pipeline:
         rec = self.db.recording(rid)
         if not rec:
             raise PermanentError(f"Recording {rid} no longer exists")
+        for cb in self.on_recording_started:
+            cb(rid)
+        policy = self.policy_for(rec)
         overrides = {**json.loads(rec["settings_json"] or "{}"), **(ctx.payload.get("settings") or {})}
+        if policy:
+            # niche + creator defaults; explicit per-recording overrides still win
+            overrides = {"clips_per_recording": policy.clips_per_recording, "clip_min_seconds": policy.min_s,
+                         "clip_max_seconds": policy.max_s, "selection_profile": policy.niche.selection_profile,
+                         "whisper_prompt": policy.whisper_prompt(), **overrides}
+            ctx.log(f"Editorial policy: {policy.label()}")
         s = effective_settings(self.settings, overrides)
         segs = self.db.segments(rid)
         if not segs or ctx.payload.get("retranscribe"):
@@ -233,10 +280,33 @@ class Pipeline:
         report: dict = {}
         ts = time.time()
         profile = s.selection_profile if s.selection_profile in segment.PROFILES else segment.DEFAULT_PROFILE
-        cands = segment.select(segs, n=s.clips_per_recording, min_s=s.clip_min_seconds,
+        prof = segment.PROFILES[profile]
+        if policy and policy.reply_required and not prof.reply_required:
+            prof = replace(prof, reply_required=True)
+        # Ask for extra candidates when a niche policy may reject some, so quality is not traded for count.
+        ask = s.clips_per_recording * (2 if policy else 1)
+        cands = segment.select(segs, n=ask, min_s=s.clip_min_seconds,
                                max_s=s.clip_max_seconds, target=s.clip_target_seconds or None,
                                duration=rec["duration"], reranker=self.make_reranker(s, ctx), report=report,
-                               profile=profile)
+                               profile=prof)
+        assessments = {}
+        if policy:
+            kept, rejected = [], []
+            for c in sorted(cands, key=lambda c: c.score, reverse=True):
+                a = policy.assess(c.text, c.score, c.duration)
+                if a["reject"]:
+                    rejected.append({"start": round(c.start, 1), "end": round(c.end, 1), "quality": a["quality"],
+                                     "reasons": a["reject"]})
+                    continue
+                if len(kept) < s.clips_per_recording:
+                    kept.append(c)
+                    assessments[id(c)] = a
+            report["policy"] = policy.label()
+            report["rejected"] = rejected[:20]
+            if rejected:
+                report["note"] = ((report.get("note") or "") + f" {len(rejected)} candidate(s) rejected by the "
+                                  f"{policy.niche.name} profile (reasons in the selection report).").strip()
+            cands = sorted(kept, key=lambda c: c.start)
         self._record_stats(rid, selection_s=round(time.time() - ts, 2), selection=report)
         self.db.update("recordings", rid, selection_note=report.get("note"))
         ctx.log(f"Selection: {report}")
@@ -250,8 +320,11 @@ class Pipeline:
         for c in cands:
             if rec["duration"] and c.start >= rec["duration"] - 1.0:
                 continue                      # cannot point outside the media
+            a = assessments.get(id(c))
             cid = self.create_clip(rec, next_idx + made, c.start, min(c.end, rec["duration"] or c.end), words,
-                                   sents, s, score=c.score, reasons=c.reasons, method=c.method, summary=c.summary)
+                                   sents, s, score=c.score, reasons=c.reasons + (a["reasons"] if a else []),
+                                   method=c.method, summary=c.summary, quality=a,
+                                   niche_key=policy.niche.key if policy else None)
             self.enqueue_render(cid)
             made += 1
         if not made:
@@ -260,9 +333,18 @@ class Pipeline:
         ctx.log(f"Selected {len(cands)} candidate excerpts; render jobs queued")
 
     def create_clip(self, rec, idx, start, end, words, sents, s: Settings, *, score=None, reasons=None,
-                    method="heuristic", summary=None) -> int:
+                    method="heuristic", summary=None, quality=None, niche_key=None) -> int:
         start, end = snap_bounds(words, start, end)
         fields = self.clip_text_fields(rec, start, end, words, sents, s, summary)
+        if quality:
+            # niche review flags (claims, financial promotion, political context) join the safety flags:
+            # the editorial gate then requires an explicit decision before any publication
+            if quality["flags"]:
+                flags = json.loads(fields["safety_flags"]) + quality["flags"]
+                fields.update(safety_flags=json.dumps(flags), safety_status="flagged")
+            fields["quality_json"] = json.dumps(quality)
+        if niche_key:
+            fields["niche_key"] = niche_key
         return self.db.insert("clips", recording_id=rec["id"], idx=idx, start=start, end=end,
                               status="pending_render", score=score, score_reasons=json.dumps(reasons or []),
                               selection_method=method, machine_summary=summary, **fields)
@@ -341,6 +423,11 @@ class Pipeline:
         for d in base.glob(f"clip{clip['id']:05d}_r*"):
             if d != out_dir:
                 shutil.rmtree(d, ignore_errors=True)
+        for cb in self.on_clip_rendered:
+            try:
+                cb(clip["id"])
+            except Exception:  # noqa: BLE001 - an upload problem must never fail a render
+                log.exception("post-render hook failed")
         self._maybe_complete(rec["id"])
 
     def _maybe_complete(self, rid: int) -> None:
@@ -356,6 +443,11 @@ class Pipeline:
             self.db.update("recordings", rid, status="ready", stage="done")
             from . import notify
             notify.on_recording_ready(self.settings, self.db, self.queue, rid)
+        for cb in self.on_recording_done:
+            try:
+                cb(rid)
+            except Exception:  # noqa: BLE001
+                log.exception("recording-done hook failed")
 
     # ---- owner actions ---------------------------------------------------
     def adjust_and_regenerate(self, clip_id: int, start: float | None = None, end: float | None = None) -> int:

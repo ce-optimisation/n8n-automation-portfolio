@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Social accounts</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="card muted">Register the accounts you already own. Each is mapped to the niches it may receive, so brands never mix:
+a clip can only be packaged for an account mapped to the clip's niche. The engine never creates accounts, signs in on your behalf,
+or publishes publicly. YouTube uploads (when connected) are always <b>private</b>; everything else is a prepared handoff you post yourself.</section>
+{% for a in rows %}<section class="card">
+  <h2>{{ a.platform }} · @{{ a.handle }} <span class="badge">{{ 'connected' if yt.get(a.id) else a.status }}</span></h2>
+  <form method="post" action="/accounts/{{ a.id }}/niches" class="stack">
+    <label>Brand <input name="brand" value="{{ a.brand or '' }}"></label>
+    <fieldset><legend>Receives clips from</legend>{% set an = a.niches_json|fromjson %}{% for n in niches %}<label><input type="checkbox" name="niches" value="{{ n.key }}" {% if n.key in an %}checked{% endif %}> {{ n.name }}</label>{% endfor %}</fieldset>
+    <button class="btn ghost">Save mapping</button></form>
+  <div class="buttons">{% if a.platform == 'youtube' and not yt.get(a.id) %}{% if google_ready %}<a class="btn" href="/accounts/{{ a.id }}/youtube/connect">Connect (private uploads only)</a>{% else %}<span class="muted">READY FOR OWNER CONNECTION — add the Google client in .env (Storage page steps)</span>{% endif %}{% endif %}
+  <form method="post" action="/accounts/{{ a.id }}/delete"><button class="btn ghost">Remove</button></form></div>
+</section>{% endfor %}
+<form method="post" action="/accounts" class="card stack"><h2>Add an account you own</h2>
+  <label>Platform <select name="platform">{% for p in ['youtube','tiktok','instagram','facebook','x','rumble'] %}<option>{{ p }}</option>{% endfor %}</select></label>
+  <label>Handle <input name="handle" required placeholder="@yourchannel"></label>
+  <label>Brand / editorial identity <input name="brand"></label>
+  <fieldset><legend>Niches</legend>{% for n in niches %}<label><input type="checkbox" name="niches" value="{{ n.key }}"> {{ n.name }}</label>{% endfor %}</fieldset>
+  <button class="btn">Add</button></form>
+{% endblock %}

@@ -789,6 +789,13 @@ class SourceMonitor:
         if it and (it["state"] not in LIVE_STATES or it["id"] in self.procs):
             return it["state"] in LIVE_STATES
         if not it:
+            from . import storage
+            ok, msg = storage.live_preflight(self.settings, 1.0)
+            if not ok:
+                # Not stored as an item, so the next check tries again once space has been freed.
+                self.db.update("sources", src["id"], status_detail=f"Live stream detected but NOT recorded: {msg}")
+                log.warning("source %s: live stream not recorded: %s", src["id"], msg)
+                return False
             wd = self.settings.work_dir / "live" / f"src{src['id']:03d}_{re.sub(r'[^A-Za-z0-9_-]', '_', key)[:60]}"
             wd.mkdir(parents=True, exist_ok=True)
             iid = self.db.insert("source_items", source_id=src["id"], item_key=key, title=title, url=url, kind="live",
@@ -847,6 +854,15 @@ class SourceMonitor:
                 continue
             elapsed = time.time() - (it["started_at"] or time.time())
             if p.poll() is None:
+                from . import storage
+                if storage.free_bytes(self.settings.data_dir) < self.settings.disk_reserve_gb * 0.5e9:
+                    self._log_item(iid, "Disk almost full: stopping the recording and keeping what was captured",
+                                   "WARNING")
+                    p.terminate()
+                    p.wait(timeout=15)
+                    self.procs.pop(iid, None)
+                    self._finalize(iid)
+                    continue
                 if elapsed > self.settings.max_recording_hours * 3600:
                     self._log_item(iid, "Maximum recording length reached; stopping", "WARNING")
                     p.terminate()

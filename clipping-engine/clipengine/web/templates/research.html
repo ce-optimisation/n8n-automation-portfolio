@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Research workspace</h1>
+<section class="card">
+  <p>Researched: <b>{{ counts.get('research', 0) }}</b> · Shortlisted: <b>{{ counts.get('shortlisted', 0) }}</b> ·
+  Operational creators: <b>{{ counts.get('active', 0) + counts.get('paused', 0) }}</b> · Sources enabled in the engine: <b>{{ enabled }}</b></p>
+  <p class="muted">Commercial discovery is kept apart from authorisation: candidates are ranked on opportunity alone. Being listed here
+  never allows retrieval. Scores are assessments with sources and dates, not facts. Full report: <code>clipping-engine/research/</code>.</p>
+</section>
+{% if scores %}<section class="card"><h2>Niche ranking</h2>
+<table class="jobs"><thead><tr><th>Niche</th><th>Overall</th><th>Audience</th><th>Profit</th><th>Confidence</th></tr></thead><tbody>
+{% for s in scores %}<tr><td>{{ s.name or s.key }}</td><td><b>{{ s.overall|round|int }}</b></td><td>{{ s.audience_score|round|int }}</td><td>{{ s.profit_score|round|int }}</td><td><small>{{ s.confidence or '' }}</small></td></tr>{% endfor %}
+</tbody></table><p class="muted"><small>Edit criteria on the <a href="/analytics">Results</a> page.</small></p></section>{% endif %}
+<form method="get" class="card row">
+  <label>Niche <select name="niche"><option value="">all</option>{% for n in niches %}<option value="{{ n.key }}" {% if f.niche == n.key %}selected{% endif %}>{{ n.name }}</option>{% endfor %}</select></label>
+  <label>Platform <select name="platform"><option value="">all</option>{% for p in platforms %}<option {% if f.platform == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></label>
+  <label>Sort <select name="sort"><option value="score" {% if f.sort == 'score' %}selected{% endif %}>commercial score</option><option value="name" {% if f.sort == 'name' %}selected{% endif %}>name</option></select></label>
+  <button class="btn">Filter</button></form>
+<table class="jobs"><thead><tr><th>Creator</th><th>Platform</th><th>Niches</th><th>Score</th><th></th></tr></thead><tbody>
+{% for c in rows %}{% set st = c.stats_json|fromjson if c.stats_json else {} %}<tr>
+<td><a href="/creators/{{ c.id }}">{{ c.name }}</a>{% if c.status == 'shortlisted' %} <span class="badge st-ready">shortlisted</span>{% endif %}
+{% if st.research %}<br><small class="muted">{{ st.research.get('audience', '') }}</small>{% endif %}</td>
+<td>{{ c.platform or '' }}</td><td><small>{{ (c.niches_json|fromjson)|join(', ') }}</small></td>
+<td>{{ c.commercial_score|round|int if c.commercial_score is not none else '' }}</td>
+<td><form method="post" action="/creators/{{ c.id }}/shortlist"><input type="hidden" name="on" value="{{ '0' if c.status == 'shortlisted' else '1' }}"><button class="btn ghost">{{ 'Unshortlist' if c.status == 'shortlisted' else 'Shortlist' }}</button></form></td></tr>
+{% else %}<tr><td colspan="5" class="muted">No research candidates yet.</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

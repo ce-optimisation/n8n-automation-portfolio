@@ -39,6 +39,14 @@ def settings(tmp_path, monkeypatch):
     s = get_settings(llm_provider="none", open_browser=False)
     s.data_dir = tmp_path / "data"
     s.allowed_url_domains = []
+    # Test media are tiny: plan with tiny figures so tests never depend on the host's free disk space
+    # (the planning logic itself is tested with explicit values in test_expansion.py).
+    s.record_gb_per_hour = 0.001
+    s.disk_reserve_gb = 0.0
+    # Never pick up real platform credentials from the machine running the tests.
+    for attr in ("twitch_client_id", "twitch_client_secret", "kick_client_id", "kick_client_secret",
+                 "youtube_api_key", "google_client_id", "google_client_secret"):
+        setattr(s, attr, "")
     s.ensure_dirs()
     return s
 

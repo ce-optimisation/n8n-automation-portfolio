@@ -97,4 +97,5 @@
   <ul class="list">{% for a in attempts %}<li>{{ a.created_at|dt }} · {{ a.platform }} · <span class="badge pub-{{ a.status }}">{{ PUB_STATES.get(a.status, a.status) }}</span>{% if a.remote_id %} · id {{ a.remote_id }}{% endif %}<br><small class="muted">{{ a.detail }}</small></li>{% endfor %}</ul>
   {% endif %}
 </section>
+<div hx-get="/clips/{{ c.id }}/workspace" hx-trigger="load" hx-swap="outerHTML"><p class="muted card">Loading editorial workspace…</p></div>
 {% endblock %}

@@ -88,6 +88,7 @@ def run_once(settings: Settings, db: Database, queue=None) -> dict:
 class Maintenance:
     def __init__(self, settings: Settings, db: Database, interval: float = 3600, queue=None):
         self.settings, self.db, self.interval, self.queue = settings, db, interval, queue
+        self.extra: list = []        # further periodic tasks (lifecycle: raw deletion gates, clip retention)
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
 
@@ -96,6 +97,8 @@ class Maintenance:
             while not self._stop.wait(timeout=30 if self._t is None else self.interval):
                 try:
                     run_once(self.settings, self.db, self.queue)
+                    for task in self.extra:
+                        task()
                 except Exception:  # noqa: BLE001
                     log.exception("maintenance failed")
         self._t = threading.Thread(target=loop, name="clipengine-maintenance", daemon=True)

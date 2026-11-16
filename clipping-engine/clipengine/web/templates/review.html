@@ -3,10 +3,17 @@
 <h1>Ready to Review</h1>
 <p class="muted">Each clip: preview, source, timestamps, transcript with context, suggested description, content and rights status. <a href="/search">Search transcripts</a></p>
 <nav class="tabs">
-  {% for st, label in [('ready','Awaiting review'),('approved','Approved'),('rejected','Rejected'),('rendering','Rendering'),('pending_render','Queued'),('failed','Failed'),('all','All')] %}
+  {% for st, label in [('ready','Awaiting review'),('approved','Approved'),('rejected','Rejected'),('published','Published'),('rendering','Rendering'),('pending_render','Queued'),('failed','Failed'),('all','All')] %}
   <a href="/review?status={{ st }}" class="{% if status == st %}active{% endif %}">{{ label }}</a>
   {% endfor %}
 </nav>
+{% if filters is defined %}<form method="get" class="card row">
+  <input type="hidden" name="status" value="{{ status }}">
+  <label>Creator <select name="creator"><option value="">all</option>{% for c in creators %}<option value="{{ c.id }}" {% if filters.creator == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></label>
+  <label>Niche <select name="niche"><option value="">all</option>{% for n in niches %}<option value="{{ n.key }}" {% if filters.niche == n.key %}selected{% endif %}>{{ n.name }}</option>{% endfor %}</select></label>
+  <label>Platform <select name="platform"><option value="">any</option>{% for p in platforms %}<option {% if filters.platform == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></label>
+  <label>Since <input type="date" name="since" value="{{ filters.since }}"></label>
+  <button class="btn ghost">Filter</button></form>{% endif %}
 {% for c in clips %}{% set rec = None %}{% include "_clip_card.html" %}
 {% else %}<p class="muted card">No clips in this list.</p>{% endfor %}
 {% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/niches">← Niches</a></p>
+<h1>{{ p.name }} <small class="muted">v{{ p.version }}</small></h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+{% if p.risk == 'high' %}<p class="err">Higher-risk niche: every clip is flagged for contextual/compliance review before any publication. It must never be used to promote extremist advocacy or financial products.</p>{% endif %}
+<form method="post" class="card stack">
+  <label><input type="checkbox" name="active" value="1" {% if p.active %}checked{% endif %}> Active (creators can be assigned)</label>
+  <label>Name <input name="name" value="{{ p.name }}"></label>
+  <label>Audience <input name="audience" value="{{ p.audience }}"></label>
+  <label>Purpose <input name="purpose" value="{{ p.purpose }}"></label>
+  <label>What a complete clip is <textarea name="complete_clip" rows="2">{{ p.complete_clip }}</textarea></label>
+  <label>Preferred hook <input name="hook" value="{{ p.hook }}"></label>
+  <label>Pacing <input name="pacing" value="{{ p.pacing }}"></label>
+  <label>Context requirements <input name="context_requirements" value="{{ p.context_requirements }}"></label>
+  <label>Subjects (comma-separated) <textarea name="subjects" rows="2">{{ p.subjects|join(', ') }}</textarea></label>
+  <label>Favoured vocabulary — also given to the speech model as hints <textarea name="terms" rows="3">{{ p.terms|join(', ') }}</textarea></label>
+  <label>Terms that lower a clip's score <input name="avoid_terms" value="{{ p.avoid_terms|join(', ') }}"></label>
+  <div class="row">
+    <label>Min s <input name="min_s" type="number" step="1" value="{{ p.min_s|int }}" style="width:6em"></label>
+    <label>Max s <input name="max_s" type="number" step="1" value="{{ p.max_s|int }}" style="width:6em"></label>
+    <label>Clips per recording <input name="clips_per_recording" type="number" value="{{ p.clips_per_recording }}" style="width:5em"></label>
+    <label>Minimum quality (0–100) <input name="min_quality" type="number" value="{{ p.min_quality }}" style="width:5em"></label>
+  </div>
+  <div class="row">
+    <label>Selector <select name="selection_profile">{% for x in profiles %}<option {% if x == p.selection_profile %}selected{% endif %}>{{ x }}</option>{% endfor %}</select></label>
+    <label>Specificity weight <input name="specificity_weight" type="number" step="0.01" value="{{ p.specificity_weight }}" style="width:5em"></label>
+    <label>Reaction weight <input name="reaction_weight" type="number" step="0.01" value="{{ p.reaction_weight }}" style="width:5em"></label>
+    <label>Caption scale <input name="caption_scale" type="number" step="0.05" value="{{ p.caption_scale }}" style="width:5em"></label>
+  </div>
+  <label><input type="checkbox" name="reply_required" value="1" {% if p.reply_required %}checked{% endif %}> Keep the reply / qualification (interviews, debates)</label>
+  <label><input type="checkbox" name="compliance_review" value="1" {% if p.compliance_review %}checked{% endif %}> Every clip needs compliance review before publication</label>
+  <fieldset><legend>Automatic rejection reasons</legend>{% for k, v in rules.items() %}
+    <label><input type="checkbox" name="reject_{{ k }}" value="1" {% if k in p.reject_rules %}checked{% endif %}> {{ v }}</label>{% endfor %}</fieldset>
+  <fieldset><legend>Review flags (never reject; require an editorial decision)</legend>{% for k, v in flags.items() %}
+    <label><input type="checkbox" name="flag_{{ k }}" value="1" {% if k in p.flag_rules %}checked{% endif %}> {{ v }}</label>{% endfor %}</fieldset>
+  <label>Post-writing style <textarea name="post_style" rows="2">{{ p.post_style }}</textarea></label>
+  <label>Hashtag suggestions <input name="hashtags" value="{{ p.hashtags|join(', ') }}"></label>
+  <label>Claims to check <input name="claims_checks" value="{{ p.claims_checks|join(', ') }}"></label>
+  <label>Change note <input name="note" placeholder="why this change"></label>
+  <button class="btn">Save as new version</button>
+</form>
+<section class="card"><h2>History</h2><ul class="list">{% for h in hist %}
+  <li>v{{ h.version }} · {{ h.note }} · {{ h.created_at|dt }}{% if h.version != p.version %}
+  <form method="post" action="/niches/{{ p.key }}/revert/{{ h.version }}" class="inline"><button class="btn ghost">Restore</button></form>{% endif %}</li>{% endfor %}</ul></section>
+{% endblock %}

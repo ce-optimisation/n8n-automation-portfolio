@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/creators">← Creators</a> · <a href="/research">Research</a></p>
+<h1>{{ c.name }} <span class="badge">{{ c.status }}</span></h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="card">
+  <p>{% if c.url %}<a href="{{ c.url }}" rel="noopener" target="_blank">{{ c.url }}</a>{% else %}<span class="muted">no channel URL</span>{% endif %} · {{ c.platform or '' }}
+  {% if c.commercial_score is not none %} · research assessment {{ c.commercial_score|round|int }}/100 (an estimate, not a fact){% endif %}</p>
+  {% for p in plats %}<p><small>{{ p.platform }}: {{ p.url }} {% if p.primary %}(primary){% endif %} — {{ 'verified ' ~ (p.observed or '') if p.verified else 'not yet verified by API' }}</small></p>{% endfor %}
+  {% if caps %}<p><small>Platform support: {% for k, v in caps.capabilities.items() if k != 'state' %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %} · {{ caps.capabilities.state }}</small></p>{% endif %}
+  {% if c.url %}<form method="post" action="/creators/{{ c.id }}/check"><button class="btn">Check via official API (metadata only)</button></form>{% endif %}
+  {% if stats.api_check %}<details><summary>Last API check {{ stats.api_check.at }} — {{ stats.api_check.source }}</summary>
+    <pre class="small">{{ stats.api_check|tojson(indent=1) }}</pre></details>{% endif %}
+  {% if stats.research %}<details open><summary>Research figures (with sources and dates)</summary><ul class="list">
+    {% for k, v in stats.research.items() %}<li><b>{{ k }}</b>: {{ v }}</li>{% endfor %}</ul></details>{% endif %}
+  {% if cites %}<details><summary>Sources ({{ cites|length }})</summary><ul class="list">{% for s in cites %}<li><a href="{{ s.url }}" rel="noopener" target="_blank">{{ s.title or s.url }}</a> <small>{{ s.observed or '' }}</small></li>{% endfor %}</ul></details>{% endif %}
+</section>
+<form method="post" class="card stack">
+  <h2>Editorial profile and operation</h2>
+  <div class="row">
+    <label>Status <select name="status">{% for s in ['research','shortlisted','needs_authorisation','active','paused','blocked'] %}<option {% if c.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+    <label>Queue priority <input name="priority" type="number" value="{{ c.priority }}" style="width:5em"></label>
+    <label>Content type <select name="content_type"><option value="">(niche default)</option>{% for t in content_types %}<option {% if prof.content_type == t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+  </div>
+  <fieldset><legend>Niches</legend>{% for n in niches %}<label><input type="checkbox" name="niches" value="{{ n.key }}" {% if n.key in cniches %}checked{% endif %}> {{ n.name }}</label>{% endfor %}</fieldset>
+  <label>Personality / format <textarea name="personality" rows="2">{{ prof.personality }}</textarea></label>
+  <label>Recurring topics <input name="recurring_topics" value="{{ prof.recurring_topics|join(', ') }}"></label>
+  <label>Vocabulary (names, products, slang — speech-model hints) <textarea name="vocabulary" rows="2">{{ prof.vocabulary|join(', ') }}</textarea></label>
+  <label>Speech patterns <input name="speech_patterns" value="{{ prof.speech_patterns }}"></label>
+  <label>Known editorial limitations / sensitivities <textarea name="limitations" rows="2">{{ prof.limitations }}</textarea></label>
+  <label>Terms to avoid <input name="avoid_terms" value="{{ prof.avoid_terms|join(', ') }}"></label>
+  <div class="row"><label>Schedule <input name="schedule" value="{{ c.schedule or '' }}"></label>
+    <label>Expected format <input name="expected_format" value="{{ c.expected_format or '' }}"></label>
+    <label>Typical length (min) <input name="typical_minutes" type="number" value="{{ c.typical_minutes or '' }}" style="width:6em"></label></div>
+  <label>Attribution line (required credit) <input name="attribution" value="{{ c.attribution or '' }}"></label>
+  <fieldset><legend>Permission evidence (required before 'active')</legend>
+    <label>Granted by <input name="granted_by" value="{{ perm.granted_by or '' }}"></label>
+    <label>Reference (email date, contract, campaign) <input name="reference" value="{{ perm.reference or '' }}"></label>
+    <label>Permitted uses <input name="permitted_uses" value="{{ perm.permitted_uses or '' }}" placeholder="e.g. clips for the creator's own accounts only"></label>
+    <label>Expires (YYYY-MM-DD, optional) <input name="expires" value="{{ perm.expires or '' }}"></label>
+    <label>Evidence location <input name="evidence" value="{{ perm.evidence or '' }}"></label></fieldset>
+  {% if all_sources %}<label>Link an existing source <select name="link_source"><option value="">—</option>{% for s in all_sources %}<option value="{{ s.id }}">{{ s.name }} ({{ s.url }})</option>{% endfor %}</select></label>{% endif %}
+  {% for s in sources %}<p><small>Linked source: {{ s.name }} · {{ s.status }} · {{ 'enabled' if s.enabled else 'disabled' }}</small></p>{% endfor %}
+  <label>Notes <textarea name="notes" rows="3">{{ c.notes or '' }}</textarea></label>
+  <button class="btn">Save</button>
+</form>
+{% endblock %}

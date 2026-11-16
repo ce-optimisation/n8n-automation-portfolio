@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -252,6 +252,135 @@ CREATE TABLE IF NOT EXISTS publish_attempts (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
+
+-- ---- v5: multi-niche, multi-creator, storage, distribution and measurement ------------------
+CREATE TABLE IF NOT EXISTS niches (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    grp TEXT, risk TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 0,
+    config_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS niche_history (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    config_json TEXT NOT NULL,
+    note TEXT,
+    created_at REAL NOT NULL
+);
+
+-- Creators: operational (status active/paused/blocked/needs_authorisation) or research-only
+-- (status 'research' / 'shortlisted'). Research data never authorises retrieval.
+CREATE TABLE IF NOT EXISTS creators (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    platform TEXT,                          -- primary platform: rumble | twitch | kick | youtube | ...
+    url TEXT,                               -- canonical channel URL (as verified; never guessed)
+    status TEXT NOT NULL DEFAULT 'research',
+    priority INTEGER NOT NULL DEFAULT 50,   -- higher runs first in the processing queue
+    niches_json TEXT,                       -- ["ai_business", ...]
+    profile_json TEXT,                      -- CreatorProfile
+    permission_json TEXT,                   -- evidence, granted_by, reference, permitted_uses, expires
+    schedule TEXT,
+    expected_format TEXT,
+    typical_minutes REAL,
+    attribution TEXT,
+    platforms_json TEXT,                    -- [{platform, url, primary, verified, observed}]
+    stats_json TEXT,                        -- research figures with source, window and date
+    sources_json TEXT,                      -- research citations
+    commercial_score REAL,                  -- research assessment (0-100), not a fact
+    notes TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_creators_url ON creators(url) WHERE url IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS social_accounts (
+    id INTEGER PRIMARY KEY,
+    platform TEXT NOT NULL,                 -- youtube | tiktok | instagram | facebook | x | rumble
+    handle TEXT NOT NULL,
+    display_name TEXT,
+    brand TEXT,                             -- the editorial identity this account represents
+    niches_json TEXT,                       -- niches this account may receive (isolation)
+    connection_key TEXT,                    -- TokenStore key when connected (never the token itself)
+    status TEXT NOT NULL DEFAULT 'manual',  -- manual | awaiting_connection | connected | paused
+    notes TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(platform, handle)
+);
+
+CREATE TABLE IF NOT EXISTS publication_packages (
+    id INTEGER PRIMARY KEY,
+    clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    account_id INTEGER REFERENCES social_accounts(id),
+    title TEXT, description TEXT, caption TEXT, hashtags TEXT, attribution TEXT,
+    export_path TEXT,                       -- NULL = the master render is used as-is
+    approval_state TEXT NOT NULL DEFAULT 'draft',   -- draft | approved | withdrawn
+    upload_state TEXT NOT NULL DEFAULT 'not_started',
+    status TEXT NOT NULL DEFAULT 'prepared', -- prepared | handoff_ready | uploaded_private | published | failed
+    remote_id TEXT, remote_url TEXT,
+    history_json TEXT,
+    published_at REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(clip_id, platform, account_id)
+);
+
+CREATE TABLE IF NOT EXISTS cloud_objects (
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL,                 -- gdrive | r2 (future)
+    owner_kind TEXT NOT NULL,               -- clip | recording
+    owner_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,                     -- video | thumb | transcript | metadata
+    local_path TEXT,
+    local_md5 TEXT, size INTEGER,
+    remote_id TEXT, remote_folder TEXT,
+    session_uri TEXT,                       -- resumable upload session (resume after a crash)
+    state TEXT NOT NULL DEFAULT 'pending',  -- pending | uploading | uploaded | verified | failed | deleted
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    verified_at REAL, deleted_at REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(provider, owner_kind, owner_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS metrics (
+    id INTEGER PRIMARY KEY,
+    package_id INTEGER, clip_id INTEGER, account_id INTEGER, creator_id INTEGER,
+    platform TEXT, niche_key TEXT,
+    date TEXT NOT NULL,
+    views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER,
+    watch_seconds REAL, avg_view_pct REAL, followers_delta INTEGER, incidents INTEGER,
+    source TEXT NOT NULL DEFAULT 'manual',  -- manual | csv | api (never estimated)
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS commercial_entries (
+    id INTEGER PRIMARY KEY,
+    model TEXT NOT NULL DEFAULT 'B',        -- A = creator-authorised service, B = owner-operated channel
+    kind TEXT NOT NULL,                     -- revenue | cost | affiliate_click | conversion | sponsor | review_minutes
+    amount REAL NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'GBP',
+    realised INTEGER NOT NULL DEFAULT 1,    -- 1 = realised, 0 = estimate (always shown apart)
+    niche_key TEXT, creator_id INTEGER, account_id INTEGER, clip_id INTEGER,
+    date TEXT NOT NULL,
+    note TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS niche_scores (
+    key TEXT PRIMARY KEY,
+    scores_json TEXT NOT NULL,              -- criterion -> 0..10
+    audience_score REAL, profit_score REAL, overall REAL,
+    rationale TEXT, sources_json TEXT, observed TEXT, confidence TEXT,
+    updated_at REAL NOT NULL
+);
 """
 
 
@@ -267,6 +396,24 @@ MIGRATIONS = [
     # and how it reached us: live_capture | archive | recent
     ("recordings", "recorded_at", "TEXT"),
     ("recordings", "origin", "TEXT"),
+    # v5: creators, niches, lifecycle, retention, queue control
+    ("sources", "creator_id", "INTEGER"),
+    ("sources", "platform", "TEXT"),
+    ("recordings", "creator_id", "INTEGER"),
+    ("recordings", "niche_key", "TEXT"),
+    ("recordings", "engine_owned", "INTEGER NOT NULL DEFAULT 0"),   # 1 = retrieved/recorded by the engine
+    ("recordings", "lifecycle", "TEXT"),                           # see lifecycle.STAGES
+    ("recordings", "raw_deleted_at", "REAL"),
+    ("recordings", "raw_hold_reason", "TEXT"),
+    ("clips", "niche_key", "TEXT"),
+    ("clips", "quality_json", "TEXT"),
+    ("clips", "title", "TEXT"),
+    ("clips", "retain", "INTEGER NOT NULL DEFAULT 0"),             # owner 'keep': exempt from expiry
+    ("clips", "published_at", "REAL"),
+    ("clips", "review_opened_at", "REAL"),
+    ("clips", "review_seconds", "REAL"),
+    ("clips", "files_deleted_at", "REAL"),
+    ("jobs", "priority", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -304,6 +451,20 @@ class Database:
         return cache[table]
 
     def init(self) -> None:
+        # Before upgrading an existing database to a newer schema, keep a consistent copy beside it
+        # (data/backups). Owner data must survive an update even if a migration misbehaves.
+        if self.path.is_file() and self.path.stat().st_size > 0:
+            try:
+                probe = sqlite3.connect(self.path)
+                try:
+                    row = probe.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+                finally:
+                    probe.close()
+                if row and int(row[0]) < SCHEMA_VERSION:
+                    from .storage import backup_database
+                    backup_database(self.path, self.path.parent / "backups", reason=f"before-schema-{SCHEMA_VERSION}")
+            except sqlite3.Error:
+                pass                      # no meta table yet: a brand-new database
         conn = self.connect()
         try:
             conn.execute("PRAGMA journal_mode = WAL")

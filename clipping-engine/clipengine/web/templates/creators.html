@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Creators</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="card muted"><b>Research</b> and <b>shortlisted</b> creators are candidates only: nothing is retrieved for them.
+A creator becomes <b>active</b> only with recorded permission evidence, and footage is still retrieved only through an enabled,
+authorised source on the <a href="/sources">Sources</a> page. Permission for one creator never extends to another.</section>
+<form method="get" class="card row">
+  <label>Status <select name="status"><option value="">all</option>{% for s in ['research','shortlisted','operational','active','paused','blocked','needs_authorisation'] %}<option {% if f.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <label>Niche <select name="niche"><option value="">all</option>{% for n in niches %}<option value="{{ n.key }}" {% if f.niche == n.key %}selected{% endif %}>{{ n.name }}</option>{% endfor %}</select></label>
+  <label>Platform <select name="platform"><option value="">all</option>{% for p in platforms %}<option {% if f.platform == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></label>
+  <label>Sort <select name="sort">{% for s in ['score','name','priority','updated'] %}<option {% if f.sort == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  <button class="btn">Filter</button>
+</form>
+<table class="jobs"><thead><tr><th>Creator</th><th>Platform</th><th>Status</th><th>Niches</th><th>Score</th></tr></thead><tbody>
+{% for c in rows %}<tr><td><a href="/creators/{{ c.id }}">{{ c.name }}</a>{% if srcs.get(c.id) %} <span class="badge st-ready">source</span>{% endif %}</td>
+<td>{{ c.platform or '' }}</td><td><span class="badge">{{ c.status }}</span></td><td><small>{{ (c.niches_json|fromjson)|join(', ') }}</small></td>
+<td>{{ c.commercial_score|round|int if c.commercial_score is not none else '' }}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">No creators match.</td></tr>{% endfor %}</tbody></table>
+<form method="post" action="/creators" class="card stack"><h2>Add a creator</h2>
+  <label>Name <input name="name" required></label>
+  <label>Channel URL (Twitch, Kick, YouTube or Rumble; verified — never guessed) <input name="url"></label>
+  <label>Niches (keys, comma-separated) <input name="niches" placeholder="ai_business, consumer_tech"></label>
+  <label>Status <select name="status"><option>research</option><option>shortlisted</option><option>needs_authorisation</option></select></label>
+  <label>Notes <textarea name="notes" rows="2"></textarea></label>
+  <button class="btn">Add</button></form>
+{% endblock %}

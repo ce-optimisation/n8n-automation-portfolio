@@ -18,8 +18,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import (autostart, captions, hardware, health, inbox, ingest, maintenance, monitor, notify, power, render,
-               segment, setup_status, tailscale)
+from .. import (autostart, captions, cloud, editorial, hardware, health, inbox, ingest, lifecycle, maintenance,
+               monitor, notify, platforms, power, render, segment, setup_status, storage, tailscale)
+from ..publishing import packages
 from ..config import Settings, apply_settings
 from ..db import Database
 from ..jobs import JobQueue, PermanentError
@@ -65,6 +66,25 @@ class App:
         self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
         self.monitor = monitor.SourceMonitor(settings, self.db, self.queue)
+        # One heavy workload at a time: transcription/rendering wait while a live capture runs.
+        self.queue.recording_active = lambda: bool(self.monitor.procs)
+        self.queue.defer_heavy_while_recording = settings.defer_heavy_while_recording
+        editorial.seed_presets(self.db)
+        research_file = Path(__file__).resolve().parents[2] / "research" / "research_dataset.json"
+        if research_file.is_file() and self.db.get_kv("research_loaded") != str(research_file.stat().st_mtime):
+            try:
+                from .. import research
+                research.load_dataset(self.db, research_file)
+                self.db.set_kv("research_loaded", str(research_file.stat().st_mtime))
+            except Exception:  # noqa: BLE001 - research data must never stop the engine
+                log.exception("research dataset could not be loaded")
+        self.cloud = cloud.CloudService(settings, self.db, self.queue, self.tokens)
+        self.lifecycle = lifecycle.Lifecycle(settings, self.db, self.queue, self.cloud)
+        self.packages = packages.PackageService(settings, self.db, self.queue, self.tokens)
+        self.pipeline.on_recording_started.append(self.lifecycle.claim_ownership)
+        self.pipeline.on_clip_rendered.append(self.cloud.enqueue_clip)
+        self.pipeline.on_recording_done.append(self.lifecycle.check_recording)
+        self.maintenance.extra.append(self.lifecycle.run)
         self.notifier = notify.Notifier(settings, self.db, self.queue, self.tokens)
         self.queue.failure_listeners.append(
             lambda job: notify.on_job_failed(self.settings, self.db, self.queue, job))
@@ -385,17 +405,42 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
 
     # ---- review queue & clips -------------------------------------------
     @app.get("/review", response_class=HTMLResponse)
-    def review(request: Request, status: str = "ready"):
-        allowed = {"ready", "approved", "rejected", "failed", "pending_render", "rendering", "all"}
+    def review(request: Request, status: str = "ready", creator: str = "", niche: str = "", since: str = "",
+               platform: str = ""):
+        allowed = {"ready", "approved", "rejected", "failed", "pending_render", "rendering", "all", "published"}
         status = status if status in allowed else "ready"
-        where = "" if status == "all" else "WHERE c.status = ?"
-        params = () if status == "all" else (status,)
+        conds, params = [], []
+        if status == "published":
+            conds.append("c.published_at IS NOT NULL")
+        elif status != "all":
+            conds.append("c.status = ?")
+            params.append(status)
+        if creator.isdigit():
+            conds.append("r.creator_id = ?")
+            params.append(int(creator))
+        if niche:
+            conds.append("COALESCE(c.niche_key, r.niche_key) = ?")
+            params.append(niche)
+        if since:
+            try:
+                conds.append("c.created_at >= ?")
+                params.append(time.mktime(time.strptime(since, "%Y-%m-%d")))
+            except ValueError:
+                conds.pop()
+        if platform:
+            conds.append("EXISTS (SELECT 1 FROM publication_packages pp WHERE pp.clip_id = c.id AND pp.platform = ?)")
+            params.append(platform)
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
         clips = core.db.query(f"SELECT c.*, r.title, r.source_url, r.original_filename FROM clips c "
                               f"JOIN recordings r ON r.id = c.recording_id {where} ORDER BY c.id DESC LIMIT 200",
-                              params)
+                              tuple(params))
         conn = core.publisher.connections()
         pubs = {c["id"]: core.publisher.summary(c, conn) for c in clips if c["status"] == "approved"}
-        return page(request, "review.html", clips=clips, status=status, pubs=pubs)
+        filters = {"creator": creator, "niche": niche, "since": since, "platform": platform}
+        return page(request, "review.html", clips=clips, status=status, pubs=pubs, filters=filters,
+                    creators=core.db.query("SELECT id, name FROM creators WHERE status NOT IN ('research') ORDER BY name"),
+                    niches=core.db.query("SELECT key, name FROM niches ORDER BY name"),
+                    platforms=list(packages.PLATFORMS))
 
     def _clip(cid: int):
         c = core.db.clip(cid)
@@ -406,6 +451,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/clips/{cid}", response_class=HTMLResponse)
     def clip_detail(request: Request, cid: int, err: str = "", msg: str = ""):
         c = _clip(cid)
+        if not c["review_opened_at"] and c["status"] == "ready":
+            core.db.update("clips", cid, review_opened_at=time.time())   # owner review-time measurement
         rec = core.db.recording(c["recording_id"])
         attempts = core.db.query("SELECT * FROM publish_attempts WHERE clip_id=? ORDER BY id DESC", (cid,))
         words = [w for s in core.db.segments(rec["id"]) for w in s["words"]
@@ -430,14 +477,22 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         c = _clip(cid)
         if c["status"] not in ("ready", "rejected", "approved"):
             return _back(request, cid, err="Only rendered clips can be approved.")
-        core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_note=note or c["review_note"])
+        core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_note=note or c["review_note"],
+                       review_seconds=_review_seconds(c))
         return _back(request, cid)
 
     @app.post("/clips/{cid}/reject")
     def reject(request: Request, cid: int, note: str = Form("")):
         c = _clip(cid)
-        core.db.update("clips", cid, status="rejected", reviewed_at=time.time(), review_note=note or c["review_note"])
+        core.db.update("clips", cid, status="rejected", reviewed_at=time.time(), review_note=note or c["review_note"],
+                       review_seconds=_review_seconds(c))
         return _back(request, cid)
+
+    def _review_seconds(c):
+        """Seconds between first opening the clip and the decision (capped at 30 min per clip)."""
+        if not c["review_opened_at"]:
+            return c["review_seconds"]
+        return (c["review_seconds"] or 0) + min(1800.0, max(0.0, time.time() - c["review_opened_at"]))
 
     @app.post("/clips/{cid}/regenerate")
     def regenerate(request: Request, cid: int, start: str = Form(""), end: str = Form("")):
@@ -1014,4 +1069,6 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return _back(request, cid, msg=f"{platform}: upload queued. Progress appears below; it continues in the "
                                        "background and resumes after a restart.")
 
+    from . import workspace
+    workspace.register(app, core, page, templates)
     return app

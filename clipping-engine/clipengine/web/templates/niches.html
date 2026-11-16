@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Niche editorial profiles</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="card"><p class="muted">Each niche tells the shared clipping engine what a good, complete clip is for that audience:
+durations, hooks, vocabulary, automatic rejection reasons and review checks. A creator's own profile refines it.
+<b>Active</b> only means a creator can be assigned to it — it never switches on any source by itself.
+Editing creates a new version; older versions can be restored.</p></section>
+{% for n in niches %}{% set p = parsed[n.key] %}
+<section class="card">
+  <h2><a href="/niches/{{ n.key }}">{{ n.name }}</a>
+    {% if n.active %}<span class="badge st-ready">active</span>{% else %}<span class="badge">available</span>{% endif %}
+    <span class="badge">{{ n.grp }}</span>{% if n.risk == 'high' %} <span class="badge st-failed">higher risk · compliance review</span>{% endif %}</h2>
+  <p><small>v{{ n.version }} · {{ p.min_s|int }}–{{ p.max_s|int }} s · selector {{ p.selection_profile }}{% if p.reply_required %} · keeps replies{% endif %}
+    · rejects: {{ p.reject_rules|join(', ') or 'none' }} · clips so far: {{ usage.get(n.key, 0) }}
+    {% if scores.get(n.key) %} · research score {{ scores[n.key].overall|round|int }}/100{% endif %}</small></p>
+  <p class="muted">{{ p.complete_clip }}</p>
+</section>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,33 @@
+<section class="card">
+  <h2>Editorial assessment</h2>
+  <p><small>Niche: <b>{{ niche.name if niche else 'none' }}</b>{% if creator %} · creator <a href="/creators/{{ creator.id }}">{{ creator.name }}</a>{% endif %}
+  · source timecode {{ c.start|mmss }}–{{ c.end|mmss }} · rights: {{ c.rights_status }}
+  · cloud: {% for r in cloud_rows %}{{ r.kind }} {{ r.state }}{% if not loop.last %}, {% endif %}{% else %}not uploaded{% endfor %}</small></p>
+  {% if quality %}<p>Quality <b>{{ quality.quality }}</b>/100 <small class="muted">({{ quality.policy }})</small></p>
+  {% if quality.reasons %}<ul class="list">{% for r in quality.reasons %}<li><small>{{ r }}</small></li>{% endfor %}</ul>{% endif %}
+  {% for f in quality.flags %}<p class="err"><small>Review: {{ f.note }}{% if f.term %} (“{{ f.term }}”){% endif %}</small></p>{% endfor %}{% endif %}
+  <div class="buttons">
+    <form method="post" action="/clips/{{ c.id }}/title" class="inline"><input name="title" value="{{ c.title or '' }}" placeholder="Working title"><button class="btn ghost">Save title</button></form>
+    <form method="post" action="/clips/{{ c.id }}/keep"><input type="hidden" name="on" value="{{ '0' if c.retain else '1' }}"><button class="btn ghost">{{ 'Un-keep' if c.retain else 'Keep (never auto-delete)' }}</button></form>
+  </div>
+</section>
+<section class="card">
+  <h2>Platform versions</h2>
+  {% for p in pkgs %}<details {% if p.status != 'published' %}open{% endif %}><summary><b>{{ PLATFORMS[p.platform].label }}</b>{% if p.handle %} · @{{ p.handle }}{% endif %} — {{ p.status }} · {{ p.approval_state }}{% if p.remote_url %} · <a href="{{ p.remote_url }}" target="_blank" rel="noopener">open</a>{% endif %}</summary>
+    {% for i in issues[p.platform] %}<p class="err"><small>{{ i }}</small></p>{% endfor %}
+    <form method="post" action="/packages/{{ p.id }}/edit" class="stack">
+      {% if PLATFORMS[p.platform].title_max %}<label>Title <input name="title" maxlength="{{ PLATFORMS[p.platform].title_max }}" value="{{ p.title or '' }}"></label>{% endif %}
+      <label>Description / caption <textarea name="description" rows="4" maxlength="{{ PLATFORMS[p.platform].desc_max }}">{{ p.description or '' }}</textarea></label>
+      <label>Hashtags <input name="hashtags" value="{{ p.hashtags or '' }}"></label>
+      <button class="btn ghost">Save text</button></form>
+    <div class="buttons">
+      {% if p.approval_state != 'approved' %}<form method="post" action="/packages/{{ p.id }}/approve"><button class="btn">Approve this version</button></form>
+      {% else %}{% if p.platform == 'youtube_shorts' and p.status not in ('uploaded_private', 'published') %}<form method="post" action="/packages/{{ p.id }}/youtube"><button class="btn">Upload to YouTube as PRIVATE</button></form>{% endif %}
+      <form method="post" action="/packages/{{ p.id }}/handoff"><button class="btn ghost">Prepare manual handoff</button></form>{% endif %}
+    </div></details>{% endfor %}
+  <form method="post" action="/clips/{{ c.id }}/package" class="row">
+    <select name="platform">{% for k, v in PLATFORMS.items() %}<option value="{{ k }}">{{ v.label }}{% if issues[k] %} (too long){% endif %}</option>{% endfor %}</select>
+    <select name="account_id"><option value="">no account yet</option>{% for a in accounts %}<option value="{{ a.id }}">{{ a.platform }} @{{ a.handle }}</option>{% endfor %}</select>
+    <button class="btn ghost">Prepare version</button></form>
+  <p class="muted"><small>Only accounts mapped to this clip's niche are offered. Nothing is posted publicly by the engine.</small></p>
+</section>

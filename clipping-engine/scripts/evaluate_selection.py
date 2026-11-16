@@ -50,7 +50,7 @@ def evaluate(paras: list[dict], segs: list[dict], profile: str, n: int, min_s=No
              target=None) -> dict:
     # v1/v2 were designed around a 30–90 s window with a 55 s target; v3 is content-led (15–150 s, no target).
     if min_s is None:
-        min_s, max_s, target = (15.0, 150.0, None) if profile in ("v3", "v4") else (30.0, 90.0, 55.0)
+        min_s, max_s, target = (15.0, 150.0, None) if profile in ("v3", "v4", "v5") else (30.0, 90.0, 55.0)
     duration = paras[-1]["end"]
     t = time.time()
     report: dict = {}

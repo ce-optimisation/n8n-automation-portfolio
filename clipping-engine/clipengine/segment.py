@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 log = logging.getLogger("clipengine.segment")
 
@@ -111,6 +111,13 @@ class SelectionProfile:
     density_seconds: float = 15.0      # v4: one further marker is expected per this many seconds
     close_share: float = 0.0           # v4: extend the end while the next sentence shares at least this
                                        #     fraction of its content words with the clip (0 = off)
+    ending_weight: float = 0.0         # v5: reward a concluding last line; penalise a cut just before a
+                                       #     qualification ("but…", "to be fair…") that changes the meaning
+    complete_meaning: bool = False     # v5: after selection, carry the end through a question's answer, a
+                                       #     meaning-changing qualification, or (debates) the reply
+    reply_required: bool = False       # v5 + interview/debate niches: keep the other side's reply
+    salient_continue: bool = False     # v5: keep going while the next paragraph is still about the clip's
+                                       #     distinctive subject (terms frequent in the clip, rare elsewhere)
 
 
 PROFILES = {
@@ -128,7 +135,20 @@ PROFILES = {
 PROFILES["v4"] = SelectionProfile("v4", fit_weight=0.0, pause_weight=0.18, continuation_weight=0.45,
                                   topic_bonus=0.12, unanswered_weight=0.15, shift_weight=0.25,
                                   context_weight=1.0, density_substance=True, close_share=0.4)
+# v5 (opt-in until it measurably beats v4): v4 plus ending awareness. A clip should end where the
+# speaker's meaning is complete — after the answer to a question, after a qualification that changes
+# what was just said, after the reply in a debate — and a concluding line ("that's why…", "the
+# bottom line is…") is a better ending than a mid-argument pause.
+PROFILES["v5"] = replace(PROFILES["v4"], name="v5", ending_weight=0.15, complete_meaning=True,
+                         salient_continue=True)
 DEFAULT_PROFILE = "v4"
+
+QUALIFIER_START = re.compile(r"^(but|however|although|though|that said|having said that|to be fair|in fairness|"
+                             r"on the other hand|except|unless|mind you|then again|the catch is|the problem is|"
+                             r"the caveat is|the only thing is|now,? (to be fair|that said))\b")
+CONCLUSION = re.compile(r"\b(that'?s why|which is why|the (bottom line|point|takeaway|lesson|key thing) (is|here is)|"
+                        r"in short|in other words|so the answer is|long story short|what (that|this) means is|"
+                        r"and that'?s (the|what|how|why)|so (basically|ultimately|in the end)|ultimately)\b")
 
 
 @dataclass
@@ -481,8 +501,23 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float | None = N
         elif any(re.search(p_, first_text) for p_ in TOPIC_START_MARKERS) or pause_before >= 0.9:
             topic = profile.topic_bonus
             reasons.append("opens at the start of a topic")
+    ending = 0.0
+    if profile.ending_weight:
+        tail_text = _norm(win[-1].text)
+        nxt = sents[j + 1] if j + 1 < len(sents) else None
+        if CONCLUSION.search(tail_text) or (len(win) > 1 and CONCLUSION.search(_norm(win[-2].text))):
+            ending += 1.0
+            reasons.append("ends on a concluding line")
+        if nxt is not None and QUALIFIER_START.search(_norm(nxt.text)) and nxt.start - win[-1].end < 2.5 \
+                and not win[-1].hard_break_after:
+            ending -= 1.0
+            reasons.append("a qualification that changes the meaning follows this cut")
+        last = win[-1].words[-1]["word"].strip().lower().strip(",.?!") if win[-1].words else ""
+        if last in DANGLING_STARTS:
+            ending -= 0.5
+            reasons.append("ends on a dangling conjunction")
     score = (0.36 * substance + 0.10 * qa + 0.22 * clarity + profile.pause_weight * pauses
-             + profile.fit_weight * fit + 0.10 * end_clean
+             + profile.fit_weight * fit + 0.10 * end_clean + profile.ending_weight * ending
              - start_pen - 1.5 * filler - profile.procedural_weight * procedural + topic
              - profile.continuation_weight * continuation - profile.unanswered_weight * unanswered
              - profile.shift_weight * shift - profile.context_weight * context)
@@ -586,6 +621,8 @@ def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: 
     chosen = pick_diverse(strong, n, already=chosen, min_gap=prof.min_gap)
     if prof.context_weight and chosen:
         rep["context_adjusted"] = refine_context(sents, chosen, prof, max_s, target)
+    if prof.complete_meaning and chosen:
+        rep["meaning_completed"] = complete_meaning(sents, chosen, prof, max_s, target)
     rep["selected"] = len(chosen)
     if len(chosen) < n:
         rep["note"] = (f"Selected {len(chosen)} of the requested {n}: the remaining passages were too similar, "
@@ -670,6 +707,104 @@ def refine_context(sents: list[Sentence], chosen: list[Candidate], prof: Selecti
             c.words = [w for x in sents[a:b + 1] for w in x.words]
             c.score, c.reasons = score, reasons + [what]
             changed += 1
+    return changed
+
+
+def complete_meaning(sents: list[Sentence], chosen: list[Candidate], prof: SelectionProfile, max_s: float,
+                     target: float | None, tolerance: float = 0.15, max_extra: int = 4) -> int:
+    """Profile v5: carry each clip's end through what completes its meaning.
+
+    - a clip ending on a question continues through the answer (up to the next non-question line);
+    - a following qualification ("but…", "however…", "to be fair…", "the catch is…") that changes what
+      was just said is included, with the sentences that lean on it;
+    - in interview/debate niches (prof.reply_required) the immediate reply is included.
+    Never across a hand-over, a greeting or a long silence, never beyond max_s, never into another
+    clip, and only if the result still scores within `tolerance` of the original. Returns the number
+    of clips changed."""
+    changed = 0
+    df: dict[str, int] = {}
+    for s in sents:
+        for t in s.ctoks:
+            df[t] = df.get(t, 0) + 1
+    rare = max(2, int(len(sents) * 0.15))
+    for c in chosen:
+        others = [o for o in chosen if o is not c]
+        j = c.s1
+        m = j
+        why = ""
+        if prof.salient_continue:
+            # The clip's distinctive subject: content words used at least twice in the clip and rare in
+            # the recording as a whole. While the following sentences keep talking about it (and no
+            # speaker change, hand-over, aside, new-subject announcement or long silence intervenes), the
+            # discussion has not finished.
+            counts: dict[str, int] = {}
+            for s in sents[c.s0:j + 1]:
+                for t in s.ctoks:
+                    counts[t] = counts.get(t, 0) + 1
+            salient = {t for t, k in sorted(counts.items(), key=lambda kv: -kv[1])[:6]
+                       if k >= 2 and df.get(t, 0) <= rare}
+            # Walk forward paragraph by paragraph: a new paragraph is followed only if its first sentence
+            # is still about the clip's subject; inside a paragraph every sentence belongs. Candidate ends
+            # are paragraph ends; the furthest one that still scores within tolerance wins.
+            k, ends = j, []
+            while salient and k + 1 < len(sents):
+                cur, nx = sents[k], sents[k + 1]
+                if cur.hard_break_after or nx.edge in ("handoff", "turn", "aside") or nx.opener \
+                        or nx.start - cur.end > 4.0 or nx.end - sents[c.s0].start > max_s:
+                    break
+                if cur.boundary_after >= 0.85 and not (nx.ctoks & salient):
+                    break                               # the next paragraph has moved on
+                k += 1
+                if sents[k].terminal and not sents[k].question and \
+                        (k + 1 >= len(sents) or sents[k].boundary_after >= 0.85):
+                    ends.append(k)
+            for k in reversed(ends):
+                if any(sents[c.s0].start < o.end + prof.min_gap and o.start < sents[k].end + prof.min_gap
+                       for o in others):
+                    continue
+                if score_window(sents, c.s0, k, target, prof)[0] >= c.score - tolerance:
+                    m = k
+                    why = "end carried to the close of the discussion (same subject continues)"
+                    break
+        while m + 1 < len(sents) and m - j < max_extra:
+            cur, nx = sents[m], sents[m + 1]
+            if cur.hard_break_after and not cur.question and not prof.reply_required:
+                break
+            if nx.edge in ("handoff", "turn", "aside") or nx.start - cur.end > 4.0:
+                break
+            if nx.end - sents[c.s0].start > max_s:
+                break
+            text = _norm(nx.text)
+            if cur.question:
+                m += 1
+                why = why or "end carried through the answer to its question"
+                continue
+            if QUALIFIER_START.search(text):
+                m += 1
+                why = why or "end carried through a qualification that changes the meaning"
+                continue
+            if prof.reply_required and REPLY_START.search(text):
+                m += 1
+                why = why or "end carried through the reply"
+                continue
+            if m > j and nx.dependency >= 0.3:
+                m += 1                    # the added material is still being developed
+                continue
+            break
+        while m > j and (not sents[m].terminal or sents[m].question):
+            m -= 1
+        if m <= j:
+            continue
+        if any(sents[c.s0].start < o.end + prof.min_gap and o.start < sents[m].end + prof.min_gap for o in others):
+            continue
+        score, reasons = score_window(sents, c.s0, m, target, prof)
+        if score < c.score - tolerance:
+            continue
+        c.s1, c.end = m, sents[m].end
+        c.text = " ".join(x.text for x in sents[c.s0:m + 1])
+        c.words = [w for x in sents[c.s0:m + 1] for w in x.words]
+        c.score, c.reasons = score, reasons + [why or "end carried to the close of the point"]
+        changed += 1
     return changed
 
 

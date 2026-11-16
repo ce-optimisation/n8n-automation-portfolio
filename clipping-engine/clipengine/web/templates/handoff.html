@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/clips/{{ cid }}">← Clip</a></p>
+<h1>Post to {{ h.label }} yourself</h1>
+<section class="card stack">
+  <p>1. <a class="btn" href="{{ h.download }}">Download the video</a></p>
+  <p>2. Copy the prepared text:</p>
+  <textarea rows="8" readonly onclick="this.select()">{{ h.text }}</textarea>
+  <button class="btn ghost" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(this.previousElementSibling.value)">Copy</button>
+  <p>3. <a class="btn" href="{{ h.open }}" target="_blank" rel="noopener">Open {{ h.label }}</a> and post it from your own account.</p>
+  <form method="post" action="/packages/{{ pid }}/published" class="row"><label>4. After posting, paste the post link <input name="url"></label><button class="btn">Record as published</button></form>
+  <p class="muted"><small>The engine never posts on your behalf here. Recording the link lets retention and results tracking work.</small></p>
+</section>
+{% endblock %}

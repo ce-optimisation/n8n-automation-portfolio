@@ -33,6 +33,17 @@ EDITABLE = {
     "WHISPER_MODEL": ("whisper_model", lambda v: (v or "auto").strip()),
     "PREVENT_SLEEP": ("prevent_sleep", lambda v: (v or "active").strip().lower()),
     "ALLOWED_URL_DOMAINS": ("allowed_url_domains", lambda v: [x.strip().lower() for x in v.split(",") if x.strip()]),
+    # Client IDs and the YouTube API key are not passwords; client SECRETS still go in .env by hand.
+    "TWITCH_CLIENT_ID": ("twitch_client_id", lambda v: v.strip()),
+    "KICK_CLIENT_ID": ("kick_client_id", lambda v: v.strip()),
+    "YOUTUBE_API_KEY": ("youtube_api_key", lambda v: v.strip()),
+    "CLIPENGINE_GOOGLE_CLIENT_ID": ("google_client_id", lambda v: v.strip()),
+    "RAW_DELETE_AFTER_CLOUD": ("raw_delete_after_cloud", lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"}),
+    "REJECTED_CLIP_HOURS": ("rejected_clip_hours", lambda v: float(v or 24)),
+    "PUBLISHED_CLIP_DAYS": ("published_clip_days", lambda v: float(v or 7)),
+    "DEFER_HEAVY_WHILE_RECORDING": ("defer_heavy_while_recording",
+                                    lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"}),
+    "CLOUD_MIN_FREE_GB": ("cloud_min_free_gb", lambda v: float(v or 2)),
 }
 
 
@@ -140,6 +151,7 @@ class Settings:
     whisper_cpu_threads: int = 0         # 0 = automatic
     whisper_beam_size: int = 5
     transcribe_chunk_seconds: int = 1200 # long recordings are transcribed in checkpointed chunks
+    whisper_prompt: str = ""             # per-recording vocabulary hint (set from creator/niche profiles)
 
     # Candidate selection
     clips_per_recording: int = 6
@@ -213,6 +225,31 @@ class Settings:
     smtp_password: str = ""
     smtp_from: str = ""
     smtp_ssl: bool = False
+
+    # Source platforms (free developer registrations; discovery only — never retrieval rights)
+    twitch_client_id: str = ""
+    twitch_client_secret: str = ""
+    kick_client_id: str = ""
+    kick_client_secret: str = ""
+    youtube_api_key: str = ""
+
+    # Google (Drive storage and YouTube private uploads): the owner's own OAuth "Desktop app" client
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    cloud_provider: str = "gdrive"          # gdrive | none
+    cloud_folder_name: str = "Clipping Engine"
+    cloud_min_free_gb: float = 2.0          # hold uploads (and warn) below this much free Drive space
+
+    # Lifecycle and retention
+    raw_delete_after_cloud: bool = True     # delete ENGINE-OWNED raw recordings once every gate passes
+    rejected_clip_hours: float = 24.0
+    published_clip_days: float = 7.0
+
+    # Queue and storage
+    max_concurrent_jobs: int = 1            # heavy jobs run one at a time (only 1 is supported)
+    defer_heavy_while_recording: bool = True  # hold transcription/rendering while a live recording runs
+    disk_reserve_gb: float = 1.0
+    record_gb_per_hour: float = 1.5         # planning estimate for live capture
 
     # Testing hook: name of a transcriber backend ("whisper" or "stub").
     transcriber_backend: str = "whisper"
@@ -328,6 +365,23 @@ def get_settings(**overrides) -> Settings:
         smtp_password=os.environ.get("SMTP_PASSWORD", ""),
         smtp_from=os.environ.get("SMTP_FROM", ""),
         smtp_ssl=_bool("SMTP_SSL", False),
+        twitch_client_id=os.environ.get("TWITCH_CLIENT_ID", "").strip(),
+        twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", "").strip(),
+        kick_client_id=os.environ.get("KICK_CLIENT_ID", "").strip(),
+        kick_client_secret=os.environ.get("KICK_CLIENT_SECRET", "").strip(),
+        youtube_api_key=os.environ.get("YOUTUBE_API_KEY", "").strip(),
+        google_client_id=os.environ.get("CLIPENGINE_GOOGLE_CLIENT_ID", "").strip(),
+        google_client_secret=os.environ.get("CLIPENGINE_GOOGLE_CLIENT_SECRET", "").strip(),
+        cloud_provider=(os.environ.get("CLOUD_PROVIDER", "gdrive") or "gdrive").lower(),
+        cloud_folder_name=os.environ.get("CLOUD_FOLDER_NAME", "Clipping Engine") or "Clipping Engine",
+        cloud_min_free_gb=_float("CLOUD_MIN_FREE_GB", 2.0),
+        raw_delete_after_cloud=_bool("RAW_DELETE_AFTER_CLOUD", True),
+        rejected_clip_hours=_float("REJECTED_CLIP_HOURS", 24.0),
+        published_clip_days=_float("PUBLISHED_CLIP_DAYS", 7.0),
+        max_concurrent_jobs=max(1, min(1, _int("MAX_CONCURRENT_JOBS", 1))),
+        defer_heavy_while_recording=_bool("DEFER_HEAVY_WHILE_RECORDING", True),
+        disk_reserve_gb=_float("DISK_RESERVE_GB", 1.0),
+        record_gb_per_hour=_float("RECORD_GB_PER_HOUR", 1.5),
     )
     for k, v in overrides.items():
         setattr(s, k, v)

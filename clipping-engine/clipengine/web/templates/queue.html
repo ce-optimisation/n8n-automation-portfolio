@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Processing queue</h1>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+<section class="card">
+  <p>Heavy work (downloads, transcription, rendering) runs <b>one job at a time</b>. Live captures are processed before back-catalogue
+  imports. {% if blocked %}<b class="err">{{ blocked }}.</b>{% endif %}</p>
+  <div class="buttons">{% if paused %}<form method="post" action="/queue/resume"><button class="btn">Resume</button></form>
+  {% else %}<form method="post" action="/queue/pause"><button class="btn ghost">Pause</button></form>{% endif %}</div>
+</section>
+{% if live %}<section class="card"><h2>Recording live now</h2><ul class="list">{% for l in live %}<li>{{ l.name }} — {{ l.title or l.item_key }} · {{ l.segments }} segment(s)</li>{% endfor %}</ul></section>{% endif %}
+<section class="card"><h2>Running</h2>{% for j in running %}<p><a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind }}</a> · {{ (j.progress * 100)|round|int }}% · {{ j.message }}
+  {% if j.recording_id and recs.get(j.recording_id) %}· {{ recs[j.recording_id].title }}{% endif %}</p>{% else %}<p class="muted">Nothing running.</p>{% endfor %}</section>
+<section class="card"><h2>Waiting ({{ order|length }})</h2>
+<table class="jobs"><thead><tr><th>#</th><th>Job</th><th>Priority</th><th></th></tr></thead><tbody>
+{% for j in order %}<tr><td>{{ loop.index }}</td><td><a href="/jobs/{{ j.id }}">{{ j.kind }}</a>{% if j.recording_id and recs.get(j.recording_id) %}<br><small>{{ recs[j.recording_id].title[:60] }}{% if recs[j.recording_id].origin == 'live_capture' %} · live capture{% endif %}</small>{% endif %}{% if j.run_after > 0 %}<br><small class="muted">{{ j.message }}</small>{% endif %}</td>
+<td><form method="post" action="/queue/{{ j.id }}/priority" class="inline"><input name="priority" type="number" value="{{ j.priority }}" style="width:4.5em"><button class="btn ghost">Set</button></form></td>
+<td class="buttons"><form method="post" action="/queue/{{ j.id }}/move"><input type="hidden" name="direction" value="up"><button class="btn ghost" title="Move up">↑</button></form>
+<form method="post" action="/queue/{{ j.id }}/move"><input type="hidden" name="direction" value="down"><button class="btn ghost" title="Move down">↓</button></form>
+<form method="post" action="/jobs/{{ j.id }}/cancel"><button class="btn ghost">Cancel</button></form></td></tr>
+{% else %}<tr><td colspan="4" class="muted">Queue empty.</td></tr>{% endfor %}</tbody></table></section>
+<section class="card"><h2>Recent</h2><ul class="list">{% for j in recent %}<li><a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind }}</a> — {{ j.status }} {{ j.updated_at|dt }}{% if j.error %} <small class="err">{{ j.error[:120] }}</small>{% endif %}</li>{% endfor %}</ul></section>
+{% endblock %}

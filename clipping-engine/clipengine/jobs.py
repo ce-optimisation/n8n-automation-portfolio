@@ -61,6 +61,13 @@ class JobContext:
 
 Handler = Callable[[JobContext], None]
 
+# Resource-intensive work: one at a time, held while a live recording is being captured (so the
+# recording never competes with transcription for disk and CPU), and paused by the owner's Pause.
+HEAVY_KINDS = ("download_url", "process_recording", "render_clip")
+PRIORITY_LIVE = 100        # a finished live capture is processed before back-catalogue work
+PRIORITY_DEFAULT = 50
+PRIORITY_BACKFILL = 10
+
 
 class JobQueue:
     def __init__(self, db: Database, max_attempts: int = 3):
@@ -72,6 +79,10 @@ class JobQueue:
         self._thread: threading.Thread | None = None
         self.current_job_id: int | None = None
         self.failure_listeners: list[Callable] = []   # called with the failed job row (e.g. notifications)
+        # Returns True while a live recording is in progress (set by the source monitor).
+        self.recording_active: Callable[[], bool] = lambda: False
+        self.priority_for = None          # set by the pipeline: recording_id -> priority or None
+        self.defer_heavy_while_recording = True
 
     def register(self, kind: str, handler: Handler) -> None:
         self.handlers[kind] = handler
@@ -79,7 +90,7 @@ class JobQueue:
     # ---- producer side ---------------------------------------------------
     def enqueue(self, kind: str, *, recording_id: int | None = None, clip_id: int | None = None,
                 payload: dict | None = None, dedupe_key: str | None = None,
-                max_attempts: int | None = None) -> int:
+                max_attempts: int | None = None, priority: int | None = None) -> int:
         """Queue a job. If an identical (dedupe_key) job is already queued or
         running, return that job's id instead of creating a duplicate."""
         if dedupe_key:
@@ -91,7 +102,8 @@ class JobQueue:
             jid = self.db.insert("jobs", kind=kind, recording_id=recording_id, clip_id=clip_id,
                                  payload_json=json.dumps(payload or {}), dedupe_key=dedupe_key,
                                  max_attempts=max_attempts or self.max_attempts, status="queued",
-                                 message="Waiting in queue")
+                                 message="Waiting in queue",
+                                 priority=self._inherit_priority(recording_id) if priority is None else int(priority))
         except sqlite3.IntegrityError:
             existing = self.db.one("SELECT id FROM jobs WHERE dedupe_key = ? AND status IN ('queued','running')",
                                    (dedupe_key,))
@@ -117,6 +129,71 @@ class JobQueue:
                             " WHERE id = ? AND status IN ('queued','running')", (time.time(), job_id))
         return bool(n)
 
+    # ---- owner controls ---------------------------------------------------
+    def _inherit_priority(self, recording_id: int | None) -> int:
+        """Render jobs inherit the priority of their recording's processing job (so a live capture's
+        clips are not stuck behind a back-catalogue import)."""
+        if recording_id and self.priority_for is not None:
+            try:
+                p = self.priority_for(recording_id)
+            except Exception:  # noqa: BLE001
+                p = None
+            if p is not None:
+                return int(p)
+        if recording_id:
+            row = self.db.one("SELECT MAX(priority) p FROM jobs WHERE recording_id=? AND kind IN "
+                              "('process_recording','download_url')", (recording_id,))
+            if row and row["p"] is not None:
+                return int(row["p"])
+        return PRIORITY_DEFAULT
+
+    def paused(self) -> bool:
+        return self.db.get_kv("queue_paused") == "1"
+
+    def pause(self) -> None:
+        """Owner pause: no new job starts (a running job finishes its current step normally)."""
+        self.db.set_kv("queue_paused", "1")
+
+    def resume(self) -> None:
+        self.db.set_kv("queue_paused", "0")
+        self._wake.set()
+
+    def set_priority(self, job_id: int, priority: int) -> bool:
+        n = self.db.execute("UPDATE jobs SET priority=?, updated_at=? WHERE id=? AND status='queued'",
+                            (max(0, min(1000, int(priority))), time.time(), job_id))
+        self._wake.set()
+        return bool(n)
+
+    def move(self, job_id: int, direction: str) -> bool:
+        """Move a queued job one place up or down the visible order (adjusts its priority)."""
+        order = self.queued_order()
+        ids = [r["id"] for r in order]
+        if job_id not in ids:
+            return False
+        i = ids.index(job_id)
+        k = i - 1 if direction == "up" else i + 1
+        if not 0 <= k < len(order):
+            return False
+        other = order[k]["priority"]
+        return self.set_priority(job_id, other + (1 if direction == "up" else -1))
+
+    def queued_order(self) -> list[sqlite3.Row]:
+        """Queued jobs in the order they will run."""
+        return self.db.query("SELECT * FROM jobs WHERE status='queued' ORDER BY priority DESC, id")
+
+    def blocked_reason(self) -> str | None:
+        if self.paused():
+            return "Paused by owner"
+        if self.defer_heavy_while_recording and self._recording():
+            return "Holding heavy work while a live recording is in progress"
+        return None
+
+    def _recording(self) -> bool:
+        try:
+            return bool(self.recording_active())
+        except Exception:  # noqa: BLE001
+            return False
+
     def log(self, job_id: int, message: str, level: str = "INFO") -> None:
         self.db.insert("job_logs", job_id=job_id, ts=time.time(), level=level, message=message[:4000])
         log.log(getattr(logging, level, logging.INFO), "job %s: %s", job_id, message)
@@ -133,9 +210,13 @@ class JobQueue:
     # ---- consumer side ---------------------------------------------------
     def claim(self) -> sqlite3.Row | None:
         now = time.time()
+        if self.paused():
+            return None
+        heavy_held = self.defer_heavy_while_recording and self._recording()
+        exclude = " AND kind NOT IN (%s)" % ",".join("'%s'" % k for k in HEAVY_KINDS) if heavy_held else ""
         with self.db.tx() as conn:
-            row = conn.execute("SELECT * FROM jobs WHERE status = 'queued' AND run_after <= ?"
-                               " ORDER BY id LIMIT 1", (now,)).fetchone()
+            row = conn.execute("SELECT * FROM jobs WHERE status = 'queued' AND run_after <= ?" + exclude +
+                               " ORDER BY priority DESC, id LIMIT 1", (now,)).fetchone()
             if not row:
                 return None
             conn.execute("UPDATE jobs SET status='running', attempts=attempts+1, started_at=?, updated_at=?,"

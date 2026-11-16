@@ -185,7 +185,9 @@ class WhisperTranscriber(Transcriber):
         segments, info = model.transcribe(
             samples, language=language or self.settings.language or None, word_timestamps=True,
             vad_filter=self.settings.vad_filter, beam_size=self.settings.whisper_beam_size,
-            condition_on_previous_text=False)
+            condition_on_previous_text=False,
+            # creator/niche vocabulary (names, products, slang) as a hint; empty = none
+            initial_prompt=(getattr(self.settings, "whisper_prompt", "") or None))
         out = []
         span = max(1e-6, end - start)
         for seg in segments:  # generator: transcription happens while iterating

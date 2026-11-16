@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Source platforms</h1>
+<section class="card muted">Discovery (public metadata through official APIs) is separate from acquisition (footage). Acquisition always needs an
+enabled source with recorded permission. Credentials are free developer registrations you add to <code>.env</code>.</section>
+{% for name, m in matrix.items() %}<section class="card"><h2>{{ name|capitalize }} <span class="badge">{{ m.capabilities.state }}</span></h2>
+<p><small>{{ m.api }}</small></p>
+<p>{% for k, v in m.capabilities.items() if k != 'state' %}<span class="badge {{ 'st-ready' if v is sameas true else '' }}">{{ k }}: {{ v }}</span> {% endfor %}</p>
+<ul class="list">{% for k, v in m.acquisition.items() %}<li><b>{{ k }}</b> — {{ v }}</li>{% endfor %}</ul></section>{% endfor %}
+{% endblock %}
