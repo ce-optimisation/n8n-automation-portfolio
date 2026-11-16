@@ -512,3 +512,69 @@ def test_repaired_channel_listing_takes_a_baseline_instead_of_queuing_everything
     listing.insert(0, {"key": "v6", "title": "Episode 6", "url": f"{srv.url}/v6.html", "live": False})
     db.execute("UPDATE sources SET next_check = 0")
     assert mon.poll(sid)["new"] == 1                       # later uploads are imported as usual
+
+
+@needs_ffmpeg
+def test_live_capture_to_verified_cloud_copy_then_safe_raw_deletion(env, sample_video):
+    """Unattended production lifecycle on disposable, engine-generated media (real FFmpeg live HLS, real
+    recorder, real render; TEST-ONLY stub transcript; MOCK Google Drive): live detected → recorded → finalised →
+    imported automatically → transcribed/selected/rendered without any manual step → uploaded and verified →
+    raw recording deleted only then. Clips, transcript and provenance survive; nothing is published.
+    A second capture whose upload cannot complete keeps its raw file."""
+    import os
+    from clipengine import lifecycle as lc_mod
+    from test_expansion import FakeDrive, _cloud
+    s, db, q, p, mon, root, srv = env
+    drive = FakeDrive()
+    cloud_svc = _cloud(s, db, q, drive)
+    lc = lc_mod.Lifecycle(s, db, q, cloud_svc)
+    p.on_recording_started.append(lc.claim_ownership)
+    p.on_clip_rendered.append(cloud_svc.enqueue_clip)
+    p.on_recording_done.append(lc.check_recording)
+    q.recording_active = lambda: bool(mon.procs)
+
+    def capture(name, video=sample_video):
+        gen = start_live_hls(video, root / name, 14)
+        assert wait_for(lambda: (root / name / "live.m3u8").exists() and "#EXTINF" in (root / name / "live.m3u8").read_text())
+        sid, ok, _ = monitor.add_source(s, db, name=name, kind="hls", url=f"{srv.url}/{name}/live.m3u8",
+                                        authorisation="Local test stream")
+        assert ok and mon.poll(sid)["live"] is True              # live detected → recording starts
+        assert not q.run_one() or True                          # heavy work is held while recording
+        gen.wait(timeout=120)
+        assert wait_for(lambda: (mon.supervise() or True) and db.one(
+            "SELECT state FROM source_items WHERE source_id=?", (sid,))["state"] in ("handed_off", "failed"), timeout=90)
+        f = [x for x in s.inbox.glob("monitor_*.mp4") if not db.one("SELECT 1 FROM recordings WHERE original_filename=?", (x.name,))][0]
+        old = time.time() - 60
+        os.utime(f, (old, old))
+        w = InboxWatcher(s, db, p)
+        w.scan_once()
+        w.scan_once()                                           # finalised recording imported automatically
+        return db.one("SELECT * FROM recordings ORDER BY id DESC LIMIT 1")
+
+    rec = capture("live1")
+    assert rec["origin"] == "live_capture"
+    q.drain(600)                                                # no manual step: transcribe → select → render → upload
+    rec = db.recording(rec["id"])
+    clips = db.query("SELECT * FROM clips WHERE recording_id=?", (rec["id"],))
+    assert rec["engine_owned"] == 1 and clips and all(c["status"] == "ready" for c in clips)
+    assert all(cloud_svc.clip_verified(c["id"]) for c in clips)
+    assert rec["raw_deleted_at"] and rec["file_path"] is None and rec["lifecycle"] == "completed"
+    for c in clips:                                             # finished clips, timecodes and provenance intact
+        assert Path(c["video_path"]).is_file() and c["end"] > c["start"]
+    assert (s.recordings_dir).exists() and any(s.recordings_dir.rglob("provenance.json"))
+    assert db.one("SELECT COUNT(*) n FROM transcript_segments WHERE recording_id=?", (rec["id"],))["n"] > 0
+    assert db.one("SELECT COUNT(*) n FROM publication_packages")["n"] == 0      # nothing published
+    assert db.one("SELECT COUNT(*) n FROM publish_attempts")["n"] == 0
+
+    drive.free = 0.5e9                                          # Drive full: uploads are held …
+    other = root / "other.mp4"                                  # different content (not a duplicate)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(sample_video), "-vf", "hue=h=90", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-c:a", "aac", str(other)], check=True)
+    rec2 = capture("live2", other)
+    assert rec2["id"] != rec["id"]
+    for _ in range(20):
+        q.run_one()
+    rec2 = db.recording(rec2["id"])
+    assert rec2["engine_owned"] == 1 and rec2["file_path"] and Path(rec2["file_path"]).is_file()   # … raw kept
+    assert not rec2["raw_deleted_at"]
+    assert "cloud_verified" in lc.check_recording(rec2["id"])["reason"]

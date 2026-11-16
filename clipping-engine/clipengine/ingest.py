@@ -506,7 +506,7 @@ DISK_RESERVE_BYTES = 1_000_000_000      # always left free on the data drive aft
 DOWNLOAD_HEIGHTS = (1080, 720, 480, 360)
 
 
-def fit_format_to_disk(info: dict, free_bytes: int, ctx=None) -> str:
+def fit_format_to_disk(info: dict, free_bytes: int, ctx=None, min_height: int = 360) -> str:
     """Pick the highest resolution (≤1080p) whose download, plus the 16 kHz WAV made for transcription
     and a fixed reserve, fits in the free space. Sites that stream over HLS (Rumble, for example)
     publish no file size, so yt-dlp's own max_filesize cannot protect the disk: the size is estimated
@@ -532,7 +532,7 @@ def fit_format_to_disk(info: dict, free_bytes: int, ctx=None) -> str:
                 sizes.append((f["tbr"] + extra) * 1000 / 8 * duration)
         return min(sizes) if sizes else None    # smallest format at or below h (what "b[height<=h]" can fall to)
 
-    for h in DOWNLOAD_HEIGHTS:
+    for h in [h for h in DOWNLOAD_HEIGHTS if h >= min_height] or [DOWNLOAD_HEIGHTS[0]]:
         best = max([s for f in formats if f.get("height") == h
                     for s in [(f.get("filesize") or f.get("filesize_approx")
                                or ((f.get("tbr") or 0) + (audio_kbps if f.get("acodec") == "none" else 0))
@@ -541,6 +541,12 @@ def fit_format_to_disk(info: dict, free_bytes: int, ctx=None) -> str:
             if h < 1080 and ctx is not None:
                 ctx.progress(0.0, f"Low disk space: downloading at {h}p")
             return f"bv*[height<={h}]+ba/b[height<={h}]"
+    if min_height >= DOWNLOAD_HEIGHTS[0]:
+        # owner's minimum quality: wait for space rather than download a lower resolution
+        need = ((size(DOWNLOAD_HEIGHTS[0]) or 0) * 1.1 + DISK_RESERVE_BYTES + duration * 32_000) / 1e9
+        raise TransientError(f"Not enough free disk space to download this {duration / 3600:.1f}-hour video at "
+                             f"{min_height}p: about {need:.1f} GB is needed and {free_bytes / 1e9:.1f} GB is free. "
+                             "Free some space; the download is retried in 1 hour.", retry_after=3600)
     smallest = size(DOWNLOAD_HEIGHTS[-1])
     if smallest is not None and smallest * 1.1 <= budget:
         return "wv*[height>=240]+ba/w[height>=240]/w"
@@ -581,7 +587,8 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
     try:
         with yt_dlp.YoutubeDL(dict(opts, skip_download=True)) as ydl:
             info = ydl.extract_info(url, download=False)
-        opts["format"] = fit_format_to_disk(info, shutil.disk_usage(settings.data_dir).free, ctx)
+        opts["format"] = fit_format_to_disk(info, shutil.disk_usage(settings.data_dir).free, ctx,
+                                            min_height=int(getattr(settings, "live_min_height", 1080)))
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.process_ie_result(info, download=True)
     except yt_dlp.utils.DownloadCancelled as e:

@@ -250,6 +250,9 @@ class Settings:
     defer_heavy_while_recording: bool = True  # hold transcription/rendering while a live recording runs
     disk_reserve_gb: float = 1.0
     record_gb_per_hour: float = 1.5         # planning estimate for live capture
+    live_expected_hours: float = 4.5        # plan live resolution so a broadcast this long fits on disk
+    live_min_height: int = 1080             # owner requirement (16 Nov 2026): never record or download below 1080p
+    live_max_height: int = 1080
 
     # Testing hook: name of a transcriber backend ("whisper" or "stub").
     transcriber_backend: str = "whisper"
@@ -382,6 +385,9 @@ def get_settings(**overrides) -> Settings:
         defer_heavy_while_recording=_bool("DEFER_HEAVY_WHILE_RECORDING", True),
         disk_reserve_gb=_float("DISK_RESERVE_GB", 1.0),
         record_gb_per_hour=_float("RECORD_GB_PER_HOUR", 1.5),
+        live_expected_hours=_float("LIVE_EXPECTED_HOURS", 4.5),
+        live_min_height=_int("LIVE_MIN_HEIGHT", 1080),
+        live_max_height=_int("LIVE_MAX_HEIGHT", 1080),
     )
     for k, v in overrides.items():
         setattr(s, k, v)

@@ -43,17 +43,46 @@ def estimate(settings: Settings, duration_s: float, source_bytes: float | None =
             "free": free, "fits": free - reserve >= peak, "shortfall": max(0.0, peak + reserve - free)}
 
 
+# Typical live HLS bitrates (video+audio) per height, GB per hour (Rumble's ladder measured 16 Nov 2026:
+# 1080p ~4.1 Mbps, 720p ~2.1, 480p ~1.06, 360p ~0.68).
+LIVE_GB_PER_HOUR = {1080: 1.85, 720: 0.97, 480: 0.48, 360: 0.31}
+
+
+def live_plan(settings: Settings, hours: float | None = None) -> dict:
+    """Choose the live-recording resolution so the WHOLE expected broadcast fits with transcription space,
+    clip renders and the reserve: the highest height <= LIVE_MAX_HEIGHT that fits; never below
+    LIVE_MIN_HEIGHT (then the plan says how many hours will fit before the low-disk stop). The owner's
+    minimum is 1080p: quality is never traded for length; a full disk stops the recording instead."""
+    hours = float(hours or getattr(settings, "live_expected_hours", 4.5))
+    free = free_bytes(settings.data_dir)
+    budget = free - settings.disk_reserve_gb * 1e9 - hours * 3600 * WAV_BYTES_PER_S \
+        - settings.clips_per_recording * 60 * CLIP_BYTES_PER_S
+    hi = int(getattr(settings, "live_max_height", 1080))
+    lo = int(getattr(settings, "live_min_height", 1080))
+    heights = [h for h in sorted(LIVE_GB_PER_HOUR, reverse=True) if lo <= h <= hi] or [lo]
+    rate = {h: LIVE_GB_PER_HOUR.get(h, settings.record_gb_per_hour) * (settings.record_gb_per_hour / 1.5) for h in heights}
+    for h in heights:
+        if rate[h] * hours * 1e9 <= budget:
+            return {"height": h, "hours": hours, "covers_hours": hours, "full": True, "free_gb": free / 1e9,
+                    "format": f"bv*[height<={h}]+ba/b[height<={h}]/b",
+                    "note": f"{h}p fits the whole expected {hours:g} h broadcast."}
+    h = heights[-1]
+    covers = max(0.0, budget / (rate[h] * 1e9))
+    return {"height": h, "hours": hours, "covers_hours": covers, "full": False, "free_gb": free / 1e9,
+            "format": f"bv*[height<={h}]+ba/b[height<={h}]/b",
+            "note": f"Only about {covers:.1f} h of a {hours:g} h broadcast fits at {h}p; the recording stops safely "
+                    "when the disk is nearly full (what was captured is kept and processed)."}
+
+
 def live_preflight(settings: Settings, expected_hours: float = 1.0) -> tuple[bool, str]:
-    """Before a live recording starts: refuse when not even `expected_hours` of capture would fit, so a
-    full disk is reported plainly instead of producing a broken file."""
-    est = estimate(settings, expected_hours * 3600)
-    if est["fits"]:
-        hours = max(0.0, (est["free"] - est["reserve"] - est["transcription_wav"] - est["rendering"])
-                    / (settings.record_gb_per_hour * 1e9))
-        return True, f"About {hours:.1f} h of live recording fits on the data drive."
-    return False, (f"Not enough free space to record: about {est['peak'] / 1e9:.1f} GB is needed for "
-                   f"{expected_hours:g} h (recording + transcription + clips) plus a {est['reserve'] / 1e9:.0f} GB reserve, "
-                   f"and {est['free'] / 1e9:.1f} GB is free. Free space or move the data folder (Storage page).")
+    """Before a live recording starts: refuse when not even `expected_hours` of capture would fit at the lowest
+    allowed resolution, so a full disk is reported plainly instead of producing a broken file."""
+    plan = live_plan(settings)
+    if plan["covers_hours"] >= expected_hours:
+        return True, plan["note"]
+    return False, (f"Not enough free space to record even {expected_hours:g} h at {plan['height']}p "
+                   f"({plan['free_gb']:.1f} GB free, {settings.disk_reserve_gb:g} GB reserve kept). "
+                   "Free space or move the data folder (Storage page).")
 
 
 def capacity_report(settings: Settings, db=None) -> dict:

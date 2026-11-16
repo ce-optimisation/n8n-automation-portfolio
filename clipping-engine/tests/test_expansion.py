@@ -612,3 +612,20 @@ def test_research_dataset_loads_without_creating_sources(settings):
     assert db.one("SELECT COUNT(*) n FROM creators WHERE status != 'research'")["n"] == 0
     research.load_dataset(db, path)                    # reloading never duplicates
     assert db.one("SELECT COUNT(*) n FROM creators")["n"] == res["creators_added"]
+
+
+def test_failed_render_or_pending_job_blocks_raw_deletion(life):
+    s, db, q, svc, lc = life
+    rid, f = _engine_recording(s, db, lc)
+    ok = _clip_on_disk(s, db, rid, idx=1)
+    bad = db.insert("clips", recording_id=rid, idx=2, start=30, end=50, status="failed", error="render failed")
+    svc.enqueue_clip(ok)
+    q.drain(30)
+    assert svc.clip_verified(ok) and f.exists()
+    assert "rendered" in lc.check_recording(rid)["reason"]          # a failed clip keeps the source for a retry
+    db.update("clips", bad, status="rejected")
+    jid = q.enqueue("render_clip", recording_id=rid, clip_id=ok, dedupe_key="regen")
+    res = lc.check_recording(rid)
+    assert not res["deleted"] and "no_jobs" in res["reason"] and f.exists()   # pending regeneration needs it
+    db.update("jobs", jid, status="done")
+    assert lc.check_recording(rid)["deleted"] and not f.exists()

@@ -790,7 +790,7 @@ class SourceMonitor:
             return it["state"] in LIVE_STATES
         if not it:
             from . import storage
-            ok, msg = storage.live_preflight(self.settings, 1.0)
+            ok, msg = storage.live_preflight(self.settings, 0.5)   # record what fits at full quality
             if not ok:
                 # Not stored as an item, so the next check tries again once space has been freed.
                 self.db.update("sources", src["id"], status_detail=f"Live stream detected but NOT recorded: {msg}")
@@ -815,7 +815,11 @@ class SourceMonitor:
                     # down); the repeated part is removed exactly when the recording is joined.
                     "-live_start_index", "-3",
                     "-i", it["url"], "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", str(seg)]
+        from . import storage
+        plan = storage.live_plan(self.settings)       # resolution chosen so the whole show fits on disk
+        log.info("live recording of %s at up to %sp: %s", it["url"], plan["height"], plan["note"])
         return [sys.executable, "-m", "yt_dlp", "--no-part", "--hls-use-mpegts", "--no-progress", "--quiet",
+                "-f", plan["format"],
                 "--user-agent", self.settings.http_user_agent, "-o", str(seg), it["url"]]
 
     def _start_segment(self, src, it, method: str | None = None) -> None:

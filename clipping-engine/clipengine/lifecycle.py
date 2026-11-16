@@ -41,7 +41,7 @@ def mark_engine_owned_since(db) -> float:
 def is_engine_acquired(rec) -> bool:
     meta = json.loads(rec["metadata_json"] or "{}")
     method = (meta.get("retrieval") or {}).get("method", "")
-    return (rec["source_type"] in ("url",) or rec["origin"] == "live_capture"
+    return (rec["source_type"] in ("url", "monitor") or rec["origin"] == "live_capture"
             or method in ("direct", "ytdlp", "yt_dlp", "live", "monitor"))
 
 
