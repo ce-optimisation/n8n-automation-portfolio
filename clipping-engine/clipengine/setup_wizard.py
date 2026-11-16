@@ -192,7 +192,12 @@ def main(settings: Settings, assume_yes: bool = False, ui: Console | None = None
 
     ui.head(1, total, "This computer")
     state["computer"] = step_computer(settings, ui)
-    problems = [c for c in doctor.checks(settings) if c["level"] == doctor.FAIL]
+    found = doctor.checks(settings)
+    for c in found:
+        if c["level"] == doctor.WARN and c["key"] == "data":
+            # Low disk space is shown but does not stop setup: the self-test needs very little.
+            ui.say(f"  [WARN] {c['title']}: {c['detail']}\n         → {c['fix']}")
+    problems = [c for c in found if c["level"] == doctor.FAIL]
     for c in problems:
         ui.say(f"  [FAIL] {c['title']}: {c['detail']}\n         → {c['fix']}")
     if problems:

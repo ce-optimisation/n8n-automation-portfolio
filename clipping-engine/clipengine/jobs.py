@@ -19,7 +19,14 @@ log = logging.getLogger("clipengine.jobs")
 
 
 class TransientError(Exception):
-    """An error worth retrying automatically (network blip, locked file...)."""
+    """An error worth retrying automatically (network blip, locked file...).
+
+    `retry_after` (seconds), when given, is the minimum wait before the retry: used when a site
+    refuses requests as too frequent (HTTP 429), where retrying quickly only makes matters worse."""
+
+    def __init__(self, *args, retry_after: float | None = None):
+        super().__init__(*args)
+        self.retry_after = retry_after
 
 
 class PermanentError(Exception):
@@ -159,6 +166,8 @@ class JobQueue:
             can_retry = transient and job["attempts"] < job["max_attempts"]
             if can_retry:
                 delay = min(600, 15 * 2 ** (job["attempts"] - 1))
+                if getattr(exc, "retry_after", None):
+                    delay = max(delay, int(exc.retry_after))
                 self.db.update("jobs", job["id"], status="queued", run_after=time.time() + delay,
                                error=str(exc), message=f"Transient error; retrying in {delay}s")
                 ctx.log(f"Transient error, retry in {delay}s: {exc}", "WARNING")

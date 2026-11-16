@@ -96,9 +96,11 @@ def checks(settings: Settings) -> list[dict]:
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
         free = shutil.disk_usage(settings.data_dir).free / 1e9
-        lvl = OK if free >= 20 else WARN if free >= 5 else FAIL
-        detail = f"{settings.data_dir} is writable; {free:.0f} GB free"
-        fix = "" if lvl == OK else "Long recordings need space (about 1–2 GB per hour). Free some disk space, or set CLIPENGINE_DATA_DIR to a larger drive."
+        lvl = OK if free >= 20 else WARN if free >= 1 else FAIL
+        detail = f"{settings.data_dir} is writable; {free:.1f} GB free"
+        fix = "" if lvl == OK else (
+            "Long recordings need space (about 1–2 GB per hour of video; a 3-hour live show needs roughly 5 GB). "
+            "Free some space: Windows Settings → System → Storage → Temporary files, and empty the Recycle Bin.")
         if "onedrive" in str(settings.data_dir).lower():
             lvl, fix = WARN, "The data folder is inside OneDrive, which would upload every recording. Move the engine to a local folder such as %LOCALAPPDATA%\\ClippingEngine (the installer does this)."
         add("data", "Data folder", lvl, detail, fix)

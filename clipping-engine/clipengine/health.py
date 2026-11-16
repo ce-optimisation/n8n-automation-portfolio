@@ -8,12 +8,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 
 BAD, WARN, INFO = "bad", "warn", "info"
 HEARTBEAT_KEY, DOWNTIME_KEY, SEEN_KEY = "heartbeat.last", "downtime.log", "downtime.seen_until"
 
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text) -> str:
+    """Error text without terminal colour codes (stored by older builds) for display."""
+    return _ANSI_RE.sub("", text or "")
 
 def _fmt(t: float) -> str:
     return time.strftime("%a %d %b %H:%M", time.localtime(t))
@@ -112,7 +121,7 @@ def items(core) -> list[dict]:
                 "/sources", "Sources")
         elif src["enabled"] and src["status"] == "error":
             add(BAD, f"Source “{src['name']}” could not be checked ({src['consecutive_errors']} failure(s) in a row): "
-                     f"{(src['last_error'] or '')[:200]}", "/sources", "Sources")
+                     f"{_plain(src['last_error'])[:200]}", "/sources", "Sources")
         elif not src["enabled"]:
             add(INFO, f"Source “{src['name']}” is switched off.", "/sources", "Sources")
     n_items = db.one("SELECT COUNT(*) n FROM source_items WHERE state='failed' AND updated_at > ?",

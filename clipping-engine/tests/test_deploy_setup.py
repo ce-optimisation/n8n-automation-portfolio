@@ -566,3 +566,73 @@ def test_rate_limited_or_empty_channel_listing_backs_off_and_imports_nothing(set
     mon.lister = lambda s_, u, limit=15: [{"key": "a", "title": "Ep", "url": "https://example.org/a.mp4", "live": False}]
     mon.poll(sid)
     assert [r["item_key"] for r in db.query("SELECT item_key FROM source_items")] == ["a"]
+
+
+def test_rate_limit_on_download_is_not_reported_as_login_required(tmp_path, monkeypatch):
+    """Regression (owner's PC, Nov 2026): yt-dlp's "Unable to download webpage: HTTP Error 429" was matched by
+    the bare word "age" and reported as "requires a login or is restricted". A 429 must be a retryable error
+    that waits at least 30 minutes; real login/age messages stay permanent. MOCK yt-dlp, no network."""
+    import types
+    from clipengine import ingest
+    from clipengine.jobs import TransientError
+
+    class DLError(Exception):
+        pass
+
+    class Cancelled(Exception):
+        pass
+    msg = {"text": ""}
+
+    class FakeYDL:
+        def __init__(self, opts): self.opts = opts
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def extract_info(self, url, download=False): raise DLError(msg["text"])
+    fake = types.SimpleNamespace(YoutubeDL=FakeYDL, utils=types.SimpleNamespace(DownloadError=DLError,
+                                                                                 DownloadCancelled=Cancelled))
+    monkeypatch.setitem(sys.modules, "yt_dlp", fake)
+    settings = types.SimpleNamespace(work_dir=tmp_path, max_upload_mb=100, http_user_agent="LocalClippingEngine/test")
+    ctx = types.SimpleNamespace(cancelled=lambda: False, progress=lambda *a, **k: None)
+
+    msg["text"] = ("\x1b[0;31mERROR:\x1b[0m [Rumble] v7abc: Unable to download webpage: HTTP Error 429: "
+                   "Too Many Requests (caused by <HTTPError 429: Too Many Requests>)")
+    with pytest.raises(TransientError) as exc:
+        ingest._download_with_ytdlp(settings, "https://rumble.com/v7abc-episode.html", ctx)
+    assert exc.value.retry_after >= 1800 and "\x1b" not in str(exc.value) and "too frequent" in str(exc.value)
+
+    for text in ("ERROR: [youtube] x: Sign in to confirm your age. This video may be inappropriate",
+                 "ERROR: [vimeo] x: This video is private", "ERROR: x: This video is age-restricted"):
+        msg["text"] = text
+        with pytest.raises(ingest.SourceError) as exc2:
+            ingest._download_with_ytdlp(settings, "https://example.org/v", ctx)
+        assert exc2.value.code == "access_restricted"
+    msg["text"] = "ERROR: x: Unable to extract video data from the webpage; please report this issue"
+    with pytest.raises(ingest.SourceError) as exc3:
+        ingest._download_with_ytdlp(settings, "https://example.org/v", ctx)
+    assert exc3.value.code == "extractor_error"
+
+
+def test_low_disk_warns_but_does_not_stop_setup(settings, monkeypatch):
+    """Regression (owner's PC): 3 GB free stopped the setup assistant at step 1. Under 20 GB is a warning
+    (with plain steps to free space); only under 1 GB, too little even for the self-test, is a failure."""
+    import collections
+    from clipengine import doctor
+    s = settings
+    usage = collections.namedtuple("usage", "total used free")
+    for free_gb, level in ((3, doctor.WARN), (0.5, doctor.FAIL), (40, doctor.OK)):
+        monkeypatch.setattr(doctor.shutil, "disk_usage", lambda p, f=free_gb: usage(100e9, 0, f * 1e9))
+        c = [c for c in doctor.checks(s) if c["key"] == "data"][0]
+        assert c["level"] == level, (free_gb, c)
+    monkeypatch.setattr(doctor.shutil, "disk_usage", lambda p: usage(100e9, 0, 3e9))
+    assert "Temporary files" in [c for c in doctor.checks(s) if c["key"] == "data"][0]["fix"]
+
+
+def test_channel_address_is_never_downloaded_as_one_video():
+    """The bogus item an early empty listing created pointed at the channel itself; retrying its
+    download must not fetch the whole channel. Uses yt-dlp's real extractor table (offline)."""
+    import yt_dlp
+    from clipengine import ingest
+    assert ingest._is_collection_url(yt_dlp, "https://rumble.com/c/examplechannel")
+    assert ingest._is_collection_url(yt_dlp, "https://www.youtube.com/playlist?list=PL0000000000")
+    assert not ingest._is_collection_url(yt_dlp, "https://rumble.com/v7i48ms-america-first-ep.-1776.html")
+    assert not ingest._is_collection_url(yt_dlp, "https://example.org/clip.mp4")

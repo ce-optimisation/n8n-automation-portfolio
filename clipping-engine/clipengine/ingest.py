@@ -480,11 +480,37 @@ def _part_path(settings: Settings, url: str) -> Path:
     return settings.work_dir / f"dl_{hashlib.sha1(normalize_url(url).encode()).hexdigest()[:16]}.part"
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# Phrases yt-dlp uses for videos that need a login, a membership or an age check. Matched as whole
+# phrases: a bare "age" also matched "webpage", which turned a rate limit into "requires a login".
+RESTRICTED_MARKERS = ("sign in", "log in", "login required", "logged-in", "account cookies", "private video",
+                      "members-only", "members only", "age-restricted", "age restricted", "confirm your age",
+                      "age verification", "this video is private")
+
+
+def _is_collection_url(yt_dlp, url: str) -> bool:
+    """True when yt-dlp would treat the address as a channel/playlist (checked offline, no request)."""
+    try:
+        from yt_dlp.extractor import gen_extractor_classes
+    except Exception:  # noqa: BLE001 - a stand-in yt-dlp (tests) has no extractor list
+        return False
+    for ie in gen_extractor_classes():
+        if ie.suitable(url):
+            name = (getattr(ie, "IE_NAME", "") or "").lower()
+            return getattr(ie, "_RETURN_TYPE", None) == "playlist" or any(
+                k in name for k in ("channel", "playlist", ":tab", "user"))
+    return False
+
+
 def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple[Path, dict]:
     try:
         import yt_dlp
     except ImportError as e:  # pragma: no cover
         raise PermanentError("yt-dlp is not installed (pip install -r requirements.txt)") from e
+    if _is_collection_url(yt_dlp, url):
+        raise SourceError("not_a_video", "This address is a channel or playlist, not a single video, so it was not "
+                                         "downloaded (that could fetch every video on the channel). Add it on the "
+                                         "Sources page instead, or paste the link of one episode.")
     tmp = settings.work_dir / f"ytdlp_{hashlib.sha1(normalize_url(url).encode()).hexdigest()[:16]}"
     tmp.mkdir(parents=True, exist_ok=True)
 
@@ -509,17 +535,22 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
     except yt_dlp.utils.DownloadCancelled as e:
         raise TransientError("cancelled") from e
     except yt_dlp.utils.DownloadError as e:
-        msg = str(e)
+        msg = ANSI_RE.sub("", str(e))
         low = msg.lower()
+        if "429" in low or "too many requests" in low:
+            # Checked first: the message also contains words such as "webpage". Wait at least 30
+            # minutes between attempts rather than hammering a site that is limiting us.
+            raise TransientError("The site refused the request as too frequent (HTTP 429); the download will be "
+                                 "retried later, at least 30 minutes apart. " + msg[:300], retry_after=1800) from e
         if "drm" in low:
             raise SourceError("drm", "This video is DRM-protected; it will not be downloaded.") from e
         if "unsupported url" in low:
             raise SourceError("unsupported_source", "No supported video was found at this page. Use a direct "
                               "video file link or upload the file.") from e
-        if any(k in low for k in ("sign in", "login", "private video", "members-only", "age")):
+        if any(k in low for k in RESTRICTED_MARKERS):
             raise SourceError("access_restricted", "This video requires a login or is restricted; it will not "
                               "be retrieved. Obtain the file from the rights holder.") from e
-        if any(k in low for k in ("timed out", "temporar", "connection", "http error 5", "429")):
+        if any(k in low for k in ("timed out", "temporar", "connection", "http error 5")):
             raise TransientError(msg) from e
         raise SourceError("extractor_error", msg[:500]) from e
     files = [p for p in tmp.iterdir() if p.suffix.lower() in VIDEO_EXTS]

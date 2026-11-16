@@ -331,6 +331,23 @@ yt-dlp's own Rumble extractor (yt-dlp 2026.10.26, `yt_dlp/extractor/rumble.py`, 
 Tests: `tests/test_monitor.py::test_channel_listing_without_live_status_is_probed` (MOCK lister/prober) and
 `::test_rumble_channel_listing_is_bounded_and_marks_live_unknown` (the real yt-dlp extractor, MOCK pages).
 
+**Second report from the owner's PC (16 Nov, after updating):** the setup assistant stopped at step 1 because the
+disk had 3 GB free (the doctor treated < 5 GB as FAIL), so steps 2–6 never ran; the dashboard still showed the
+old build's raw Rumble 429 text with terminal colour codes (4 failures in a row, i.e. the 2-minute source had not
+been removed and re-added); and download job #1 had failed as "requires a login or is restricted". Fixes:
+- `ingest._download_with_ytdlp`: the restricted-video check matched the bare word "age", which is inside
+  "webp**age**", so every "Unable to download webpage: HTTP Error 429" became a permanent "requires a login".
+  Now 429 is checked first and raises `TransientError(retry_after=1800)` (jobs honour `retry_after`); restricted
+  markers are whole phrases (`RESTRICTED_MARKERS`); ANSI codes stripped.
+- `_is_collection_url`: a channel/playlist address (offline check against yt-dlp's extractor table) is refused
+  as a single-video download, so retrying the bogus "nickjfuentes" item can never fetch a whole channel.
+- `doctor`: data-folder space is FAIL only below 1 GB, WARN below 20 GB with plain steps to free space;
+  the setup assistant prints the warning and continues.
+- `health`: source errors are shown without colour codes (older stored errors included).
+Tests: `test_rate_limit_on_download_is_not_reported_as_login_required`, `test_low_disk_warns_but_does_not_stop_setup`,
+`test_channel_address_is_never_downloaded_as_one_video` (tests/test_deploy_setup.py).
+The owner's PC has about **2.5 GB free on C:**: too little for a full live show (roughly 1–2 GB per hour).
+
 **Still unverified against the real site:** whether Rumble serves the engine a real listing at all (the 429 may
 persist; the answer is a sanctioned access method from Rumble, never a disguised client), whether a live
 broadcast appears in the channel listing, recording via `yt_dlp --hls-use-mpegts`, and replay download.
