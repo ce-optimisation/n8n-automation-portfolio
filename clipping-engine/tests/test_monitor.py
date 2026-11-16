@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from clipengine import monitor
+from clipengine import ingest, monitor
 from clipengine.db import Database
 from clipengine.inbox import InboxWatcher, read_sidecar
 from clipengine.jobs import JobQueue
@@ -315,3 +315,90 @@ def test_external_recorder_sidecar_import(env, sample_video):
     rec = db.one("SELECT * FROM recordings")
     assert rec["source_type"] == "recorder_import" and rec["title"] == "Council meeting"
     assert (Path(rec["file_path"]).parent / "recorder_sidecar.json").exists()
+
+
+def test_channel_listing_without_live_status_is_probed(env, monkeypatch):
+    """MOCK: a listing that gives only links (as yt-dlp's Rumble channel extractor does) must not hide a
+    live broadcast. New entries are looked up individually (at most PROBE_LIMIT per check); an upcoming
+    one is not stored, so it is recorded once it goes live; a live one starts the recorder."""
+    s, db, q, p, mon, root, srv = env
+    sid, ok, _ = monitor.add_source(s, db, name="Links only", kind="channel", url=f"{srv.url}/c/show",
+                                    record_live=True)
+    listing = [{"key": f"{srv.url}/v{i}.html", "title": "", "url": f"{srv.url}/v{i}.html", "live": None}
+               for i in range(1, 7)]
+    status = {f"{srv.url}/v1.html": "is_upcoming"}
+    probes = []
+
+    def fake_prober(settings, url):
+        probes.append(url)
+        return {"title": "Episode " + url[-6:-5], "live_status": status.get(url, "not_live"), "published": ""}
+    started = []
+    monkeypatch.setattr(mon, "_start_segment", lambda src, it, method=None: started.append(it["url"]))
+    mon.lister = lambda settings, url, limit=15: [dict(e) for e in listing]
+    mon.prober = fake_prober
+
+    res = mon.poll(sid)                                   # first check: baseline only
+    assert "error" not in res and not res["live"]
+    assert len(probes) == monitor.SourceMonitor.PROBE_LIMIT
+    keys = {r["item_key"]: r for r in db.query("SELECT * FROM source_items")}
+    assert f"{srv.url}/v1.html" not in keys                # upcoming: left for the next check
+    assert len(keys) == 5 and all(r["state"] == "baseline" for r in keys.values())
+    assert keys[f"{srv.url}/v2.html"]["title"] == "Episode 2"
+
+    status[f"{srv.url}/v1.html"] = "is_live"               # the scheduled stream goes live
+    probes.clear()
+    db.execute("UPDATE sources SET next_check = 0")
+    res = mon.poll(sid)
+    assert res["live"] and res["new"] == 0 and probes == [f"{srv.url}/v1.html"]
+    item = db.one("SELECT * FROM source_items WHERE item_key=?", (f"{srv.url}/v1.html",))
+    assert item["kind"] == "live" and item["state"] == "recording" and started == [f"{srv.url}/v1.html"]
+    assert db.one("SELECT COUNT(*) n FROM jobs WHERE kind='download_url'")["n"] == 0
+    # whether the recording continues is asked of the video page when the listing does not say
+    src = db.one("SELECT * FROM sources WHERE id=?", (sid,))
+    assert mon._stream_live(src, item) is True
+    status[f"{srv.url}/v1.html"] = "post_live"
+    assert mon._stream_live(src, item) is False
+
+    def refused(settings, url):                            # a refused lookup backs the whole source off
+        raise RuntimeError("HTTP Error 429: Too Many Requests")
+    listing.insert(0, {"key": f"{srv.url}/v9.html", "title": "", "url": f"{srv.url}/v9.html", "live": None})
+    mon.prober = refused
+    db.execute("UPDATE sources SET next_check = 0")
+    assert "too frequent" in mon.poll(sid)["error"]
+    assert db.one("SELECT COUNT(*) n FROM source_items WHERE item_key=?", (f"{srv.url}/v9.html",))["n"] == 0
+
+
+def test_rumble_channel_listing_is_bounded_and_marks_live_unknown(monkeypatch):
+    """Runs yt-dlp's REAL Rumble channel extractor with only the network layer replaced (MOCK pages;
+    rumble.com is never contacted). Proves two facts the monitor depends on: (1) a channel page that
+    shows no videos costs at most LISTING_MAX_REQUESTS requests instead of paging until the site
+    refuses (HTTP 429); (2) listed Rumble entries carry no live status, so they are probed."""
+    import io
+    import yt_dlp
+    from yt_dlp.networking import Response
+    from types import SimpleNamespace
+
+    pages = {"html": "<html><body>Checking your browser</body></html>"}
+    requested = []
+
+    def fake_urlopen(self, req):
+        url = req if isinstance(req, str) else req.url
+        requested.append(url)
+        if "page=1" not in url and "videostream__link" in pages["html"]:
+            from yt_dlp.networking.exceptions import HTTPError
+            raise HTTPError(Response(io.BytesIO(b""), url, {}, status=404))
+        return Response(io.BytesIO(pages["html"].encode()), url, {"Content-Type": "text/html"}, status=200)
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "urlopen", fake_urlopen)
+    s = SimpleNamespace(http_user_agent="LocalClippingEngine/test")
+    with pytest.raises(ingest.SourceError) as exc:
+        monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert exc.value.code == "empty_listing"
+    assert len(requested) == monitor.LISTING_MAX_REQUESTS
+
+    requested.clear()
+    pages["html"] = ('<a class="videostream__link link" href="/v7aaa11-episode-2.html"></a>'
+                     '<a class="videostream__link link" href="/v7aaa10-episode-1.html"></a>')
+    entries = monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert [e["url"] for e in entries] == ["https://rumble.com/v7aaa11-episode-2.html",
+                                           "https://rumble.com/v7aaa10-episode-1.html"]
+    assert all(e["live"] is None for e in entries) and len(requested) <= 2

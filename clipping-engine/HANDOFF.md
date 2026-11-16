@@ -310,6 +310,33 @@ commits (the session's environment designated the latter; the owner's brief name
   because the site is subscription/sign-in and the engine has no login support by design. Clean alternatives: a
   direct `.m3u8`, an RSS feed, or files from the rights holder. Outcome not yet reported.
 
+### 1B.12 Session 5: Rumble listing defects found offline (read with 1B.11)
+
+Session 5 again ran in a cloud container with no access to the owner's PC and no route to rumble.com. It read
+yt-dlp's own Rumble extractor (yt-dlp 2026.10.26, `yt_dlp/extractor/rumble.py`, `RumbleChannelIE`) and ran it
+**offline with only the network layer replaced**. That exposed two real defects in the channel monitor:
+
+1. **Unbounded paging.** `RumbleChannelIE` requests `?page=1`, `?page=2`, ... and stops only on HTTP 404. A page
+   with no `videostream__link` elements (an empty or "checking your browser" page) therefore made one "Check now"
+   send request after request (201 in the offline reproduction before the fake site answered 404). This is a
+   likely cause of the owner's "empty listing" followed by **HTTP 429**. Fix: `list_channel` runs yt-dlp through a
+   subclass whose `urlopen` stops after `LISTING_MAX_REQUESTS = 4` and reports `empty_listing`.
+2. **Live never detected on Rumble.** Rumble listing entries are bare links (no title, no `live_status`). The old
+   code turned "not stated" into "not live", so a live broadcast would have been queued as an ordinary download,
+   never recorded live. Now `_live_flag` returns `None` for "not stated". `SourceMonitor._resolve_unknown` looks
+   up **new** entries one by one (`probe_entry`, at most `PROBE_LIMIT = 3` per check, newest first). An
+   **upcoming** entry is not stored, so it is checked again and recorded once it goes live. `_stream_live` asks
+   the video page itself when the listing does not say. A refused lookup (429) backs the whole source off.
+
+Tests: `tests/test_monitor.py::test_channel_listing_without_live_status_is_probed` (MOCK lister/prober) and
+`::test_rumble_channel_listing_is_bounded_and_marks_live_unknown` (the real yt-dlp extractor, MOCK pages).
+
+**Still unverified against the real site:** whether Rumble serves the engine a real listing at all (the 429 may
+persist; the answer is a sanctioned access method from Rumble, never a disguised client), whether a live
+broadcast appears in the channel listing, recording via `yt_dlp --hls-use-mpegts`, and replay download.
+Per check, a Rumble source now costs 1 listing request (2 for a channel with fewer than 15 videos), plus at most
+3 lookups of about 2 requests each when new videos appear.
+
 ---
 
 ## 1A. Session 3: what was built (read this first)

@@ -183,14 +183,39 @@ def parse_feed(text: str, base_url: str) -> list[dict]:
     return items
 
 
+LISTING_MAX_REQUESTS = 4    # web requests one channel listing may make (a normal listing needs 1-2)
+
+
+class _ListingCapReached(Exception):
+    pass
+
+
 def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
     """yt-dlp flat listing of a channel/page (only called for authorised domains)."""
     import yt_dlp
+
+    class _Capped(yt_dlp.YoutubeDL):
+        """Stops a listing after LISTING_MAX_REQUESTS web requests. yt-dlp's Rumble channel extractor
+        keeps asking for ?page=2, 3, 4 ... until the site answers 404, so a page that shows no videos
+        (an empty or challenge page) would otherwise turn one check into an unbounded run of requests."""
+        requests_made = 0
+
+        def urlopen(self, req):
+            self.requests_made += 1
+            if self.requests_made > LISTING_MAX_REQUESTS:
+                raise _ListingCapReached()
+            return super().urlopen(req)
+
     opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "playlistend": limit,
             "skip_download": True, "http_headers": {"User-Agent": settings.http_user_agent}, "socket_timeout": 30,
             "color": "never", "retries": 1, "extractor_retries": 0}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with _Capped(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except _ListingCapReached:
+        raise ingest.SourceError("empty_listing", f"The channel pages listed no videos after {LISTING_MAX_REQUESTS} "
+                                                  "requests, so the check was stopped. The site may be limiting or "
+                                                  "filtering automated requests; nothing was imported.") from None
     if info.get("_type") == "playlist" or "entries" in info:
         entries = list(info.get("entries") or [])
         if not entries:
@@ -209,8 +234,37 @@ def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
             continue
         out.append({"key": str(e.get("id") or u), "title": e.get("title") or "", "url": u,
                     "published": str(e.get("upload_date") or e.get("timestamp") or ""),
-                    "live": e.get("live_status") == "is_live" or bool(e.get("is_live"))})
+                    "live": _live_flag(e)})
     return out
+
+
+def _live_flag(e: dict):
+    """True / False when the listing says whether the entry is live, None when it does not.
+
+    Some sites' listings (Rumble's channel pages, for example) carry only the video links, with no
+    title and no live status. Such entries must be looked up individually (probe_entry) before the
+    engine can tell a live broadcast from an ordinary upload."""
+    if e.get("is_live") or e.get("live_status") == "is_live":
+        return True
+    if e.get("live_status") or e.get("is_live") is False:
+        return False
+    return None
+
+
+def probe_entry(settings: Settings, url: str) -> dict:
+    """Look up ONE listed video page (yt-dlp, no download) to learn its title and live status.
+
+    Used only for entries whose listing did not say whether they are live, at most a few per check.
+    The same identifying User-Agent and authorisation gate apply as for the listing itself."""
+    import yt_dlp
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 30,
+            "http_headers": {"User-Agent": settings.http_user_agent}, "color": "never", "retries": 1,
+            "extractor_retries": 0, "ignore_no_formats_error": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    status = info.get("live_status") or ("is_live" if info.get("is_live") else None)
+    return {"title": info.get("title") or "", "live_status": status,
+            "published": str(info.get("upload_date") or info.get("timestamp") or "")}
 
 
 def hls_state(text: str) -> dict:
@@ -356,6 +410,7 @@ class SourceMonitor:
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
         self.lister = list_channel           # replaceable in tests (MOCK)
+        self.prober = probe_entry            # replaceable in tests (MOCK)
         queue.register("download_url:failed", self._download_failed)
 
     # -- lifecycle
@@ -424,6 +479,7 @@ class SourceMonitor:
                 # Drop a bogus "the channel itself" item left by an earlier empty listing.
                 self.db.execute("DELETE FROM source_items WHERE source_id=? AND state='baseline' AND kind='vod' "
                                 "AND (url=? OR url IS NULL)", (sid, src["url"]))
+                entries = self._resolve_unknown(src, entries, first)
                 live = [e for e in entries if e.get("live")]
                 result["new"] = self._handle_vods(src, [e for e in entries if not e.get("live")], first)
                 if live and src["record_live"]:
@@ -453,6 +509,37 @@ class SourceMonitor:
             result["error"] = text
             log.warning("source %s poll failed: %s", sid, e)
         return result
+
+    PROBE_LIMIT = 3     # per check: listed entries looked up individually when the listing omits live status
+
+    def _resolve_unknown(self, src, entries: list[dict], first_poll: bool) -> list[dict]:
+        """Fill in the live status of NEW listed entries whose listing did not give it.
+
+        Only entries the engine has not seen before are looked up, newest first and at most
+        PROBE_LIMIT per check, so a check costs a handful of requests at most. An entry that is
+        scheduled but not yet live ("upcoming") is skipped without being stored, so it is looked at
+        again on the next check and recorded once it goes live. Entries beyond the limit are also
+        left for the next check, except on the very first check, where they only become the
+        baseline (older items noted, not downloaded). A refused lookup (HTTP 429) propagates, so
+        the whole source backs off."""
+        known = {r["item_key"] for r in self.db.query("SELECT item_key FROM source_items WHERE source_id=?", (src["id"],))}
+        out, probed = [], 0
+        for e in entries:
+            if e.get("live") is not None or e["key"] in known:
+                out.append(e)
+                continue
+            if probed >= self.PROBE_LIMIT:
+                if first_poll:
+                    out.append(dict(e, live=False))
+                continue
+            probed += 1
+            info = self.prober(self.settings, e["url"])
+            status = info.get("live_status")
+            if status == "is_upcoming":
+                continue
+            out.append(dict(e, live=status == "is_live", title=e.get("title") or info.get("title") or "",
+                            published=e.get("published") or info.get("published") or ""))
+        return out
 
     def _handle_vods(self, src, items: list[dict], first_poll: bool) -> int:
         new = 0
@@ -598,7 +685,11 @@ class SourceMonitor:
                 st = hls_state(text) if status == 200 else {"valid": False}
                 return bool(st.get("valid")) and not st.get("ended")
             entries = self.lister(self.settings, src["url"])
-            return any(e.get("live") and e["key"] == it["item_key"] for e in entries)
+            listed = [e for e in entries if e["key"] == it["item_key"]]
+            if listed and listed[0].get("live") is not None:
+                return bool(listed[0]["live"])
+            # The listing does not say (or no longer shows the item): ask the video page itself.
+            return self.prober(self.settings, it["url"]).get("live_status") == "is_live"
         except Exception:  # noqa: BLE001 - unreachable counts as not live
             return False
 
