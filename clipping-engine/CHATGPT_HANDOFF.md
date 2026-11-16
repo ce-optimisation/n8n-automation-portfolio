@@ -59,7 +59,8 @@ niche, platform, date, status), Ready to Post, Sources, **Creators**, **Research
 | Rumble listing, download, auto pick-up of a new upload, disk-aware 480p | Verified on the owner's PC |
 | Captions 73 px, same centre, side-margin fitting, no top label | Verified on the owner's PC (12 real clips) |
 | Profiles, selection v5, queue, storage, lifecycle gates, packages, research | Unit/integration-tested locally; see §1C of HANDOFF.md for test counts |
-| Google Drive, YouTube private upload, Twitch/Kick/YouTube discovery | **MOCK-tested only — READY FOR OWNER CONNECTION** |
+| Google Drive | **Connected and verified for real** (self-test 6/6 PASS; 12 clips, 48/48 objects verified). App in Google *Testing* mode: reconnect about every 7 days |
+| YouTube private upload, Twitch/Kick/YouTube discovery | **MOCK-tested only — READY FOR OWNER CONNECTION** |
 | Phone dashboard over Tailscale | Working (password set; tested via the tailnet address); iPhone sign-in to be confirmed by the owner |
 | Live detection on Rumble | Verified on real Rumble data (live grid flag, 1080p live HLS); Fuentes' own broadcast not yet observed |
 | Unattended lifecycle (live → record → process → upload → verify → raw deletion) | Verified end to end on engine-generated media with a MOCK Drive |
@@ -86,8 +87,7 @@ niche, platform, date, status), Ready to Post, Sources, **Creators**, **Research
 
 1. **Free disk space or relocate** (Storage page → "Move the data folder", only if another drive exists). Without
    ~8 GB free, full live shows cannot be recorded.
-2. **Google Drive**: create a free Google Cloud project, enable Drive API (and YouTube Data API v3), OAuth client
-   type *Desktop app*, put `CLIPENGINE_GOOGLE_CLIENT_ID/SECRET` in `.env`, restart, Storage → Connect.
+2. **Google Drive**: done (16 Nov). Reconnect on Storage when Google expires the sign-in (~7 days, Testing mode).
 3. **Social accounts**: add the accounts you own on the Accounts page and map them to niches; connect YouTube for
    private uploads. TikTok/Instagram developer apps are unchanged optional steps.
 4. **Platform discovery**: free Twitch app (`TWITCH_CLIENT_ID/SECRET`), Kick app (`KICK_CLIENT_ID/SECRET`),
