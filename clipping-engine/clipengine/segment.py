@@ -109,6 +109,8 @@ class SelectionProfile:
                                        #     speaker turns, question/answer cohesion, sentence fragments)
     density_substance: bool = False    # v4: substance markers per unit time, so length alone earns nothing
     density_seconds: float = 15.0      # v4: one further marker is expected per this many seconds
+    close_share: float = 0.0           # v4: extend the end while the next sentence shares at least this
+                                       #     fraction of its content words with the clip (0 = off)
 
 
 PROFILES = {
@@ -124,8 +126,8 @@ PROFILES = {
 # leans on earlier material, not across a change of speaker; it must not end on a hand-over or a
 # stray fragment. Durations stay content-led (no target, no padding).
 PROFILES["v4"] = SelectionProfile("v4", fit_weight=0.0, pause_weight=0.18, continuation_weight=0.45,
-                                  topic_bonus=0.12, unanswered_weight=0.15, shift_weight=0.45,
-                                  context_weight=1.0, density_substance=True)
+                                  topic_bonus=0.12, unanswered_weight=0.15, shift_weight=0.25,
+                                  context_weight=1.0, density_substance=True, close_share=0.4)
 DEFAULT_PROFILE = "v4"
 
 
@@ -146,6 +148,7 @@ class Sentence:
     edge: str = ""                 # v4: "turn" (greeting/thanks), "handoff", "fragment" or ""
     opener: bool = False           # v4: announces a fresh subject
     ctx: bool = False              # v4: annotate_context() has described this sentence
+    hard_break_after: bool = False  # v4: a new speaker, a hand-over or a long silence follows
 
 
 @dataclass
@@ -339,6 +342,8 @@ def annotate_context(sents: list[Sentence]) -> None:
             strength = max(strength, 0.75)
         if cur.edge == "turn" and nxt.edge not in ("turn", "handoff"):
             strength = max(strength, 0.8)      # the substance begins right after a greeting/thanks
+        cur.hard_break_after = bool(cur.terminal and not cur.question and (
+            pause >= 6.0 or nxt.edge == "turn" or (cur.edge == "handoff" and nxt.edge != "handoff")))
         # weaken: the thought visibly carries on
         if not cur.terminal:
             strength = min(strength, 0.05)
@@ -445,7 +450,8 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float | None = N
         if tail.edge in ("handoff", "fragment") or (tail.edge == "turn" and len(win) > 1):
             context += 0.35
             reasons.append("ends on a hand-over or fragment rather than the speaker's point")
-        if len(win) > 1 and (tail.opener or LIST_CONTINUATION.search(_norm(tail.text))) and j + 1 < len(sents):
+        if len(win) > 1 and len(tail.words) <= 12 and j + 1 < len(sents) and \
+                (tail.opener or LIST_CONTINUATION.search(_norm(tail.text))):
             context += 0.3
             reasons.append("ends by announcing the next point")
         if j + 1 < len(sents) and sents[j + 1].dependency >= 0.3 and sents[j + 1].edge != "turn" \
@@ -453,10 +459,9 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float | None = N
             context += 0.5 * sents[j + 1].dependency
             reasons.append("the next sentence continues this point")
         # a change of speaker or an announced new subject inside the window (not a question→answer)
-        if len(win) >= 2 and win[0].ctx:
-            inner = max(x.boundary_after for x in win[:-1])
-            if inner >= 0.9:
-                context += 0.4
+        if len(win) >= 2 and win[0].ctx and any(x.hard_break_after for x in win[:-1]):
+            context += 0.4
+            reasons.append("runs across a change of speaker or a long silence")
     end_clean = 1.0 if win[-1].terminal else 0.0
     procedural = 0.0
     if profile.procedural_weight:
@@ -632,6 +637,27 @@ def refine_context(sents: list[Sentence], chosen: list[Candidate], prof: Selecti
                     new_j = m
                     break
                 m += 1
+        # Closing the thought: keep going while the next sentence is still about what the clip is
+        # about (most of its content words were already used in the clip), with no change of
+        # speaker, hand-over, aside or long silence in between.
+        if new_j is None and prof.close_share:
+            start_i = new_i if new_i is not None else i
+            toks = set().union(*[x.ctoks for x in sents[start_i:j + 1]])
+            m = j
+            while m + 1 < len(sents):
+                nx = sents[m + 1]
+                if nx.edge in ("handoff", "turn", "aside") or sents[m].boundary_after >= 0.9:
+                    break
+                if nx.end - sents[start_i].start > max_s or nx.end - sents[j].end > look_seconds:
+                    break
+                if len(nx.ctoks) < 3 or len(nx.ctoks & toks) / len(nx.ctoks) < prof.close_share:
+                    break
+                toks |= nx.ctoks
+                m += 1
+            while m > j and not sents[m].terminal:
+                m -= 1
+            if m > j:
+                new_j = m
         for a, b, what in ((new_i, j, "start moved back to the opening of the point"),
                            (c.s0 if new_i is None else new_i, new_j, "end extended to the close of the point")):
             if a is None or b is None or (a, b) == (c.s0, c.s1) or not free(a, b):

@@ -182,17 +182,23 @@ tests/fixtures/landsat9_topics.json (hand annotation), landsat9_whisper_base_en.
 - `refine_context()`: per chosen clip, look back ≤60 s for the nearest clean opening behind a clearly stronger
   break (no crossing of a ≥0.85 boundary, turn or hand-over), likewise extend a weak end; accept only if it fits
   `max_s`, does not collide, and scores within 0.08. Report key `context_adjusted`.
-- **Results** (6 clips/recording; README §5 has the full table):
-  - Real speech (NASA 55 min, Whisper base.en): starts at a paragraph opening 0.67→**1.0**, ends at a paragraph end
-    0.83→**1.0**, mid-sentence starts 0.17→**0**, multi-topic 0.50→0.33, ends mid-topic 0.33→0.17,
-    strict starts-mid-topic 0.0→0.33 (v3's 0.0 came from mid-sentence/multi-topic clips).
-  - Real speech, small.en: para start 0.50→0.83, mid-sentence 0.33→0, multi-topic 0.33→0.17, **ends mid-topic
-    0.33→0.50 (worse)**.
-  - Synthetic 58 min exact: starts mid-topic 0.33→**0.17**, ends 0→0. Whisper-like: starts 0.50→0.17, ends 0→0.17,
-    housekeeping edge 0.17→0.
-  - Each clip is 0.17 of a row; a parameter sweep (density 15/25/40 s, continuation 0.45–0.65) moved nothing
-    reliably. **Unresolved:** clip *endings* inside a longer discussion; Q&A exchanges longer than 150 s.
-  - The real-Whisper 58-min synthetic CI number for v4 is in §1B.9.
+- Final v4 parameters: `shift_weight=0.25`, `context_weight=1.0`, `density_substance=True` (15 s), `close_share=0.4`
+  (end extension while the next sentence shares ≥40% of its content words with the clip); the in-window penalty
+  applies only to **hard breaks** (`Sentence.hard_break_after`: next is a speaker turn, after a hand-over, or ≥6 s
+  silence), not to rank-based boundaries.
+- **Results** (6 clips/recording; full table in README §5). Mean of seven sets, v3 → v4: starts at a paragraph
+  opening 0.88 → 0.95; **mid-sentence starts 0.07 → 0**; multi-topic 0.19 → 0.07; housekeeping edge 0.07 → 0.02;
+  starts mid-topic 0.29 → 0.21; **ends mid-topic 0.14 → 0.24 (worse)**; substantive 0.925 → 0.938.
+  - Session-3 benchmark (synthetic 58 min, **real Whisper**; CI run #21 with the first v4 build, and reproduced
+    locally with the final build): v3 starts 0.333 / ends 0.167; **v4 starts 0.167 / ends 0.50** (first build 0.667).
+  - Real speech (NASA 55 min, base.en): para start 0.67 → 1.0, mid-sentence 0.17 → 0, multi-topic 0.50 → 0.33,
+    ends mid-topic 0.33 → 0.17. small.en: mid-sentence 0.33 → 0, multi-topic 0.33 → 0.17, ends 0.33 → 0.50.
+  - **Unresolved:** clip *endings*. v4's flagged endings are complete paragraphs followed by another paragraph on
+    the same subject; lexical cohesion cannot see that on the template-generated sample (the paragraphs share only
+    the topic name), and sweeps of density (15–60 s), continuation (0.45–0.65), shift (0.25–0.45) and close_share
+    (0.4–0.6) did not move it. Ideas not tried: an embedding-based topic model; the optional local LLM re-ranker
+    judging "is this a complete thought". v4 was kept as default on the strength of the real-speech clips; v3 is
+    one setting away (`SELECTION_PROFILE=v3`). The owner should be told this plainly.
 - Evaluate: `evaluate_selection.py` now reports `mid_sentence_start`, `multi_topic`, `procedural_edge`, accepts `.gz`.
 
 ### 1B.5 Live restart overlap (`monitor.py`)

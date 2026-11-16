@@ -279,27 +279,41 @@ hold across formats (talks, panels, interviews, monologues):
   end by announcing the next point;
 - substance is measured per unit of time, so length alone earns nothing;
 - after selection, each clip is checked against the one or two paragraphs around it: if a clean opening of the
-  same point lies just before the chosen start (or the point closes just after the chosen end), the clip is moved
-  to it — only when the enlarged clip still fits the limits and scores about as well. Clips are never padded.
+  same point lies just before the chosen start, the start moves back to it; if the following sentences are still
+  about what the clip is about (and no speaker change, hand-over or long silence intervenes), the end is extended
+  to the close of the point — only when the enlarged clip still fits the limits and scores about as well. Clips
+  are never padded.
 
 Durations stay content-led (15 s minimum, 150 s maximum, no target). `SELECTION_PROFILE=v3` restores the previous
-behaviour. Measured results (6 clips per recording; lower is better except the first two columns):
+behaviour. Measured results, 6 clips per recording (each clip is 0.17 of a row, so one-step differences are noise):
 
-| Transcript | Profile | Starts at a paragraph opening | Ends at a paragraph end | Starts mid-sentence | Spans >1 topic | Housekeeping at an edge | Starts mid-topic | Ends mid-topic |
-|---|---|---|---|---|---|---|---|---|
-| **Real speech**, NASA briefing 55 min, Whisper base.en | v3 | 0.67 | 0.83 | 0.17 | 0.50 | 0.0 | 0.0 ¹ | 0.33 |
-| | **v4** | **1.0** | **1.0** | **0.0** | 0.33 | 0.0 | 0.33 | **0.17** |
-| **Real speech**, same recording, Whisper small.en | v3 | 0.50 | 1.0 | 0.33 | 0.33 | 0.0 | 0.0 ¹ | 0.33 |
-| | **v4** | **0.83** | 0.83 | **0.0** | **0.17** | 0.0 | 0.33 | 0.50 |
-| Synthetic 58 min, exact timings | v3 | 1.0 | 1.0 | 0.0 | 0.0 | 0.0 | 0.33 | 0.0 |
-| | **v4** | 1.0 | 1.0 | 0.0 | 0.0 | 0.0 | **0.17** | 0.0 |
-| Synthetic 58 min, Whisper-like (TEST-ONLY perturbation) | v3 | 1.0 | 0.33 | 0.0 | 0.17 | 0.17 | 0.50 | 0.0 |
-| | **v4** | 1.0 | 0.0 | 0.0 | **0.0** | **0.0** | **0.17** | 0.17 |
+| Transcript | Profile | Starts at a paragraph opening ↑ | Starts mid-sentence ↓ | Spans >1 topic ↓ | Housekeeping at an edge ↓ | Starts mid-topic ↓ | Ends mid-topic ↓ |
+|---|---|---|---|---|---|---|---|
+| **Real speech** — NASA briefing 55 min, Whisper base.en | v3 | 0.67 | 0.17 | 0.50 | 0.0 | 0.0 ¹ | 0.33 |
+| | **v4** | **1.0** | **0.0** | 0.33 | 0.0 | 0.33 | **0.17** |
+| **Real speech** — same recording, Whisper small.en | v3 | 0.50 | 0.33 | 0.33 | 0.0 | 0.0 ¹ | 0.33 |
+| | **v4** | **0.83** | **0.0** | **0.17** | 0.0 | 0.33 | 0.50 |
+| Synthetic 58 min, **real Whisper** (the session-3 benchmark) | v3 | 1.0 | 0.0 | 0.0 | 0.0 | 0.33 | 0.17 |
+| | **v4** | 1.0 | 0.0 | 0.0 | 0.0 | **0.17** | 0.50 |
+| Synthetic 58 min, exact timings | v3 | 1.0 | 0.0 | 0.0 | 0.0 | 0.33 | 0.0 |
+| | **v4** | 1.0 | 0.0 | 0.0 | 0.0 | **0.17** | 0.0 |
+| Synthetic 58 min, Whisper-like (TEST-ONLY perturbation) | v3 | 1.0 | 0.0 | 0.17 | 0.17 | 0.50 | 0.0 |
+| | **v4** | 1.0 | 0.0 | **0.0** | **0.0** | **0.17** | 0.17 |
+| **Mean of seven sets** (incl. two 9-minute sets) | v3 | 0.88 | 0.07 | 0.19 | 0.07 | 0.29 | 0.14 |
+| | **v4** | **0.95** | **0.0** | **0.07** | **0.02** | **0.21** | 0.24 |
 
 ¹ v3's "0.0 starts mid-topic" on real speech is not a strength: those clips began mid-sentence or ran across whole
-topics. Each clip is one sixth (0.17) of a row, so single-step differences are within noise. **Still unresolved:**
-about one clip in three still ends while the same discussion continues (usually a complete sub-point of a longer
-answer), and long question-and-answer exchanges (over 150 s) cannot be kept whole. Reproduce with
+topics.
+
+**What improved:** clips no longer start mid-sentence, far fewer run across several topics or open/close on
+housekeeping, and starts part-way into a topic fell from 0.29 to 0.21 on average (0.33 → 0.17 on the session-3
+benchmark). **What did not:** *endings.* v4 more often stops while the same discussion continues (0.14 → 0.24 on
+average; 0.17 → 0.50 on the session-3 benchmark). Reading those clips, they end at the end of a complete paragraph
+that is followed by another paragraph on the same subject — a complete sub-point rather than a cut-off sentence —
+but by the strict label it is still "mid-topic", and a parameter sweep could not improve it without making other
+measures worse. Question-and-answer exchanges longer than 150 s also cannot be kept whole. v4 is the default
+because on genuine speech its clips are visibly more coherent; if you prefer clips that run to the end of a topic,
+set `SELECTION_PROFILE=v3`. Reproduce:
 `python scripts/evaluate_selection.py tests/fixtures/landsat9_topics.json --transcript tests/fixtures/landsat9_whisper_base_en.json.gz`.
 
 ## 5b. Captions (approved style)
