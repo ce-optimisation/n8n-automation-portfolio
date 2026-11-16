@@ -63,7 +63,7 @@ niche, platform, date, status), Ready to Post, Sources, **Creators**, **Research
 | Phone dashboard over Tailscale | Working (password set; tested via the tailnet address); iPhone sign-in to be confirmed by the owner |
 | Live detection on Rumble | Verified on real Rumble data (live grid flag, 1080p live HLS); Fuentes' own broadcast not yet observed |
 | Unattended lifecycle (live → record → process → upload → verify → raw deletion) | Verified end to end on engine-generated media with a MOCK Drive |
-| Live recording quality | 1080p minimum (owner requirement); a full 4.5 h show needs ~10.5 GB free |
+| Live recording quality and disk | 1080p minimum (owner requirement); a full 4.5 h show needs ~10.5 GB; C: had 20.8 GB free after owner-approved cleanup (16 Nov evening) |
 | CI | Green (runs #49, #50) |
 | Live Rumble broadcast | Never observed yet |
 | Facebook Reels draft, X API | Not implemented (manual handoff; X API is paid) |
