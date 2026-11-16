@@ -20,6 +20,7 @@ permission is on record. Nothing passes cookies, logs in, or bypasses DRM/paywal
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import re
@@ -193,36 +194,50 @@ class _ListingCapReached(Exception):
 def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
     """yt-dlp flat listing of a channel/page (only called for authorised domains)."""
     import yt_dlp
+    first_page: dict = {}
 
     class _Capped(yt_dlp.YoutubeDL):
         """Stops a listing after LISTING_MAX_REQUESTS web requests. yt-dlp's Rumble channel extractor
         keeps asking for ?page=2, 3, 4 ... until the site answers 404, so a page that shows no videos
-        (an empty or challenge page) would otherwise turn one check into an unbounded run of requests."""
+        (an empty or challenge page) would otherwise turn one check into an unbounded run of requests.
+        It also keeps the first page it received, so an empty listing can say what the site sent."""
         requests_made = 0
 
         def urlopen(self, req):
             self.requests_made += 1
             if self.requests_made > LISTING_MAX_REQUESTS:
                 raise _ListingCapReached()
-            return super().urlopen(req)
+            resp = super().urlopen(req)
+            if first_page or not hasattr(resp, "read"):
+                return resp
+            try:
+                from yt_dlp.networking import Response
+                body = resp.read(PAGE_KEEP_BYTES + 1)
+                first_page.update(url=getattr(resp, "url", "") or "", status=getattr(resp, "status", None),
+                                  headers={k.lower(): v for k, v in dict(getattr(resp, "headers", {}) or {}).items()},
+                                  body=body.decode("utf-8", "replace"))
+                return Response(io.BytesIO(body), resp.url, dict(resp.headers), status=resp.status, reason=resp.reason,
+                                extensions=getattr(resp, "extensions", None))
+            except Exception:  # noqa: BLE001 - diagnostics must never break a listing
+                return resp
 
     opts = {"quiet": True, "no_warnings": True, "extract_flat": "in_playlist", "playlistend": limit,
             "skip_download": True, "http_headers": {"User-Agent": settings.http_user_agent}, "socket_timeout": 30,
             "color": "never", "retries": 1, "extractor_retries": 0}
+    entries = None
     try:
         with _Capped(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except _ListingCapReached:
-        raise ingest.SourceError("empty_listing", f"The channel pages listed no videos after {LISTING_MAX_REQUESTS} "
-                                                  "requests, so the check was stopped. The site may be limiting or "
-                                                  "filtering automated requests; nothing was imported.") from None
+        info = {"_type": "playlist", "entries": []}
     if info.get("_type") == "playlist" or "entries" in info:
         entries = list(info.get("entries") or [])
         if not entries:
-            # A channel page that lists nothing is not "one video called <channel>": the site most
-            # likely served an empty or challenge page to an automated client.
-            raise ingest.SourceError("empty_listing", "The channel page listed no videos. The site may be limiting "
-                                                      "or filtering automated requests; nothing was imported.")
+            entries = _links_from_page(url, first_page.get("body") or "")
+        if not entries:
+            # A channel page that lists nothing is not "one video called <channel>".
+            raise ingest.SourceError("empty_listing", "The channel page listed no videos, so nothing was imported. "
+                                                      + _describe_page(first_page))
     else:
         entries = [info]            # the address is a single video page
     out = []
@@ -236,6 +251,48 @@ def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
                     "published": str(e.get("upload_date") or e.get("timestamp") or ""),
                     "live": _live_flag(e)})
     return out
+
+
+PAGE_KEEP_BYTES = 3_000_000     # first listing page kept in memory for diagnosis (never written to disk)
+_RUMBLE_VIDEO_HREF = re.compile(r'href=["\'](?:https?://(?:www\.)?rumble\.com)?(/v[0-9a-z]{4,}-[^"\'#?<>\s]*\.html)', re.I)
+_BOT_CHECK_HINTS = ("just a moment", "verify you are human", "are you a robot", "captcha", "challenge-platform",
+                    "checking your browser", "access denied", "attention required")
+
+
+def _links_from_page(url: str, body: str) -> list[dict]:
+    """Rumble only: read the video links from the channel page the engine was given, when yt-dlp's
+    extractor found none (it looks for one particular CSS class, which a page redesign can rename).
+    This reads the same page with the same permission; it makes no extra request."""
+    host = (urlparse(url).hostname or "").lower()
+    if not body or not (host == "rumble.com" or host.endswith(".rumble.com")):
+        return []
+    seen, out = set(), []
+    for path in _RUMBLE_VIDEO_HREF.findall(body):
+        u = "https://rumble.com" + path
+        if u not in seen:
+            seen.add(u)
+            out.append({"url": u, "id": None, "title": "", "_type": "url"})
+    return out
+
+
+def _describe_page(page: dict) -> str:
+    """One plain sentence on what the site actually sent, for the Sources page and the owner's report."""
+    if not page:
+        return "The site sent no page the engine could read; it may be limiting or filtering automated requests."
+    body = page.get("body") or ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
+    title = re.sub(r"\s+", " ", m.group(1)).strip()[:80] if m else ""
+    low = body[:200_000].lower()
+    headers = page.get("headers") or {}
+    bot = headers.get("cf-mitigated") == "challenge" or any(h in low for h in _BOT_CHECK_HINTS)
+    facts = (f"(HTTP {page.get('status')}, {len(body) // 1024} KB, page title \u201c{title or 'none'}\u201d, "
+             f"server {headers.get('server', 'unknown')}).")
+    if bot:
+        return ("The site answered with a robot check instead of the channel page " + facts + " It is filtering "
+                "automated requests: ask the site how they want this access made (for example allow-listing this "
+                "engine's User-Agent or your IP address).")
+    return ("The site sent a page without video links the engine recognises " + facts + " Either the page layout "
+            "changed or the site is filtering automated requests; send this message to whoever maintains the engine.")
 
 
 def _live_flag(e: dict):

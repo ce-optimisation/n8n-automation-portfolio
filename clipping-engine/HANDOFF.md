@@ -348,6 +348,14 @@ Tests: `test_rate_limit_on_download_is_not_reported_as_login_required`, `test_lo
 `test_channel_address_is_never_downloaded_as_one_video` (tests/test_deploy_setup.py).
 The owner's PC has about **2.5 GB free on C:**: too little for a full live show (roughly 1–2 GB per hour).
 
+**Third report (16 Nov 11:39, build 5371a7a):** setup completed (6/6). The Rumble check no longer got 429 but
+stopped after 4 requests with no video links on the pages. `list_channel` now keeps the first page in memory
+(never written to disk), and if yt-dlp finds no links it (a) reads `/v...html` video links from that same Rumble
+page (`_links_from_page`, covers a redesign that renamed yt-dlp's CSS class; no extra request) and (b) otherwise
+reports what the site sent (`_describe_page`: HTTP status, size, page title, server, robot-check detection).
+yt-dlp also printed "Support for Python version 3.10 has been deprecated": moving the owner's PC to Python 3.12
+is advisable before yt-dlp drops 3.10 (the launcher keeps an existing 3.10 `.venv`).
+
 **Still unverified against the real site:** whether Rumble serves the engine a real listing at all (the 429 may
 persist; the answer is a sanctioned access method from Rumble, never a disguised client), whether a live
 broadcast appears in the channel listing, recording via `yt_dlp --hls-use-mpegts`, and replay download.

@@ -384,7 +384,7 @@ def test_rumble_channel_listing_is_bounded_and_marks_live_unknown(monkeypatch):
     def fake_urlopen(self, req):
         url = req if isinstance(req, str) else req.url
         requested.append(url)
-        if "page=1" not in url and "videostream__link" in pages["html"]:
+        if "page=1" not in url and ".html" in pages["html"]:
             from yt_dlp.networking.exceptions import HTTPError
             raise HTTPError(Response(io.BytesIO(b""), url, {}, status=404))
         return Response(io.BytesIO(pages["html"].encode()), url, {"Content-Type": "text/html"}, status=200)
@@ -394,6 +394,24 @@ def test_rumble_channel_listing_is_bounded_and_marks_live_unknown(monkeypatch):
         monitor.list_channel(s, "https://rumble.com/c/examplechannel")
     assert exc.value.code == "empty_listing"
     assert len(requested) == monitor.LISTING_MAX_REQUESTS
+    assert "robot check" in str(exc.value) and "HTTP 200" in str(exc.value)
+
+    # a page without the class yt-dlp looks for (e.g. after a redesign), with no video links at all
+    requested.clear()
+    pages["html"] = "<html><head><title>Nicholas J. Fuentes</title></head><body>no links here</body></html>"
+    with pytest.raises(ingest.SourceError) as exc:
+        monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert "without video links" in str(exc.value) and "Nicholas J. Fuentes" in str(exc.value)
+
+    # a redesigned page whose links lack yt-dlp's CSS class: the links on that same page are used
+    requested.clear()
+    pages["html"] = ('<html><title>Channel</title><a class="new-card__link" href="/v7bbb22-episode-3.html?e9s=x">x</a>'
+                     '<a href="https://rumble.com/v7bbb21-episode-2.html">y</a><a href="/c/other">z</a>'
+                     '<a class="new-card__link" href="/v7bbb22-episode-3.html">dup</a></html>')
+    entries = monitor.list_channel(s, "https://rumble.com/c/examplechannel")
+    assert [e["url"] for e in entries] == ["https://rumble.com/v7bbb22-episode-3.html",
+                                           "https://rumble.com/v7bbb21-episode-2.html"]
+    assert all(e["live"] is None for e in entries) and len(requested) <= monitor.LISTING_MAX_REQUESTS
 
     requested.clear()
     pages["html"] = ('<a class="videostream__link link" href="/v7aaa11-episode-2.html"></a>'
