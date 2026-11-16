@@ -66,7 +66,7 @@ def checks(settings: Settings) -> list[dict]:
             "Run Start-Clipping-Engine.cmd again and accept the FFmpeg installation, or run "
             "“.venv\\Scripts\\python scripts\\get_ffmpeg.py”.")
     missing_pkgs = []
-    for mod, pkg in (("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("jinja2", "jinja2"), ("multipart", "python-multipart"),
+    for mod, pkg in (("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("jinja2", "jinja2"), ("python_multipart", "python-multipart"),
                      ("faster_whisper", "faster-whisper"), ("httpx", "httpx"), ("yt_dlp", "yt-dlp"), ("keyring", "keyring")):
         try:
             __import__(mod)

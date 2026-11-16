@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         except autostart.AutostartUnsupported as e:
             print(e)
             return 2
-    if args.supervise:
+    if args.supervise and not (args.doctor or args.setup):
         return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()

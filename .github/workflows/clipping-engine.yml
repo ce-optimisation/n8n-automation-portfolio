@@ -91,6 +91,102 @@ jobs:
           path: clipping-engine/acceptance-artifacts
           if-no-files-found: ignore
 
+      - name: Genuine recording - 8 min NASA briefing, real faster-whisper, inbox -> clips -> review -> restart
+        run: python scripts/real_recording_test.py --keep genuine-artifacts
+
+      - name: Upload genuine-recording clips and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genuine-recording-${{ matrix.os }}
+          path: clipping-engine/genuine-artifacts
+          if-no-files-found: ignore
+
+  windows-install:
+    name: Windows one-click installer on a clean runner (no FFmpeg preinstalled by us)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CLIPENGINE_NONINTERACTIVE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install-Clipping-Engine.cmd (copy to install folder, shortcuts, Python env, portable FFmpeg, setup + REAL self-test)
+        shell: cmd
+        run: |
+          call clipping-engine\Install-Clipping-Engine.cmd -InstallDir "%RUNNER_TEMP%\ClippingEngine" -NonInteractive
+          if errorlevel 1 exit /b 1
+
+      - name: Verify the installation
+        shell: cmd
+        run: |
+          set "D=%RUNNER_TEMP%\ClippingEngine"
+          if not exist "%D%\Start-Clipping-Engine.cmd" (echo launcher missing & exit /b 1)
+          if not exist "%D%\.venv\Scripts\python.exe" (echo venv missing & exit /b 1)
+          if not exist "%D%\.env" (echo .env missing & exit /b 1)
+          if not exist "%D%\data\setup_state.json" (echo setup state missing & exit /b 1)
+          if not exist "%D%\data\selftest\selftest_clip.mp4" (echo self-test clip missing & exit /b 1)
+          if not exist "%USERPROFILE%\Desktop\Clipping Engine.lnk" (echo desktop shortcut missing & exit /b 1)
+          type "%D%\data\selftest\selftest_report.json"
+          type "%D%\INSTALLED.txt"
+          where ffmpeg
+          dir "%D%\tools\ffmpeg\bin" 2>nul
+          echo installation verified
+
+      - name: Portable FFmpeg download works (scripts\get_ffmpeg.py) and can burn captions
+        shell: cmd
+        run: |
+          cd /d "%RUNNER_TEMP%\ClippingEngine"
+          .venv\Scripts\python.exe scripts\get_ffmpeg.py || exit /b 1
+          if not exist tools\ffmpeg\bin\ffmpeg.exe (echo portable ffmpeg missing & exit /b 1)
+          tools\ffmpeg\bin\ffmpeg.exe -hide_banner -filters | findstr /c:" ass " || exit /b 1
+
+      - name: Diagnostics with the portable FFmpeg (Start-Clipping-Engine.cmd --doctor --selftest)
+        shell: cmd
+        run: |
+          cd /d "%RUNNER_TEMP%\ClippingEngine"
+          call Start-Clipping-Engine.cmd --doctor --selftest
+          if errorlevel 1 exit /b 1
+
+      - name: Update keeps the owner's settings and data
+        shell: cmd
+        run: |
+          set "D=%RUNNER_TEMP%\ClippingEngine"
+          echo OWNER_MARKER=keep-me>> "%D%\.env"
+          echo keep> "%D%\data\owner_file.txt"
+          call clipping-engine\Install-Clipping-Engine.cmd -InstallDir "%D%" -NonInteractive -NoStart
+          if errorlevel 1 exit /b 1
+          findstr /c:"OWNER_MARKER=keep-me" "%D%\.env" || (echo .env was overwritten & exit /b 1)
+          if not exist "%D%\data\owner_file.txt" (echo data was removed & exit /b 1)
+          if not exist "%D%\data\selftest\selftest_clip.mp4" (echo data was removed & exit /b 1)
+          if not exist "%D%\.venv\Scripts\python.exe" (echo venv was removed & exit /b 1)
+          echo update preserved owner data
+
+      - name: Engine starts from the installed launcher and answers
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP 'ClippingEngine'
+          $p = Start-Process -FilePath "cmd.exe" -ArgumentList '/c', "`"$d\Start-Clipping-Engine.cmd`" --no-browser" -PassThru -WindowStyle Hidden
+          $ok = $false
+          foreach ($i in 1..90) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/healthz' -TimeoutSec 3; if ($r.app -eq 'clipengine') { $ok = $true; break } } catch {}
+          }
+          if ($ok) { (Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/status').health | ConvertTo-Json -Depth 5 }
+          Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*clipengine*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          if (-not $ok) { Write-Error 'the engine did not answer on http://127.0.0.1:8765'; exit 1 }
+          Write-Host 'engine started from the installed launcher'
+
+      - name: Upload the self-test clip rendered on Windows
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-install-selftest
+          path: ${{ runner.temp }}/ClippingEngine/data/selftest
+          if-no-files-found: ignore
+
   longform:
     name: long-form benchmark + crash recovery (real Whisper)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.longform_minutes != '0'

@@ -445,6 +445,9 @@ def score_window(sents: list[Sentence], i: int, j: int, target: float | None = N
         if tail.edge in ("handoff", "fragment") or (tail.edge == "turn" and len(win) > 1):
             context += 0.35
             reasons.append("ends on a hand-over or fragment rather than the speaker's point")
+        if len(win) > 1 and (tail.opener or LIST_CONTINUATION.search(_norm(tail.text))) and j + 1 < len(sents):
+            context += 0.3
+            reasons.append("ends by announcing the next point")
         if j + 1 < len(sents) and sents[j + 1].dependency >= 0.3 and sents[j + 1].edge != "turn" \
                 and sents[j + 1].start - tail.end < 2.5:
             context += 0.5 * sents[j + 1].dependency
