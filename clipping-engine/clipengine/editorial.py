@@ -137,7 +137,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        avoid_terms=["hustle", "grindset"],
        complete_clip="States a problem, gives a concrete method or example, and lands the takeaway.",
        hook="A specific claim, number or counter-intuitive result in the first sentence.",
-       min_s=25, max_s=90, selection_profile="v5", pacing="Tight; one idea per clip",
+       min_s=25, max_s=90, selection_profile="v6", pacing="Tight; one idea per clip",
        context_requirements="Name the tool/company when the speaker refers to 'it'.",
        reject_rules=["generic_motivation", "no_specifics", "too_dependent"],
        flag_rules=["unverifiable_claim"], specificity_weight=0.10, min_quality=40,
@@ -153,7 +153,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        terms=["GPU", "CPU", "RTX", "Radeon", "Ryzen", "Intel", "fps", "benchmark", "price", "performance",
               "thermals", "VRAM", "monitor", "refresh rate", "battery", "camera", "specs", "upgrade"],
        complete_clip="Names the products, gives the comparison or measurement, and the verdict.",
-       hook="The verdict or the surprising number first.", min_s=20, max_s=75, selection_profile="v5",
+       hook="The verdict or the surprising number first.", min_s=20, max_s=75, selection_profile="v6",
        reject_rules=["no_specifics", "too_dependent"], flag_rules=["unverifiable_claim"],
        specificity_weight=0.12, min_quality=40,
        post_style="Product names and the verdict in the title; note the test conditions.",
@@ -169,7 +169,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
               "reference", "movement", "calibre", "dial", "bezel", "retail", "grey market", "auction", "box and papers"],
        complete_clip="Identifies the watch/reference and delivers the insight or market point in full.",
        hook="The watch and the claim (value, rarity, mistake to avoid).", min_s=20, max_s=90,
-       selection_profile="v5", reject_rules=["no_specifics", "too_dependent"],
+       selection_profile="v6", reject_rules=["no_specifics", "too_dependent"],
        flag_rules=["unverifiable_claim", "financial_promotion"], specificity_weight=0.10, min_quality=40,
        post_style="Reference numbers and prices dated; no 'investment' promises.",
        hashtags=["#watches", "#rolex", "#watchcollector"],
@@ -178,7 +178,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        audience="Learners and professionals", purpose="Teach one complete, verifiable concept per clip",
        terms=["how", "why", "step", "example", "means", "because"],
        complete_clip="One concept explained end to end with an example.", hook="The question the clip answers.",
-       min_s=25, max_s=120, selection_profile="v5", reject_rules=["no_specifics", "too_dependent"],
+       min_s=25, max_s=120, selection_profile="v6", reject_rules=["no_specifics", "too_dependent"],
        flag_rules=["unverifiable_claim"], specificity_weight=0.08, hashtags=["#learn", "#education"]),
     _p(key="property", name="Property, estate agencies & entrepreneurship", group="commercial",
        audience="Buyers, landlords, agents and small-business owners",
@@ -186,7 +186,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        terms=["property", "mortgage", "rent", "yield", "landlord", "estate agent", "valuation", "stamp duty",
               "deposit", "tenant", "planning", "business", "margin", "cash flow"],
        complete_clip="Gives the rule, figure or method and how it applies.", min_s=20, max_s=90,
-       selection_profile="v5", reject_rules=["generic_motivation", "no_specifics"],
+       selection_profile="v6", reject_rules=["generic_motivation", "no_specifics"],
        flag_rules=["financial_promotion", "unverifiable_claim"], specificity_weight=0.10,
        compliance_review=True, hashtags=["#property", "#realestate", "#business"],
        claims_checks=["yields and returns", "tax statements (jurisdiction, date)"]),
@@ -196,7 +196,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        terms=["clutch", "win", "lost", "let's go", "no way", "bro", "chat", "boss", "ranked", "kill"],
        complete_clip="Setup → decisive event → reaction; understandable without knowing the game.",
        hook="Start just before the event; never on the payoff alone.", min_s=12, max_s=60,
-       selection_profile="v5", reject_rules=["no_payoff"], flag_rules=["spoiler_risk", "sensitive_scene"],
+       selection_profile="v6", reject_rules=["no_payoff"], flag_rules=["spoiler_risk", "sensitive_scene"],
        reaction_weight=0.08, min_quality=30, pacing="Fast", post_style="Describe the moment, not clickbait; credit the streamer.",
        hashtags=["#gaming", "#twitch", "#streamer"], active=False),
     _p(key="irl_streams", name="IRL & personality livestream entertainment", group="audience",
@@ -205,7 +205,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        terms=["chat", "bro", "yo", "no way", "oh my god", "let's go", "crazy", "bruh"],
        avoid_terms=[], complete_clip="A setup, the unexpected interaction or reaction, and its end.",
        hook="The situation in one line; the payoff inside the clip.", min_s=12, max_s=75,
-       selection_profile="v5", reject_rules=["no_payoff"], flag_rules=[], reaction_weight=0.10,
+       selection_profile="v6", reject_rules=["no_payoff"], flag_rules=[], reaction_weight=0.10,
        min_quality=30, post_style="Neutral description; never mock bystanders; blur concerns noted for review.",
        hashtags=["#irl", "#streamer", "#kick", "#twitch"],
        claims_checks=["identifiable members of the public (privacy)"], active=False),
@@ -213,37 +213,37 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        audience="Viewers of reaction/commentary streamers",
        purpose="The reaction with enough of the original material to be understood",
        complete_clip="What is being reacted to, the reaction, and its conclusion.", min_s=20, max_s=90,
-       selection_profile="v5", reject_rules=["no_payoff", "too_dependent"], reaction_weight=0.06,
+       selection_profile="v6", reject_rules=["no_payoff", "too_dependent"], reaction_weight=0.06,
        claims_checks=["third-party footage inside the stream (rights)"], hashtags=["#reaction"]),
     _p(key="sports_creators", name="Football & sports creator entertainment", group="audience",
        audience="Football and sports fans following creators",
        purpose="Banter, challenges, predictions and reactions around sport",
        terms=["goal", "penalty", "match", "Premier League", "Champions League", "transfer", "manager"],
        complete_clip="The moment and the reaction or the full prediction/argument.", min_s=15, max_s=75,
-       selection_profile="v5", reject_rules=["no_payoff"], reaction_weight=0.06,
+       selection_profile="v6", reject_rules=["no_payoff"], reaction_weight=0.06,
        claims_checks=["broadcast match footage inside the stream (rights)"], hashtags=["#football"]),
     _p(key="podcasts", name="General podcasts, interviews & debates", group="audience",
        audience="Podcast and interview audiences", purpose="Complete arguments and insightful exchanges",
        complete_clip="The question, the full answer and any essential reply or qualification.",
-       hook="The most interesting claim or question.", min_s=30, max_s=120, selection_profile="v5",
+       hook="The most interesting claim or question.", min_s=30, max_s=120, selection_profile="v6",
        reply_required=True, reject_rules=["too_dependent"], flag_rules=["unverifiable_claim"],
        specificity_weight=0.04, hashtags=["#podcast"]),
     _p(key="psych_phil_theo", name="Psychology, philosophy & theology", group="audience",
        audience="Thoughtful general audiences", purpose="Clear, faithful explanations of ideas",
        complete_clip="An idea stated, reasoned and concluded in the speaker's own words.", min_s=30, max_s=120,
-       selection_profile="v5", reply_required=True, reject_rules=["too_dependent", "generic_motivation"],
+       selection_profile="v6", reply_required=True, reject_rules=["too_dependent", "generic_motivation"],
        flag_rules=["unverifiable_claim"], hashtags=["#philosophy", "#psychology"]),
     _p(key="travel", name="Travel & destinations", group="audience",
        audience="Travellers and armchair travellers", purpose="Specific places, costs, tips and stories",
        terms=["flight", "hotel", "visa", "price", "city", "beach", "food", "budget"],
        complete_clip="A place-specific tip or story with its point.", min_s=15, max_s=75,
-       selection_profile="v5", reject_rules=["no_specifics"], specificity_weight=0.06, hashtags=["#travel"]),
+       selection_profile="v6", reject_rules=["no_specifics"], specificity_weight=0.06, hashtags=["#travel"]),
     # ---- higher-risk / specialist niches -------------------------------------------------
     _p(key="politics", name="Political reporting & documentary analysis", group="specialist", risk="high",
        audience="Viewers following political reporting and analysis",
        purpose="Factual, contextualised excerpts for reporting and critical analysis — never promotion",
        complete_clip="The full statement with the context needed to understand it fairly, plus any reply.",
-       hook="Who said what, when — plainly.", min_s=20, max_s=150, selection_profile="v4",
+       hook="Who said what, when — plainly.", min_s=20, max_s=150, selection_profile="v6",
        reply_required=True, reject_rules=["outrage_bait", "too_dependent"], flag_rules=["political_context"],
        min_quality=35, post_style="Neutral attribution; date and context; never inflame; no endorsement.",
        claims_checks=["quotations verbatim", "date and setting", "factual claims", "safety flags"],
@@ -255,7 +255,7 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        purpose="Education, not advice: explanations with risks stated",
        terms=["interest", "inflation", "ISA", "pension", "index fund", "stocks", "bonds", "risk", "tax"],
        complete_clip="The concept with its risks/caveats, not just the upside.", min_s=30, max_s=120,
-       selection_profile="v5", reply_required=True, reject_rules=["generic_motivation", "no_specifics"],
+       selection_profile="v6", reply_required=True, reject_rules=["generic_motivation", "no_specifics"],
        flag_rules=["financial_promotion", "unverifiable_claim"], specificity_weight=0.08,
        compliance_review=True, post_style="Educational framing; 'not financial advice'; no return promises.",
        claims_checks=["returns", "guarantees", "regulated-activity language (financial promotion rules)"]),
@@ -416,7 +416,24 @@ def seed_presets(db) -> int:
                       note="preset")
             n += 1
     _add_review_flags(db, "gaming_streams", ["spoiler_risk", "sensitive_scene"])
+    _migrate_to_context_complete(db)
     return n
+
+
+def _migrate_to_context_complete(db) -> None:
+    """One-time (session 9, owner-approved): niches still on the v4/v5 selector move to v6 (context-complete). Runs once;
+    a niche the owner later sets back to v4/v5 stays as they chose. The change is recorded in each niche's history."""
+    if db.get_kv("selection_v6_migrated"):
+        return
+    for r in db.query("SELECT key, version, config_json FROM niches"):
+        cfg = json.loads(r["config_json"])
+        if cfg.get("selection_profile") in ("v4", "v5"):
+            old = cfg["selection_profile"]
+            cfg["selection_profile"] = "v6"
+            db.execute("UPDATE niches SET config_json=? WHERE key=?", (json.dumps(cfg), r["key"]))
+            db.insert("niche_history", key=r["key"], version=r["version"], config_json=json.dumps(cfg),
+                      note=f"selector {old} -> v6 (context-complete selection, session 9)")
+    db.set_kv("selection_v6_migrated", "1")
 
 
 def _add_review_flags(db, key: str, rules: list[str]) -> None:

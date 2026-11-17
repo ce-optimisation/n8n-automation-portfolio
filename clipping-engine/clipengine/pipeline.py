@@ -285,10 +285,18 @@ class Pipeline:
             prof = replace(prof, reply_required=True)
         # Ask for extra candidates when a niche policy may reject some, so quality is not traded for count.
         ask = s.clips_per_recording * (2 if policy else 1)
+        pref = ctype = None
+        if prof.complete:
+            from . import complete
+            pref_lo, pref_hi, ctype = complete.preferred_range(
+                policy.niche.key if policy else None, policy.creator.content_type if policy else None,
+                (s.clip_min_seconds, s.clip_max_seconds))
+            pref = (pref_lo, pref_hi)
+            ctype = None if ctype == "general" else ctype
         cands = segment.select(segs, n=ask, min_s=s.clip_min_seconds,
                                max_s=s.clip_max_seconds, target=s.clip_target_seconds or None,
                                duration=rec["duration"], reranker=self.make_reranker(s, ctx), report=report,
-                               profile=prof)
+                               profile=prof, preferred=pref, content_type=ctype)
         assessments = {}
         if policy:
             kept, rejected = [], []
@@ -310,6 +318,13 @@ class Pipeline:
         self._record_stats(rid, selection_s=round(time.time() - ts, 2), selection=report)
         self.db.update("recordings", rid, selection_note=report.get("note"))
         ctx.log(f"Selection: {report}")
+        if not cands and prof.complete:
+            # Zero clips is a valid outcome of context-complete selection: nothing is padded or fragmented. The
+            # recording is held for review (never auto-deleted) and the reasons are kept in the selection note.
+            self.db.update("recordings", rid, status="ready", stage="no complete clips selected",
+                           selection_note=report.get("note") or "No complete, worthwhile passage was found.")
+            ctx.log("Context-complete selection found no clip worth making: " + (report.get("note") or ""))
+            return
         if not cands:
             raise PermanentError("No suitable self-contained passages were found (transcript too short or "
                                  "no complete sentences).")
@@ -324,7 +339,7 @@ class Pipeline:
             cid = self.create_clip(rec, next_idx + made, c.start, min(c.end, rec["duration"] or c.end), words,
                                    sents, s, score=c.score, reasons=c.reasons + (a["reasons"] if a else []),
                                    method=c.method, summary=c.summary, quality=a,
-                                   niche_key=policy.niche.key if policy else None)
+                                   niche_key=policy.niche.key if policy else None, completeness=c.assessment)
             self.enqueue_render(cid)
             made += 1
         if not made:
@@ -333,7 +348,7 @@ class Pipeline:
         ctx.log(f"Selected {len(cands)} candidate excerpts; render jobs queued")
 
     def create_clip(self, rec, idx, start, end, words, sents, s: Settings, *, score=None, reasons=None,
-                    method="heuristic", summary=None, quality=None, niche_key=None) -> int:
+                    method="heuristic", summary=None, quality=None, niche_key=None, completeness=None) -> int:
         start, end = snap_bounds(words, start, end)
         fields = self.clip_text_fields(rec, start, end, words, sents, s, summary)
         if quality:
@@ -345,6 +360,14 @@ class Pipeline:
             fields["quality_json"] = json.dumps(quality)
         if niche_key:
             fields["niche_key"] = niche_key
+        if completeness:
+            fields["completeness_json"] = json.dumps(completeness)
+            fields["duration_class"] = completeness.get("duration_class")
+            if completeness.get("verdict") == "REVIEW":
+                # potentially worthwhile but context or meaning is uncertain: the owner must decide before publication
+                flags = json.loads(fields["safety_flags"]) + [{"category": "context_review", "term": "", "note":
+                        "Context completeness is uncertain: " + "; ".join(completeness.get("reasons", [])[-2:])}]
+                fields.update(safety_flags=json.dumps(flags), safety_status="flagged")
         return self.db.insert("clips", recording_id=rec["id"], idx=idx, start=start, end=end,
                               status="pending_render", score=score, score_reasons=json.dumps(reasons or []),
                               selection_method=method, machine_summary=summary, **fields)

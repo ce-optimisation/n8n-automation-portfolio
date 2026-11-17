@@ -94,6 +94,11 @@ class Lifecycle:
             f"{len(live)} finished clip(s); {len(busy)} still rendering or failed" if clips else "no clips were produced")
         bad = []
         for c in live:
+            if c["local_deleted_at"]:
+                # the local MP4 was removed by the verified-upload cleanup, which proved its Drive copy first
+                if not self.cloud.clip_verified(c["id"]):
+                    bad.append(c["id"])
+                continue
             try:
                 info = media.probe(Path(c["video_path"]))
                 if not (info["has_video"] and info["has_audio"] and info["duration"] > 1):
@@ -168,9 +173,11 @@ class Lifecycle:
             d = Path(c["video_path"]).parent
             if self.settings.clips_dir.resolve() in d.resolve().parents:
                 shutil.rmtree(d, ignore_errors=True)
-        self.cloud.delete_clip_objects(c["id"])
+        self.cloud.delete_clip_objects(c["id"])        # protected: a no-op for kept/published clips (see cloud)
+        kept_master = c["status"] != "rejected" and self.cloud.clip_verified(c["id"])
         self.db.update("clips", c["id"], video_path=None, thumb_path=None, srt_path=None, ass_path=None,
-                       files_deleted_at=time.time())
+                       files_deleted_at=time.time(),
+                       **({"local_deleted_at": time.time(), "cleanup_state": "LOCAL_DELETED"} if kept_master else {}))
 
     def run(self) -> dict:
         out = {"raw_deleted": 0, "held": 0}

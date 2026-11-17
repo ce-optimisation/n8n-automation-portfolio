@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import (autostart, captions, cloud, editorial, hardware, health, inbox, ingest, lifecycle, maintenance,
+from .. import (autostart, captions, cloud, editorial, hardware, health, inbox, ingest, lifecycle, cleanup, maintenance,
                discovery, events, monitor, titles, roster_import, notify, platforms, portfolio, power, render, segment, setup_status, storage, tailscale)
 from ..publishing import packages
 from ..config import Settings, apply_settings
@@ -92,6 +92,8 @@ class App:
         self.pipeline.on_clip_rendered.append(self.cloud.enqueue_clip)
         self.pipeline.on_recording_done.append(self.lifecycle.check_recording)
         self.maintenance.extra.append(self.lifecycle.run)
+        self.cleanup = cleanup.LocalCleanup(settings, self.db, self.queue, self.cloud)
+        self.maintenance.extra.append(self.cleanup.run)
         self.notifier = notify.Notifier(settings, self.db, self.queue, self.tokens)
         self.queue.failure_listeners.append(
             lambda job: notify.on_job_failed(self.settings, self.db, self.queue, job))

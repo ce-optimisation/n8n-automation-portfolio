@@ -118,6 +118,8 @@ class SelectionProfile:
     reply_required: bool = False       # v5 + interview/debate niches: keep the other side's reply
     salient_continue: bool = False     # v5: keep going while the next paragraph is still about the clip's
                                        #     distinctive subject (terms frequent in the clip, rare elsewhere)
+    complete: bool = False             # v6: context-complete selection (complete.py): completeness of meaning ->
+                                       #     editorial value -> duration; no editorial length ceiling
 
 
 PROFILES = {
@@ -141,6 +143,10 @@ PROFILES["v4"] = SelectionProfile("v4", fit_weight=0.0, pause_weight=0.18, conti
 # bottom line is…") is a better ending than a mid-argument pause.
 PROFILES["v5"] = replace(PROFILES["v4"], name="v5", ending_weight=0.15, complete_meaning=True,
                          salient_continue=True)
+# v6 (context-complete): v5's boundary/ending model plus seed-and-expand selection and an explicit completeness
+# assessment (PASS / REVIEW / REJECT). Durations FOLLOW the content (per-type preferred ranges, exceptional extensions
+# allowed, no padding); zero clips is a valid result. Legacy profiles are unchanged.
+PROFILES["v6"] = replace(PROFILES["v5"], name="v6", complete=True, min_gap=3.0)
 DEFAULT_PROFILE = "v4"
 
 QUALIFIER_START = re.compile(r"^(but|however|although|though|that said|having said that|to be fair|in fairness|"
@@ -183,6 +189,9 @@ class Candidate:
     reasons: list[str] = field(default_factory=list)
     method: str = "heuristic"
     summary: str | None = None
+    assessment: dict | None = None      # v6: completeness assessment (verdict, dimensions, reasons)
+    exceptional: str = ""               # v6: why a clip beyond its preferred range is justified
+    duration_class: str = ""            # v6: below | within | above the preferred range
 
     @property
     def duration(self) -> float:
@@ -575,7 +584,8 @@ def effective_bounds(duration: float, min_s: float, max_s: float, target: float 
 
 def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: float | None = None,
            duration: float = 0.0, reranker=None, profile: str | SelectionProfile = DEFAULT_PROFILE,
-           report: dict | None = None) -> list[Candidate]:
+           report: dict | None = None, preferred: tuple[float, float] | None = None,
+           content_type: str | None = None) -> list[Candidate]:
     """Choose up to n diverse, self-contained excerpts. If `report` is a dict it is
     filled with an explanation of how many candidates were found and why."""
     prof = PROFILES[profile] if isinstance(profile, str) else profile
@@ -585,6 +595,17 @@ def select(segments: list[dict], *, n: int, min_s: float, max_s: float, target: 
     if not sents:
         rep["note"] = "No sentences in the transcript."
         return []
+    if prof.complete:
+        from . import complete
+        annotate_boundaries(sents)
+        annotate_context(sents)
+        pref = preferred or (min_s, max_s)
+        rep["preferred"] = [round(pref[0], 1), round(pref[1], 1)]
+        rep["content_type"] = content_type or "general"
+        out = complete.select_complete(sents, n=n, pref=pref, kind=content_type, prof=prof, report=rep,
+                                       reply_required=prof.reply_required)
+        rep["selected"] = len(out)
+        return out
     min_s, max_s, target = effective_bounds(duration or sents[-1].end, min_s, max_s, target)
     rep["bounds"] = [round(min_s, 1), round(max_s, 1)] + ([round(target, 1)] if prof.fit_weight else [])
     if prof.continuation_weight or prof.shift_weight:

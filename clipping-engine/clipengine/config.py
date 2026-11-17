@@ -158,7 +158,7 @@ class Settings:
     clip_min_seconds: float = 15.0
     clip_max_seconds: float = 150.0
     clip_target_seconds: float = 0.0     # 0 = none. Only used by legacy profiles v1/v2.
-    selection_profile: str = "v4"        # v4 = content-led + context boundaries (default); v1–v3 kept for comparison
+    selection_profile: str = "v6"        # v6 = context-complete (default since session 9); v4/v5 and v1–v3 kept
     context_seconds: float = 25.0
     llm_provider: str = "auto"           # auto | ollama | none
     ollama_url: str = "http://127.0.0.1:11434"
@@ -244,6 +244,8 @@ class Settings:
     raw_delete_after_cloud: bool = True     # delete ENGINE-OWNED raw recordings once every gate passes
     rejected_clip_hours: float = 24.0
     published_clip_days: float = 7.0
+    keep_drive_master: bool = True          # retention never deletes the Google Drive copy of a kept/published clip
+    cleanup_grace_hours: float = 24.0       # default recovery window before a verified local clip is removed
 
     # Queue and storage
     max_concurrent_jobs: int = 1            # heavy jobs run one at a time (only 1 is supported)
@@ -316,7 +318,7 @@ def get_settings(**overrides) -> Settings:
         clip_min_seconds=_float("CLIP_MIN_SECONDS", 15.0),
         clip_max_seconds=_float("CLIP_MAX_SECONDS", 150.0),
         clip_target_seconds=_float("CLIP_TARGET_SECONDS", 0.0),
-        selection_profile=(os.environ.get("SELECTION_PROFILE", "v4") or "v4").lower(),
+        selection_profile=(os.environ.get("SELECTION_PROFILE", "v6") or "v6").lower(),
         context_seconds=_float("CONTEXT_SECONDS", 25.0),
         llm_provider=(os.environ.get("LLM_PROVIDER", "auto") or "auto").lower(),
         ollama_url=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
@@ -381,6 +383,8 @@ def get_settings(**overrides) -> Settings:
         raw_delete_after_cloud=_bool("RAW_DELETE_AFTER_CLOUD", True),
         rejected_clip_hours=_float("REJECTED_CLIP_HOURS", 24.0),
         published_clip_days=_float("PUBLISHED_CLIP_DAYS", 7.0),
+        keep_drive_master=_bool("KEEP_DRIVE_MASTER", True),
+        cleanup_grace_hours=_float("LOCAL_CLEANUP_GRACE_HOURS", 24.0),
         max_concurrent_jobs=max(1, min(1, _int("MAX_CONCURRENT_JOBS", 1))),
         defer_heavy_while_recording=_bool("DEFER_HEAVY_WHILE_RECORDING", True),
         disk_reserve_gb=_float("DISK_RESERVE_GB", 1.0),

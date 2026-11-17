@@ -169,7 +169,9 @@ class PackageService:
         """Recorded by the owner after posting (the platform confirmed it to them, not to the engine)."""
         now = time.time()
         pkg = self.db.one("SELECT * FROM publication_packages WHERE id=?", (pid,))
-        self.db.update("publication_packages", pid, status="published", remote_url=url.strip() or None, published_at=now)
+        self.db.update("publication_packages", pid, status="published", remote_url=url.strip() or None, published_at=now,
+                       handoff_state="owner_published", handoff_method="manual", handoff_at=now,
+                       handoff_evidence="Owner recorded that they posted it (the platform confirmed it to them, not the engine)")
         clip = self.db.clip(pkg["clip_id"])
         if not clip["published_at"]:
             self.db.update("clips", clip["id"], published_at=now)
@@ -234,6 +236,10 @@ class PackageService:
         if privacy != "private":
             # Never expected; recorded loudly because the engine must never make anything public.
             self._history(pid, f"WARNING: YouTube reports privacy '{privacy}'")
+        verified = bool(v.get("id")) and privacy == "private"
         self.db.update("publication_packages", pid, status="uploaded_private", upload_state="done",
-                       remote_id=v.get("id"), remote_url=f"https://studio.youtube.com/video/{v.get('id')}/edit")
+                       remote_id=v.get("id"), remote_url=f"https://studio.youtube.com/video/{v.get('id')}/edit",
+                       handoff_state="private_verified" if verified else "remote_exists",
+                       handoff_method="api", handoff_at=time.time(),
+                       handoff_evidence=f"YouTube returned video id {v.get('id')} with privacyStatus={privacy!r}")
         self._history(pid, f"uploaded as PRIVATE video {v.get('id')} (confirmed by YouTube)")

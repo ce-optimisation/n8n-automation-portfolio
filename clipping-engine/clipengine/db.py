@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -450,6 +450,17 @@ CREATE TABLE IF NOT EXISTS monitor_events (
     message TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_monitor_events_ts ON monitor_events(ts);
+-- ---- v7: verified-upload local cleanup audit trail ------------------------------------------------
+CREATE TABLE IF NOT EXISTS cleanup_events (
+    id INTEGER PRIMARY KEY,
+    clip_id INTEGER NOT NULL,
+    ts REAL NOT NULL,
+    kind TEXT NOT NULL,            -- evaluated | state | deleting | deleted | restored | restore_failed | held | cancelled | error | manual
+    detail TEXT,
+    evidence_json TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_cleanup_events_clip ON cleanup_events(clip_id, ts);
+
 CREATE TABLE IF NOT EXISTS priority_events (
     key TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -503,6 +514,24 @@ MIGRATIONS = [
     ("creators", "roster", "TEXT"),                                # 'approved' = owner-approved portfolio member
     ("creators", "acquisition_state", "TEXT"),                     # separate from monitoring
     ("monitor_sources", "notes", "TEXT"),                          # owner/roster notes (editable)
+    # v7: context-complete selection and verified-upload local cleanup
+    ("clips", "completeness_json", "TEXT"),                        # PASS/REVIEW/REJECT with per-dimension reasons
+    ("clips", "duration_class", "TEXT"),                           # below | within | above (preferred range)
+    ("clips", "keep_local", "INTEGER NOT NULL DEFAULT 0"),         # owner: never remove the local video
+    ("clips", "local_deleted_at", "REAL"),                         # the local MP4 was removed after verified handoff
+    ("clips", "cleanup_state", "TEXT"),                            # see cleanup.STATES
+    ("clips", "cleanup_hold", "TEXT"),                             # owner hold / cancel reason
+    ("clips", "cleanup_auto", "INTEGER"),                          # NULL = follow the global switch, 0 = never, 1 = allow
+    ("clips", "restore_grace_until", "REAL"),                      # a restored copy is not cleaned up before this
+    ("clips", "restored_at", "REAL"),
+    ("clips", "local_bytes", "INTEGER"),
+    ("publication_packages", "required", "INTEGER NOT NULL DEFAULT 1"),   # destination required before local cleanup
+    ("publication_packages", "excluded_at", "REAL"),
+    ("publication_packages", "exclude_reason", "TEXT"),
+    ("publication_packages", "handoff_state", "TEXT"),             # see cleanup.HANDOFF_STATES
+    ("publication_packages", "handoff_method", "TEXT"),            # api | manual
+    ("publication_packages", "handoff_at", "REAL"),
+    ("publication_packages", "handoff_evidence", "TEXT"),
 ]
 
 

@@ -131,6 +131,12 @@ class StorageProvider:
     def delete(self, remote_id: str) -> None:
         raise NotImplementedError
 
+    def metadata(self, remote_id: str) -> dict:
+        raise NotImplementedError
+
+    def download(self, remote_id: str, dest: Path, progress=None) -> int:
+        raise NotImplementedError
+
 
 class GoogleDriveProvider(StorageProvider):
     name = "gdrive"
@@ -237,6 +243,22 @@ class GoogleDriveProvider(StorageProvider):
         r = self._client().delete(f"{self.API}/files/{remote_id}", headers=self._h())
         if r.status_code not in (200, 204, 404):
             self._check(r, "deletion")
+
+    def download(self, remote_id: str, dest: Path, progress=None) -> int:
+        """Stream a Drive file into `dest` (the caller supplies a temporary path). Returns the bytes written."""
+        written = 0
+        with self._client().stream("GET", f"{self.API}/files/{remote_id}", params={"alt": "media"},
+                                   headers=self._h()) as r:
+            if r.status_code >= 400:
+                r.read()
+                self._check(r, "download")
+            with open(dest, "wb") as f:
+                for chunk in r.iter_bytes(1 << 20):
+                    f.write(chunk)
+                    written += len(chunk)
+                    if progress:
+                        progress(written)
+        return written
 
 
 class CloudService:
@@ -387,8 +409,19 @@ class CloudService:
             "SELECT kind, state FROM cloud_objects WHERE owner_kind='clip' AND owner_id=?", (clip_id,))}
         return all(rows.get(k) == "verified" for k in required)
 
-    def delete_clip_objects(self, clip_id: int) -> int:
-        """Delete this engine's own Drive copies of a clip (only objects recorded as ours)."""
+    def delete_clip_objects(self, clip_id: int, force: bool = False) -> int:
+        """Delete this engine's own Drive copies of a clip (only objects recorded as ours).
+
+        The Drive master is the recoverable copy behind local cleanup, so it is PROTECTED: refused while the local video
+        has been removed, and for any clip that was not rejected while KEEP_DRIVE_MASTER is on (the default). `force`
+        exists only for an explicit owner action."""
+        clip = self.db.clip(clip_id)
+        if clip and not force:
+            if clip["local_deleted_at"]:
+                log.warning("clip %s: Drive copy kept (it is the only copy of the finished video)", clip_id)
+                return 0
+            if getattr(self.settings, "keep_drive_master", True) and clip["status"] != "rejected":
+                return 0
         n = 0
         for row in self.db.query("SELECT * FROM cloud_objects WHERE owner_kind='clip' AND owner_id=? AND remote_id IS NOT NULL "
                                  "AND state != 'deleted'", (clip_id,)):

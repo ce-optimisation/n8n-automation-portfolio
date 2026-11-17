@@ -65,7 +65,7 @@ def register(app, core, page, templates) -> None:
             for f in ("clips_per_recording", "min_quality"):
                 if f in form and str(form[f]).strip():
                     setattr(p, f, int(form[f]))
-            if form.get("selection_profile") in ("v4", "v5"):
+            if form.get("selection_profile") in ("v4", "v5", "v6"):
                 p.selection_profile = str(form["selection_profile"])
             p.reject_rules = [r for r in editorial.REJECT_RULES if form.get(f"reject_{r}")]
             p.flag_rules = [r for r in editorial.FLAG_RULES if form.get(f"flag_{r}")]
