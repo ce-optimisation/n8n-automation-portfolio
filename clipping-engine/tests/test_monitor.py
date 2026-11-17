@@ -113,6 +113,127 @@ def test_dns_outage_is_retried_and_never_switches_the_source_off(settings, monke
     assert db.one("SELECT enabled FROM sources WHERE id=?", (sid,))["enabled"] == 0
 
 
+class _ExitedProc:
+    returncode = 1
+
+    def poll(self):
+        return 1
+
+
+class _RunningProc:
+    def poll(self):
+        return None
+
+
+def _recording_item(settings, db, tmp_path):
+    settings.allowed_url_domains = ["example.org"]
+    sid, ok, _ = monitor.add_source(settings, db, name="Show", kind="channel", url="https://example.org/c/show")
+    assert ok
+    iid = db.insert("source_items", source_id=sid, item_key="v1", title="Live show", url="https://example.org/v1",
+                    kind="live", state="recording", work_dir=str(tmp_path / "w"), started_at=time.time(), segments=1)
+    return sid, iid
+
+
+def test_network_drop_while_recording_does_not_end_the_recording(settings, monkeypatch, tmp_path):
+    """Regression: the recorder usually stops BECAUSE the connection dropped; the stream check then
+    also failed and was read as 'not live', so the recording was finished half-way through and the
+    rest of the show was never recorded. Now the engine keeps re-checking and resumes."""
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["93.184.216.34"])
+    db = Database(settings.db_path)
+    sid, iid = _recording_item(settings, db, tmp_path)
+    mon = monitor.SourceMonitor(settings, db, JobQueue(db))
+    started, finished = [], []
+    mon._start_segment = lambda src, it, method=None: (started.append(it["id"]), mon.procs.__setitem__(it["id"], _RunningProc()))
+    mon._finalize = lambda i: finished.append(i)
+    state = {"net": False, "live": "is_live"}
+
+    def prober(s, url):
+        if not state["net"]:
+            raise OSError("getaddrinfo failed")
+        return {"live_status": state["live"]}
+
+    def lister(s, url, limit=15):
+        if not state["net"]:
+            raise ingest.SourceError("unresolvable", "Could not resolve example.org")
+        return [{"key": "v1", "title": "Live show", "url": "https://example.org/v1", "live": True}]
+    mon.prober, mon.lister = prober, lister
+
+    mon.procs[iid] = _ExitedProc()
+    mon.supervise()                                   # recorder gone, network down
+    assert not finished and not started and mon.recording_active()
+    assert db.one("SELECT state FROM source_items WHERE id=?", (iid,))["state"] == "recording"
+    mon._unsure[iid][1] -= 120                        # a re-check is due; still no network
+    mon.supervise()
+    assert not finished and not started
+    state["net"] = True                               # network back, stream still live
+    mon._unsure[iid][1] -= 120
+    mon.supervise()
+    assert started == [iid] and not finished and iid not in mon._unsure
+    assert db.one("SELECT restarts FROM source_items WHERE id=?", (iid,))["restarts"] == 1
+
+    # the broadcast has ended: the video page (not a stale "live" badge in the listing) decides
+    state["live"] = "was_live"
+    mon.procs[iid] = _ExitedProc()
+    mon.supervise()
+    assert finished == [iid]
+
+
+def test_unknown_stream_state_finishes_after_the_grace_period(settings, monkeypatch, tmp_path):
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["93.184.216.34"])
+    db = Database(settings.db_path)
+    sid, iid = _recording_item(settings, db, tmp_path)
+    mon = monitor.SourceMonitor(settings, db, JobQueue(db))
+    finished = []
+    mon._finalize = lambda i: finished.append(i)
+
+    def down(*a, **k):
+        raise OSError("network is unreachable")
+    mon.prober = mon.lister = down
+    mon.procs[iid] = _ExitedProc()
+    mon.supervise()
+    assert not finished
+    mon._unsure[iid] = [time.time() - mon.LIVE_UNSURE_GRACE - 1, 0]
+    mon.supervise()
+    assert finished == [iid] and not mon.recording_active()
+
+
+def test_live_source_back_off_is_capped_but_rate_limits_are_respected(settings, monkeypatch):
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["93.184.216.34"])
+    settings.allowed_url_domains = ["example.org"]
+    db = Database(settings.db_path)
+    sid, ok, _ = monitor.add_source(settings, db, name="Show", kind="channel", url="https://example.org/c/show",
+                                    poll_minutes=2)
+    mon = monitor.SourceMonitor(settings, db, JobQueue(db))
+    err = {"e": ConnectionResetError("connection reset")}
+
+    def lister(s, url, limit=15):
+        raise err["e"]
+    mon.lister = lister
+    for _ in range(8):
+        before = time.time()
+        mon.poll(sid)
+    src = db.one("SELECT * FROM sources WHERE id=?", (sid,))
+    assert src["enabled"] == 1 and src["next_check"] - before <= 605      # not hours of silence
+    err["e"] = ingest.SourceError("rate_limited", "HTTP Error 429: Too Many Requests")
+    before = time.time()
+    mon.poll(sid)
+    assert db.one("SELECT next_check FROM sources WHERE id=?", (sid,))["next_check"] - before >= 1800
+
+
+def test_download_job_retries_when_offline(settings, monkeypatch):
+    from clipengine.jobs import TransientError
+
+    def no_dns(host):
+        raise OSError(11001, "getaddrinfo failed")
+    monkeypatch.setattr(ingest, "resolve_host", no_dns)
+    settings.allowed_url_domains = ["example.org"]
+
+    class Ctx:
+        payload = {"url": "https://example.org/v1"}
+    with pytest.raises(TransientError):
+        ingest.handle_download_url(settings, Database(settings.db_path), None, Ctx())
+
+
 def feed_xml(items):
     body = "".join(f"<item><guid>{k}</guid><title>{t}</title><enclosure url='{u}' type='video/mp4'/>"
                    f"<pubDate>Mon, 0{i + 1} Jan 2026 10:00:00 GMT</pubDate></item>" for i, (k, t, u) in enumerate(items))

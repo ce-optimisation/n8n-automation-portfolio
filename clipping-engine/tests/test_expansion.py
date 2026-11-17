@@ -304,6 +304,32 @@ def test_drive_upload_resumes_verifies_and_never_duplicates(settings, monkeypatc
     assert svc.clip_verified(cid)
 
 
+def test_drive_network_drop_is_retried_not_failed(settings):
+    """Regression: a connection error talking to Drive failed the upload job for good (and so kept
+    the raw recording on disk indefinitely). It is now a temporary error, retried."""
+    db = Database(settings.db_path)
+    q = JobQueue(db)
+    drive = FakeDrive()
+    calls = {"n": 0}
+
+    def flaky(req):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise httpx.ConnectError("connection dropped", request=req)
+        return drive.handler(req)
+    svc = _cloud(settings, db, q, drive)
+    svc.provider.http = httpx.Client(transport=httpx.MockTransport(flaky))
+    rid = db.insert("recordings", title="Rec", source_type="url", status="ready")
+    cid = _clip_on_disk(settings, db, rid)
+    jid = svc.enqueue_clip(cid)
+    q.run_one()
+    job = db.one("SELECT * FROM jobs WHERE id=?", (jid,))
+    assert job["status"] == "queued" and "Network problem" in job["error"]
+    db.execute("UPDATE jobs SET run_after=0")
+    q.drain(30)
+    assert db.one("SELECT status FROM jobs WHERE id=?", (jid,))["status"] == "done" and svc.clip_verified(cid)
+
+
 def test_drive_verification_failure_and_quota_exhaustion(settings):
     db = Database(settings.db_path)
     q = JobQueue(db)

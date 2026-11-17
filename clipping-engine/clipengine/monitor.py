@@ -552,6 +552,9 @@ class SourceMonitor:
         self._t: threading.Thread | None = None
         self.lister = list_channel           # replaceable in tests (MOCK)
         self.prober = probe_entry            # replaceable in tests (MOCK)
+        # item id -> [first time, last time] the stream's state could not be checked after the
+        # recorder stopped (typically the same network drop that stopped it)
+        self._unsure: dict[int, list[float]] = {}
         queue.register("download_url:failed", self._download_failed)
 
     # -- lifecycle
@@ -585,7 +588,7 @@ class SourceMonitor:
             if it["state"] == "finalizing" or not src or not src["enabled"]:
                 self._finalize(it["id"])
                 continue
-            if self._stream_live(src, it):
+            if self._stream_live(src, it) is not False:     # live, or cannot tell yet: try (supervise decides)
                 self._log_item(it["id"], "Resuming recording after restart")
                 self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (it["id"],)))
             else:
@@ -656,7 +659,11 @@ class SourceMonitor:
                 # No internet for a moment: keep checking every few minutes so a live show that
                 # starts during or after the outage is still caught (no exponential back-off).
                 delay = min(delay, max(120, src["poll_minutes"] * 60))
-            elif "429" in text or "too many requests" in text.lower():
+            elif src["record_live"] and not ("429" in text or "too many requests" in text.lower()):
+                # A source watched for live shows must not go quiet for hours after a few failed
+                # checks (connection reset, time-out, a 5xx page): back off to 10 minutes at most.
+                delay = min(delay, max(600, src["poll_minutes"] * 60))
+            if "429" in text or "too many requests" in text.lower():
                 # The site is rate-limiting us. Hammering it makes that worse and is not what any
                 # permission covers: wait at least 30 minutes (longer after repeated refusals).
                 delay = max(delay, min(6 * 3600, 1800 * 2 ** min(n - 1, 3)))
@@ -713,6 +720,8 @@ class SourceMonitor:
                                url=it["url"], published=it.get("published"), state="baseline")
                 continue
             decision = ingest.classify_url(it["url"], self.settings, self.db)
+            if decision.code == "unresolvable":
+                continue        # no internet right now: not stored, so the next check queues it
             iid = self.db.insert("source_items", source_id=src["id"], item_key=it["key"], title=it["title"],
                                  url=it["url"], published=it.get("published"), state="queued")
             if not decision.ok:
@@ -849,22 +858,83 @@ class SourceMonitor:
         self.procs[it["id"]] = p
         self.db.update("source_items", it["id"], segments=n, state="recording")
 
-    def _stream_live(self, src, it) -> bool:
+    def _stream_live(self, src, it) -> bool | None:
+        """True = still live, False = confirmed ended, None = cannot tell right now (network down,
+        site error). None must never be read as "ended": the recorder usually stops BECAUSE the
+        connection dropped, and finishing the recording then would lose the rest of the show."""
         try:
             if src["kind"] == "hls":
                 status, _, text = fetch_text(self.settings, it["url"])
-                st = hls_state(text) if status == 200 else {"valid": False}
+                if status != 200:
+                    return False if status in (404, 410) else None
+                st = hls_state(text)
                 return bool(st.get("valid")) and not st.get("ended")
+        except Exception as e:  # noqa: BLE001
+            log.warning("source item %s: could not check whether the stream is live: %s", it["id"], e)
+            return None
+        # Channel sources: the video page is the authority (a channel grid can keep showing a
+        # "live" badge after the broadcast ended, and restarting then would fetch the replay).
+        try:
+            status = self.prober(self.settings, it["url"]).get("live_status")
+            if status:
+                return status == "is_live"
+        except Exception as e:  # noqa: BLE001 - fall back to the channel listing
+            log.warning("source item %s: video page check failed: %s", it["id"], e)
+        try:
             entries = self.lister(self.settings, src["url"])
-            listed = [e for e in entries if e["key"] == it["item_key"]]
-            if listed and listed[0].get("live") is not None:
-                return bool(listed[0]["live"])
-            # The listing does not say (or no longer shows the item): ask the video page itself.
-            return self.prober(self.settings, it["url"]).get("live_status") == "is_live"
-        except Exception:  # noqa: BLE001 - unreachable counts as not live
-            return False
+        except Exception as e:  # noqa: BLE001
+            log.warning("source item %s: channel listing check failed: %s", it["id"], e)
+            return None
+        listed = [e for e in entries if e["key"] == it["item_key"]]
+        if listed and listed[0].get("live") is not None:
+            return bool(listed[0]["live"])
+        return False if not listed else None
+
+    LIVE_UNSURE_GRACE = 15 * 60      # how long to keep re-checking a stream whose state cannot be read
+    LIVE_UNSURE_RECHECK = 60         # seconds between those re-checks
+
+    def _after_recorder_exit(self, iid: int, it, code) -> None:
+        """The recorder process is gone: start a new segment if the stream is still live, finish the
+        recording if it has ended, and keep re-checking (without finishing) while that is unknown."""
+        src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
+        live = self._stream_live(src, it) if src and src["enabled"] else False
+        now = time.time()
+        if live is None:
+            first = iid not in self._unsure
+            since, _ = self._unsure.setdefault(iid, [now, now])
+            self._unsure[iid][1] = now
+            if now - since < self.LIVE_UNSURE_GRACE:
+                if first:
+                    self._log_item(iid, f"Recorder stopped (code {code}) and the stream's state cannot be checked "
+                                        "(network or site problem); checking again every minute before deciding",
+                                   "WARNING")
+                return
+            self._log_item(iid, f"Stream state could not be checked for {self.LIVE_UNSURE_GRACE // 60} minutes; "
+                                "finishing the recording with what was captured", "WARNING")
+        self._unsure.pop(iid, None)
+        if live and it["restarts"] < self.settings.live_restart_limit:
+            self.db.update("source_items", iid, restarts=it["restarts"] + 1)
+            self._log_item(iid, f"Recorder exited (code {code}) while the stream is still live; "
+                                f"starting a new segment (restart {it['restarts'] + 1})", "WARNING")
+            self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (iid,)))
+        else:
+            self._finalize(iid)
+
+    def recording_active(self) -> bool:
+        """A live recording is in progress, including a recorder waiting out a network drop."""
+        return bool(self.procs) or bool(self._unsure)
 
     def supervise(self) -> None:
+        for iid, (since, last) in list(self._unsure.items()):
+            if iid in self.procs:                 # a check (or poll) already restarted the recorder
+                self._unsure.pop(iid, None)
+                continue
+            it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+            if not it or it["state"] != "recording":
+                self._unsure.pop(iid, None)
+                continue
+            if time.time() - last >= self.LIVE_UNSURE_RECHECK:
+                self._after_recorder_exit(iid, it, "earlier")
         for iid, p in list(self.procs.items()):
             it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
             if not it:
@@ -889,14 +959,7 @@ class SourceMonitor:
                     self._finalize(iid)
                 continue
             self.procs.pop(iid, None)
-            src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
-            if src and src["enabled"] and self._stream_live(src, it) and it["restarts"] < self.settings.live_restart_limit:
-                self.db.update("source_items", iid, restarts=it["restarts"] + 1)
-                self._log_item(iid, f"Recorder exited (code {p.returncode}) while the stream is still live; "
-                                    f"starting a new segment (restart {it['restarts'] + 1})", "WARNING")
-                self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (iid,)))
-            else:
-                self._finalize(iid)
+            self._after_recorder_exit(iid, it, p.returncode)
 
     def _log_item(self, iid: int, msg: str, level: str = "INFO") -> None:
         log.log(getattr(logging, level), "source item %s: %s", iid, msg)

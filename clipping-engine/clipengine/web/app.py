@@ -67,7 +67,7 @@ class App:
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
         self.monitor = monitor.SourceMonitor(settings, self.db, self.queue)
         # One heavy workload at a time: transcription/rendering wait while a live capture runs.
-        self.queue.recording_active = lambda: bool(self.monitor.procs)
+        self.queue.recording_active = self.monitor.recording_active
         self.queue.defer_heavy_while_recording = settings.defer_heavy_while_recording
         editorial.seed_presets(self.db)
         research_file = Path(__file__).resolve().parents[2] / "research" / "research_dataset.json"

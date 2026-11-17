@@ -609,7 +609,10 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
         if any(k in low for k in RESTRICTED_MARKERS):
             raise SourceError("access_restricted", "This video requires a login or is restricted; it will not "
                               "be retrieved. Obtain the file from the rights holder.") from e
-        if any(k in low for k in ("timed out", "temporar", "connection", "http error 5")):
+        if any(k in low for k in ("timed out", "temporar", "connection", "http error 5", "getaddrinfo",
+                                  "name resolution", "failed to resolve", "network is unreachable",
+                                  "transporterror", "incompleteread", "errno 11001", "errno 10054",
+                                  "errno 10060", "errno 10065")):
             raise TransientError(msg) from e
         raise SourceError("extractor_error", msg[:500]) from e
     files = [p for p in tmp.iterdir() if p.suffix.lower() in VIDEO_EXTS]
@@ -624,6 +627,9 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
     """Job handler: retrieve a permitted URL (direct file or extractor), then queue analysis."""
     url = ctx.payload["url"]
     decision = classify_url(url, settings, db)
+    if decision.code == "unresolvable":
+        # No internet for a moment is not a reason to give up on the video: retry later.
+        raise TransientError(decision.message, retry_after=300)
     if not decision.ok:
         raise SourceError(decision.code, decision.message)
     extra: dict = {"retrieval": {"method": decision.method, "policy": decision.code, "reason": decision.message,

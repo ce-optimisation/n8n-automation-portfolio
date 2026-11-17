@@ -322,6 +322,16 @@ class CloudService:
 
     # ---- job ---------------------------------------------------------------------------------
     def run(self, ctx: JobContext) -> None:
+        """A dropped connection or time-out (Wi-Fi blip) is retried like any temporary refusal;
+        before, it failed the upload for good, which also kept the raw recording on disk forever."""
+        import httpx
+        try:
+            self._run(ctx)
+        except httpx.TransportError as e:
+            raise TransientError(f"Network problem talking to Google Drive ({type(e).__name__}: {e}); "
+                                 "will retry.", retry_after=120) from e
+
+    def _run(self, ctx: JobContext) -> None:
         clip_id = ctx.job["clip_id"]
         clip = self.db.clip(clip_id)
         if not clip:
