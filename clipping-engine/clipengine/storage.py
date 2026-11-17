@@ -43,6 +43,19 @@ def estimate(settings: Settings, duration_s: float, source_bytes: float | None =
             "free": free, "fits": free - reserve >= peak, "shortfall": max(0.0, peak + reserve - free)}
 
 
+def require_space(settings: Settings, need_bytes: float, what: str) -> None:
+    """Disk-pressure guard for HEAVY jobs (audio extraction, rendering): defer instead of filling the drive.
+    Raises TransientError so the job queue retries later; the message says exactly what is short."""
+    free = free_bytes(settings.data_dir)
+    reserve = settings.disk_reserve_gb * 1e9
+    if free - reserve < need_bytes:
+        from .jobs import TransientError
+        raise TransientError(
+            f"Not enough free disk space to start {what}: about {need_bytes / 1e9:.1f} GB needed plus a "
+            f"{settings.disk_reserve_gb:g} GB reserve, {free / 1e9:.1f} GB free. Free space (Storage page) and it will resume.",
+            retry_after=1800)
+
+
 # Typical live HLS bitrates (video+audio) per height, GB per hour (Rumble's ladder measured 16 Nov 2026:
 # 1080p ~4.1 Mbps, 720p ~2.1, 480p ~1.06, 360p ~0.68).
 LIVE_GB_PER_HOUR = {1080: 1.85, 720: 0.97, 480: 0.48, 360: 0.31}

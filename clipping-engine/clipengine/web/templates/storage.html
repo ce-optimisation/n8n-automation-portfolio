@@ -19,6 +19,16 @@
     <label>Recovery window (hours after the last required destination is confirmed) <input name="grace_hours" type="number" min="0" max="720" step="1" inputmode="numeric" value="{{ cleanup.grace_hours|int }}"></label>
     <button class="btn">Save</button></form>
   <p class="muted"><small>The Google Drive copy is never deleted by this. A removed clip can be restored from its page. Clips you keep locally, clips still being uploaded, and anything you did not approve are never removed.</small></p>
+  <div class="card">
+    <h3>Drive-only archive <small class="muted">(optional · off by default)</small></h3>
+    <p><small>For engine-made clips you have <b>reviewed and approved</b>, whose Google Drive copy is verified: remove the local file even before all 24 publishing accounts exist. The Drive master is never deleted, the file is re-checked against Drive immediately before removal, and <b>Restore from Drive</b> brings it back. Needs a passing restore test. Unreviewed, unverified and owner-supplied files are never touched.</small></p>
+    <p><small>Restore test: {% if cleanup.restore_test.get('at') %}{{ 'passed' if cleanup.restore_test.ok else 'FAILED' }} — {{ cleanup.restore_test.reason }}{% if cleanup.restore_test.fresh %} (valid){% else %} (not valid now){% endif %}{% else %}not run yet{% endif %}</small></p>
+    <form method="post" action="/storage/archive/test" class="inline"><button class="btn ghost">Run restore test</button></form>
+    <form method="post" action="/storage/archive" class="stack">
+      <label><input type="checkbox" name="enabled" value="1" {% if cleanup.archive %}checked{% endif %}> Enable Drive-only archive for approved clips</label>
+      <button class="btn">Save</button>
+    </form>
+  </div>
   <form method="post" action="/storage/cleanup/run"><button class="btn ghost">Run a cleanup pass now</button></form>
   {% if cleanup.present %}<details><summary>Largest clips on this computer</summary><ul class="list">{% for p in cleanup.present[:15] %}<li><a href="/clips/{{ p.clip_id }}">Clip #{{ p.clip_id }}</a> · {{ '%.0f'|format(p.bytes / 1e6) }} MB · <span class="badge">{{ p.state }}</span> <small>{{ cleanup_help.get(p.state, '') }}{% if p.blockers %} — {{ p.blockers[0] }}{% endif %}</small></li>{% endfor %}</ul></details>{% endif %}
 </section>

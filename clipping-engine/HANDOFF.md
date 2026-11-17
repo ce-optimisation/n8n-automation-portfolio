@@ -1665,3 +1665,23 @@ exclude), Storage page overview and switches, review-card badges. Crash recovery
 
 **Not verified live:** no real Drive, YouTube, TikTok or Instagram call was made (fake Drive/mocks only); Facebook draft upload is NOT implemented
 (manual); YouTube "processing complete" is not polled (the upload response's id + private status is the evidence).
+
+
+## 24. Session 10 (17 Nov 2026): reconciliation, hook titles, storage tooling, Drive-only archive, credential tooling
+
+Run from a Linux cloud container: nothing here was run on the Lenovo. See OWNER_SETUP_SESSION10.md for the owner steps.
+
+- **Git**: `claude/optimistic-noether-k52qjf` fast-forwarded (no force) 35e0040 -> bfb0f8d (Session 9 incl. d8468de). Session 10 work is on `claude/sharp-bell-utpc9o`.
+- **Schema v8** (additive): clips.title_source/title_status/title_locked/title_rev/title_json.
+- **Hook titles** (`clipengine/hooks.py`): extractive candidates (claim / question / topic / attributed topic) from the clip's own transcript,
+  verified (words, numbers, quotes, dropped negation/hedge, pronoun starts, sensational words, brand policy), best accepted one stored with evidence.
+  Optional local Ollama only PROPOSES extra wordings that go through the same verification. America First Monitor: attributed/topic wording only,
+  inflammatory terms rejected. Owner-written/approved/locked titles are never regenerated. Routes: /clips/{id}/title, /title/choose|approve|unlock|remove|regenerate.
+  Rendering is unchanged (titles.py). Titles still draw only where the brand's title style is on.
+- **Storage**: `diskaudit.py` + `Storage-Audit.cmd` (read-only; classes A-D; first blocking gate per raw recording); `storage.require_space` defers
+  audio extraction/rendering (TransientError, retry 30 min) when the disk is short; maintenance also removes partial downloads older than 3 days.
+- **Drive-only archive** (`cleanup.py`): OFF by default; reviewed + approved engine-rendered clips with a verified Drive master and a passing restore test
+  (<=30 days) may be removed locally without platform handoffs; deep Drive re-check before deleting; Restore from Drive reverses it; logged as mode=drive_only_archive.
+- **Credentials**: `credentials_cli.py` + `Set-Credentials.cmd` (hidden prompts, live pass/fail by HTTP status, no secrets in output); Check-Portfolio now runs the same test.
+- **Not verified live (no network/credentials/laptop here)**: Kick official docs were unreachable from the container (docs.kick.com blocked); endpoints match third-party
+  clients only. No real Drive restore, no real platform identity checks, no compare_selectors on the two real recordings were run.

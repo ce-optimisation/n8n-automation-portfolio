@@ -546,3 +546,60 @@ def test_restore_job_runs_through_the_queue(settings, env):
     assert lc.request_restore(cid) == jid                                   # dedupe: one restore at a time
     with pytest.raises(ValueError):
         lc.request_restore(make_clip(settings, db, drive)[0])               # nothing to restore
+
+
+# ---- Session 10: Drive-only archive mode ---------------------------------------------------------------
+
+@pytest.fixture
+def archive_env(env, monkeypatch):
+    from clipengine import media
+    monkeypatch.setattr(media, "probe", lambda p: {"has_video": True, "has_audio": True, "duration": 30.0})
+    return env
+
+
+def _archive_clip(settings, db, drive, **kw):
+    cid, pkgs, path = make_clip(settings, db, drive, dests=(), **kw)
+    db.update("clips", cid, reviewed_at=NOW - 30 * HOUR)
+    return cid, path
+
+
+def test_archive_is_off_by_default_and_needs_a_restore_test(settings, archive_env):
+    db, drive, lc = archive_env
+    cid, path = _archive_clip(settings, db, drive)
+    assert not lc.archive_enabled()
+    assert not lc.evaluate(cid)["eligible"]                                   # no destinations chosen: blocked as before
+    lc.set_archive(True)
+    ev = lc.evaluate(cid)
+    assert not ev["eligible"] and any("restore test" in b for b in ev["blockers"])
+    assert path.exists()
+
+
+def test_archive_removes_only_reviewed_verified_engine_clips_and_restore_brings_them_back(settings, archive_env):
+    db, drive, lc = archive_env
+    cid, path = _archive_clip(settings, db, drive)
+    un_id, _, un_path = make_clip(settings, db, drive, dests=(), approved=False)
+    nv_id, _, nv_path = make_clip(settings, db, drive, dests=(), verified=False)
+    db.update("clips", nv_id, reviewed_at=NOW - 30 * HOUR)
+    lc.set_archive(True)
+    t = lc.restore_test()
+    assert t["ok"] and lc.restore_test_status()["fresh"]
+    assert lc.evaluate(cid)["eligible"] and lc.evaluate(cid)["via_archive"]
+    assert not lc.evaluate(un_id)["eligible"]                                 # not reviewed/approved
+    assert not lc.evaluate(nv_id)["eligible"]                                 # Drive copy not verified
+    res = lc.delete(cid)
+    assert res["deleted"] and not path.exists()
+    assert un_path.exists() and nv_path.exists()
+    assert any("drive_only_archive" in (e["evidence_json"] or "") for e in db.query("SELECT * FROM cleanup_events WHERE kind='deleting'"))
+    assert drive.files                                                        # Drive master untouched
+    r = lc.restore(cid)
+    assert r["restored"] and path.read_bytes() == b"V" * 4096                 # checksum-verified restore
+
+
+def test_archive_never_acts_when_the_drive_master_changed(settings, archive_env):
+    db, drive, lc = archive_env
+    cid, path = _archive_clip(settings, db, drive)
+    lc.set_archive(True)
+    lc.restore_test()
+    row = db.one("SELECT remote_id FROM cloud_objects WHERE owner_id=? AND kind='video'", (cid,))
+    drive.files[row["remote_id"]] = b"corrupted"
+    assert not lc.delete(cid)["deleted"] and path.exists()

@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import Settings
 from .db import Database
 from .jobs import JobContext, JobQueue, PermanentError
-from . import ingest, render, safety, segment
+from . import hooks, ingest, render, safety, segment
 from .transcribe import get_transcriber
 
 log = logging.getLogger("clipengine.pipeline")
@@ -163,6 +163,8 @@ class Pipeline:
         wav = self.settings.work_dir / f"rec{rid:05d}_audio.wav"
         t0 = time.time()
         if not wav.exists():
+            from . import storage
+            storage.require_space(self.settings, (rec["duration"] or 0) * storage.WAV_BYTES_PER_S * 1.1, "audio extraction")
             ctx.progress(0.02, "Extracting audio", force=True)
             tmp = wav.with_suffix(".tmp.wav")
             media.extract_audio(Path(rec["file_path"]), tmp, duration=rec["duration"],
@@ -347,10 +349,32 @@ class Pipeline:
         self.db.update("recordings", rid, status="clips_queued", stage="rendering")
         ctx.log(f"Selected {len(cands)} candidate excerpts; render jobs queued")
 
+    def hook_fields(self, rec, transcript: str, rev: int = 1, s: Settings | None = None) -> dict:
+        """Proposed hook title for the clip's own transcript (never raises: a failure just means 'enter one manually')."""
+        from . import hooks
+        try:
+            creator = self.creator_for(rec)
+            brand = creator["brand_key"] if creator else None
+            speaker = None
+            if creator and (creator["kind"] or "creator") == "creator" and creator["name"]:
+                nm = creator["name"].split()
+                speaker = nm[-1] if len(nm) == 2 else creator["name"]
+            extra = None
+            s = s or self.settings
+            if getattr(s, "llm_provider", "none") != "none" and segment.ollama_available(s.ollama_url):
+                try:
+                    extra = hooks.ollama_candidates(s.ollama_url, s.ollama_model, transcript, brand or "")
+                except Exception:      # a local model is optional; deterministic generation still runs
+                    extra = None
+            return hooks.fields_for(hooks.generate(transcript, brand, speaker, extra, self.settings.data_dir), rev)
+        except Exception as e:         # noqa: BLE001
+            return hooks.fields_for({"status": "manual_needed", "title": None, "warnings": [f"title generation failed: {e}"]}, rev)
+
     def create_clip(self, rec, idx, start, end, words, sents, s: Settings, *, score=None, reasons=None,
                     method="heuristic", summary=None, quality=None, niche_key=None, completeness=None) -> int:
         start, end = snap_bounds(words, start, end)
         fields = self.clip_text_fields(rec, start, end, words, sents, s, summary)
+        fields.update(self.hook_fields(rec, fields["transcript_text"], s=s))
         if quality:
             # niche review flags (claims, financial promotion, political context) join the safety flags:
             # the editorial gate then requires an explicit decision before any publication
@@ -423,6 +447,8 @@ class Pipeline:
             return
         if not Path(rec["file_path"] or "").is_file():
             raise PermanentError("The original recording file is missing; cannot render.")
+        from . import storage
+        storage.require_space(self.settings, (clip["end"] - clip["start"]) * storage.CLIP_BYTES_PER_S * 1.3, "rendering this clip")
         self.db.update("clips", clip["id"], status="rendering", error=None)
         words = all_words(self.db.segments(rec["id"]))
         label = f"Excerpt · {rec['title'][:48]} · {render.mmss(clip['start'])}"
@@ -501,6 +527,8 @@ class Pipeline:
             method = clip["selection_method"] or ""
             fields.update(machine_summary=None, selection_method=method if "owner-adjusted" in method
                           else method + "+owner-adjusted")
+            if hooks.may_regenerate(clip):         # new revision: refresh a GENERATED title; owner titles are never touched
+                fields.update(self.hook_fields(rec, fields["transcript_text"], (clip["title_rev"] or 0) + 1))
         # Unchanged boundaries: re-render only; owner edits to the description are preserved.
         self.db.update("clips", clip_id, start=start, end=end, render_rev=clip["render_rev"] + 1,
                        status="pending_render", reviewed_at=None, **fields)

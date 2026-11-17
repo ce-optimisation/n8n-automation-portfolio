@@ -239,7 +239,7 @@ def test_session8_database_upgrades_to_v7_without_losing_data(settings):
     con.commit()
     con.close()
     up = Database(settings.db_path)
-    assert up.get_kv("schema_version") == "7"
+    assert up.get_kv("schema_version") == str(__import__("clipengine.db", fromlist=["x"]).SCHEMA_VERSION)
     cols = {r[1] for r in up.connect().execute("PRAGMA table_info(clips)")}
     assert set(new_cols["clips"]) <= cols
     assert up.one("SELECT title FROM recordings WHERE id=?", (rid,))["title"] == "Keep me"
@@ -248,4 +248,4 @@ def test_session8_database_upgrades_to_v7_without_losing_data(settings):
     p = up.one("SELECT * FROM publication_packages WHERE id=?", (pid,))
     assert p["required"] == 1 and p["handoff_state"] is None and p["status"] == "published"
     assert up.one("SELECT COUNT(*) n FROM cleanup_events")["n"] == 0
-    assert list((settings.data_dir / "backups").glob("*before-schema-7*"))
+    assert list((settings.data_dir / "backups").glob("*before-schema-*"))

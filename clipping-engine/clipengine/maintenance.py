@@ -60,6 +60,18 @@ def run_once(settings: Settings, db: Database, queue=None) -> dict:
                     actions["stale_work_removed"] += 1
             except OSError:
                 pass
+    # 1b. Partial/abandoned downloads (never while a download or recording job could own them).
+    busy = db.one("SELECT COUNT(*) n FROM jobs WHERE status IN ('running','queued') AND kind IN ('download_url','record_live')")["n"]
+    if not busy:
+        for root in (settings.work_dir, settings.recordings_dir):
+            for pat in ("*.part", "*.ytdl", "*.tmp", "*.tmp.wav"):
+                for f in root.rglob(pat):
+                    try:
+                        if f.is_file() and now - f.stat().st_mtime > 3 * 86400:
+                            f.unlink(missing_ok=True)
+                            actions["partial_downloads_removed"] = actions.get("partial_downloads_removed", 0) + 1
+                    except OSError:
+                        pass
     # 2. Rendered files of rejected clips (DB record and transcript are kept).
     days = settings.delete_rejected_renders_after_days
     if days > 0:

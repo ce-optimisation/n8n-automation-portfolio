@@ -52,9 +52,26 @@
   {% if quality.reasons %}<ul class="list">{% for r in quality.reasons %}<li><small>{{ r }}</small></li>{% endfor %}</ul>{% endif %}
   {% for f in quality.flags %}<p class="err"><small>Review: {{ f.note }}{% if f.term %} (“{{ f.term }}”){% endif %}</small></p>{% endfor %}{% endif %}
   <div class="buttons">
-    <form method="post" action="/clips/{{ c.id }}/title" class="inline"><input name="title" value="{{ c.title or '' }}" placeholder="Working title"><button class="btn ghost">Save title</button></form>
     <form method="post" action="/clips/{{ c.id }}/keep"><input type="hidden" name="on" value="{{ '0' if c.retain else '1' }}"><button class="btn ghost">{{ 'Un-keep' if c.retain else 'Keep (never auto-delete)' }}</button></form>
   </div>
+</section>
+<section class="card" id="hook-title">
+  {% set ti = (c.title_json|fromjson) if c.title_json else {} %}
+  <h2>Hook title <small class="muted">(top band of the video)</small></h2>
+  <p>{% if c.title %}<b>{{ c.title }}</b>{% else %}<span class="muted">No title{% if c.title_status == 'manual_needed' %} - nothing in this passage could be turned into an accurate hook; please enter one{% endif %}.</span>{% endif %}
+    <small class="muted">· {{ 'written by you' if c.title_source == 'owner' else 'proposed by the engine' }}{% if ti.method %} ({{ ti.method.replace('_',' ') }}){% endif %}{% if c.title_locked %} · 🔒 locked{% endif %}{% if c.title_status == 'approved' %} · approved{% endif %}</small></p>
+  {% if ti.support %}<p><small class="muted">Built from this part of the clip: “{{ ti.support }}”</small></p>{% endif %}
+  {% for w in ti.warnings or [] %}<p class="err"><small>{{ w }}</small></p>{% endfor %}
+  <form method="post" action="/clips/{{ c.id }}/title" class="inline"><input name="title" value="{{ c.title or '' }}" placeholder="Write or edit the title (*word* / **word** for emphasis)" size="48"><button class="btn">Save my title</button></form>
+  <div class="buttons">
+    {% if c.title and c.title_status != 'approved' %}<form method="post" action="/clips/{{ c.id }}/title/approve"><button class="btn primary">Accept &amp; lock</button></form>{% endif %}
+    {% if c.title_locked %}<form method="post" action="/clips/{{ c.id }}/title/unlock"><button class="btn ghost">Unlock</button></form>
+    {% else %}<form method="post" action="/clips/{{ c.id }}/title/regenerate"><button class="btn ghost">Regenerate suggestions</button></form>{% endif %}
+    {% if c.title %}<form method="post" action="/clips/{{ c.id }}/title/remove"><button class="btn ghost">Remove title</button></form>{% endif %}
+  </div>
+  {% if ti.alternatives %}<p><small>Alternatives (each checked against the clip):</small></p>
+  <div class="buttons">{% for a in ti.alternatives %}<form method="post" action="/clips/{{ c.id }}/title/choose"><input type="hidden" name="text" value="{{ a }}"><button class="btn ghost">{{ a }}</button></form>{% endfor %}</div>{% endif %}
+  <p class="muted"><small>Titles are drawn only if the brand's title style is on (Settings). Saving a change re-renders an unapproved clip; approved clips are never silently changed. Human review before publication remains mandatory.</small></p>
 </section>
 <section class="card">
   <h2>Platform versions</h2>

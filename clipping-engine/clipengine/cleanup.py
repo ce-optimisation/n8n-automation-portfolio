@@ -89,6 +89,68 @@ class LocalCleanup:
         self.db.set_kv("local_cleanup_enabled", "1" if on else "0")
         self._event(0, "manual", f"automatic local cleanup {'enabled' if on else 'disabled'} by the owner")
 
+    # ---- Drive-only archive mode (owner opt-in, separate from platform-handoff cleanup) ------------------
+    RESTORE_TEST_MAX_AGE = 30 * 86400
+    RESTORE_TEST_MAX_BYTES = 600_000_000
+
+    def archive_enabled(self) -> bool:
+        return self.db.get_kv("drive_archive_enabled", "0") == "1"
+
+    def set_archive(self, on: bool) -> None:
+        self.db.set_kv("drive_archive_enabled", "1" if on else "0")
+        self._event(0, "manual", f"Drive-only archive mode {'enabled' if on else 'disabled'} by the owner")
+
+    def restore_test_status(self) -> dict:
+        try:
+            t = json.loads(self.db.get_kv("drive_archive_restore_test") or "{}")
+        except ValueError:
+            t = {}
+        fresh = bool(t.get("ok")) and self.clock() - float(t.get("at") or 0) < self.RESTORE_TEST_MAX_AGE
+        return {**t, "fresh": fresh}
+
+    def restore_test(self) -> dict:
+        """Prove that a Drive master really comes back: download the smallest verified master to scratch, compare size and
+        checksum with what was verified at upload, confirm it decodes, then discard the scratch copy. Touches no clip."""
+        from . import media
+        rows = self.db.query("SELECT * FROM cloud_objects WHERE owner_kind='clip' AND kind='video' AND state='verified' "
+                             "AND remote_id IS NOT NULL AND local_md5 IS NOT NULL AND size > 0 AND size <= ? ORDER BY size LIMIT 1",
+                             (self.RESTORE_TEST_MAX_BYTES,))
+        res = {"at": self.clock(), "ok": False}
+
+        def done(why, **kw):
+            res.update(reason=why, **kw)
+            self.db.set_kv("drive_archive_restore_test", json.dumps(res))
+            self._event(0, "restore_test", ("passed: " if res["ok"] else "failed: ") + why)
+            return res
+        if not rows:
+            return done("no verified Drive master small enough to test with")
+        if not self.cloud.provider.connected():
+            return done("Google Drive is not connected")
+        row = rows[0]
+        scratch = self.settings.work_dir / "restore_test.partial"
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        scratch.unlink(missing_ok=True)
+        try:
+            meta = self.cloud.provider.metadata(row["remote_id"])
+            if meta.get("md5Checksum") != row["local_md5"] or int(meta.get("size") or -1) != row["size"]:
+                return done("the Drive copy does not match what was verified", clip_id=row["owner_id"])
+            self.cloud.provider.download(row["remote_id"], scratch)
+            if scratch.stat().st_size != row["size"] or md5_file(scratch) != row["local_md5"]:
+                return done("the downloaded copy failed the size/checksum check", clip_id=row["owner_id"])
+            try:
+                info = media.probe(scratch)
+                playable = bool(info["has_video"] and info["has_audio"] and info["duration"] > 0.5)
+            except Exception:  # noqa: BLE001
+                playable = False
+            if not playable:
+                return done("the downloaded copy did not play as a video", clip_id=row["owner_id"])
+            res["ok"] = True
+            return done("a Drive master was downloaded, matched its checksum and played", clip_id=row["owner_id"], bytes=row["size"])
+        except Exception as e:  # noqa: BLE001
+            return done(f"download failed ({type(e).__name__})", clip_id=row["owner_id"])
+        finally:
+            scratch.unlink(missing_ok=True)
+
     def grace_seconds(self) -> float:
         try:
             hours = float(self.db.get_kv("local_cleanup_grace_hours") or self.settings.cleanup_grace_hours)
@@ -268,13 +330,30 @@ class LocalCleanup:
         gate("consistent", not bad and rec_ok, "records agree" if not bad and rec_ok else
              "; ".join([d["reason"] for d in bad] + ([] if rec_ok else ["the clip's recording record is missing"])))
         pending = [d for d in active if not d["ok"]]
-        if not active:
+        handoffs_done = bool(active) and not pending
+        via_archive = False
+        if self.archive_enabled() and not handoffs_done:
+            rt = self.restore_test_status()
+            gate("archive_restore_test", rt["fresh"], "Drive-only archive: a restore test passed in the last 30 days"
+                 if rt["fresh"] else "Drive-only archive needs a passing restore test first (Storage page)")
+            via_archive = bool(rt["fresh"] and clip["reviewed_at"])
+            if rt["fresh"] and not clip["reviewed_at"]:
+                gate("archive_reviewed", False, "Drive-only archive applies only to clips you have reviewed and approved")
+        if via_archive:
+            gate("destinations", True, "Drive-only archive mode (owner-enabled): platform handoffs are not required; "
+                                       "restore it from Drive whenever you need to publish")
+        elif not active:
             gate("destinations", False, "no required destination has been chosen for this clip (add one, or exclude platforms explicitly)")
         else:
             gate("destinations", not pending, "every required destination is complete" if not pending else
                  "; ".join(f"{d['label']}: {d['reason']}" for d in pending))
         confirmed = [d["confirmed_at"] for d in active if d["ok"] and d["confirmed_at"]]
-        ready_at = (max(confirmed) + self.grace_seconds()) if active and not pending and confirmed else None
+        if handoffs_done and confirmed:
+            ready_at = max(confirmed) + self.grace_seconds()
+        elif via_archive:
+            ready_at = clip["reviewed_at"] + self.grace_seconds()
+        else:
+            ready_at = None
         in_grace = ready_at is not None and now < ready_at
         if clip["restore_grace_until"] and now < clip["restore_grace_until"]:
             ready_at = max(ready_at or 0, clip["restore_grace_until"])
@@ -284,10 +363,11 @@ class LocalCleanup:
              ("waiting for the recovery window to pass" if ready_at is not None else "no completed destination yet"))
         blockers = [f"{g['gate']}: {g['detail']}" for g in gates if not g["ok"]]
         eligible = not blockers
-        state = self._state(clip, gates, in_grace, bool(active), bool(pending), ok_m, eligible, now)
+        state = self._state(clip, gates, in_grace, bool(active) or via_archive, bool(pending) and not via_archive, ok_m, eligible, now)
         return {"clip_id": clip_id, "state": state, "eligible": eligible, "gates": gates, "blockers": blockers,
                 "bytes": path.stat().st_size if path and path.is_file() else 0, "destinations": dests, "ready_at": ready_at,
-                "evidence": ev, "path": str(path) if path else None, "enabled_for_clip": self._auto_on(clip) or manual}
+                "evidence": ev, "path": str(path) if path else None, "via_archive": via_archive,
+                "enabled_for_clip": self._auto_on(clip) or manual or (via_archive and clip["cleanup_auto"] != 0)}
 
     def _auto_on(self, clip) -> bool:
         if clip["cleanup_auto"] is not None:
@@ -345,7 +425,7 @@ class LocalCleanup:
             return {"deleted": False, "reason": "another cleanup is already running for this clip"}
         evidence = {"path": ev["path"], "bytes": ev["bytes"], "drive": ev.get("evidence"),
                     "destinations": [{k: d[k] for k in ("platform", "state", "method", "confirmed_at", "account_id")}
-                                     for d in ev["destinations"] if d["required"]], "manual": manual}
+                                     for d in ev["destinations"] if d["required"]], "manual": manual, "mode": "drive_only_archive" if ev.get("via_archive") else "after_handoffs"}
         self._event(clip_id, "deleting", "all gates passed; recording the decision before deleting", evidence)
         # re-check everything now that we hold the claim (a destination or job may have appeared)
         again = self.evaluate(clip_id, deep=False, manual=manual)
@@ -530,7 +610,8 @@ class LocalCleanup:
         from . import storage
         out = {"present": [], "totals": {"local_bytes": 0, "present": 0, "removed": 0, "removed_bytes": 0},
                "by_state": {}, "recoverable_now": 0, "in_grace": 0, "blocked_by_destinations": 0, "held": 0,
-               "enabled": self.enabled(), "grace_hours": self.grace_seconds() / 3600,
+               "enabled": self.enabled(), "archive": self.archive_enabled(), "restore_test": self.restore_test_status(),
+               "grace_hours": self.grace_seconds() / 3600,
                "free_bytes": storage.free_bytes(self.settings.data_dir)}
         for c in self.db.query("SELECT id FROM clips WHERE video_path IS NOT NULL OR local_deleted_at IS NOT NULL"):
             clip = self.db.clip(c["id"])

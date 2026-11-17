@@ -93,6 +93,14 @@ def run(settings, *, do_network: bool = True) -> tuple[list[str], list[str]]:
         L.append(f"  {plat:8} {c['state'].upper()}" + (f"  add to .env: {', '.join(c['missing'])}" if c["missing"] else ""))
         if c["missing"]:
             todo.append(f"Add {', '.join(c['missing'])} to .env (free developer registration), then restart and re-run this check.")
+    if do_network and any(c["state"] == "complete" for c in creds.values()):
+        from . import credentials_cli
+        L.append("== Authentication (one real request per platform; pass/fail only)")
+        for plat, r in credentials_cli.authentication_test(settings).items():
+            if r["state"] != "skipped":
+                L.append(f"  {plat:8} {r['state'].upper():7} {r['detail']}")
+                if r["state"] == "failed":
+                    todo.append(f"Fix the {plat} credentials ({r['detail']}).")
     ready = ver is not None and ver >= SCHEMA_VERSION
     if ready and do_network and any(c["state"] == "complete" for c in creds.values()):
         from .db import Database

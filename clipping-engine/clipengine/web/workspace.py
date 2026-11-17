@@ -518,6 +518,17 @@ def register(app, core, page, templates) -> None:
         core.cleanup.set_grace_hours(min(max(grace_hours, 0.0), 24 * 30))
         return _go("/storage", msg="Finished-clip cleanup settings saved." + (" Automatic cleanup is ON." if enabled == "1" else " Automatic cleanup is OFF."))
 
+    @app.post("/storage/archive")
+    def storage_archive(enabled: str = Form("")):
+        core.cleanup.set_archive(enabled == "1")
+        return _go("/storage", msg="Drive-only archive is ON: reviewed clips with a verified Drive master may be removed from this computer."
+                   if enabled == "1" else "Drive-only archive is OFF.")
+
+    @app.post("/storage/archive/test")
+    def storage_archive_test():
+        r = core.cleanup.restore_test()
+        return _go("/storage", **({"msg": "Restore test passed: " + r["reason"]} if r["ok"] else {"err": "Restore test failed: " + r["reason"]}))
+
     @app.post("/storage/cleanup/run")
     def storage_cleanup_run():
         res = core.cleanup.run()
@@ -528,21 +539,72 @@ def register(app, core, page, templates) -> None:
         db.update("clips", cid, retain=1 if on == "1" else 0)
         return _go(f"/clips/{cid}", msg="Kept: exempt from automatic expiry." if on == "1" else "Normal retention restored.")
 
+    def _title_saved(c, cid: int, what: str):
+        """Re-render so the title appears - but only an unapproved, unpublished clip; an approved one is never silently changed."""
+        if c["status"] == "ready" and not c["published_at"] and c["video_path"] and not c["local_deleted_at"]:
+            db.update("clips", cid, render_rev=c["render_rev"] + 1, status="pending_render", reviewed_at=None)
+            core.pipeline.enqueue_render(cid)
+            return _go(f"/clips/{cid}", msg=f"{what}; re-rendering with it.")
+        return _go(f"/clips/{cid}", msg=what + "." + (" Approved clips are not re-rendered automatically." if c["status"] == "approved" else ""))
+
     @app.post("/clips/{cid}/title")
     def clip_title(cid: int, title: str = Form("")):
-        """Working title; also the top title burned into the video where the brand's title style is on. Wording is only
-        tidied (never rewritten). A clip that is not yet approved or published is re-rendered so the title appears;
-        an approved clip is never silently changed."""
+        """Owner-written title (also the top title burned into the video where the brand's title style is on). Wording is
+        only tidied (never rewritten). Owner titles are locked: reprocessing never overwrites them."""
         c = db.clip(cid)
         if not c:
             raise HTTPException(404)
         clean = titles.format_title(title, auto_emphasis=False)
-        db.update("clips", cid, title=clean or None)
-        if c["status"] == "ready" and not c["published_at"] and c["video_path"] and not c["local_deleted_at"]:
-            db.update("clips", cid, render_rev=c["render_rev"] + 1, status="pending_render", reviewed_at=None)
-            core.pipeline.enqueue_render(cid)
-            return _go(f"/clips/{cid}", msg="Title saved; re-rendering with it.")
-        return _go(f"/clips/{cid}", msg="Title saved." + (" Approved clips are not re-rendered automatically." if c["status"] == "approved" else ""))
+        db.update("clips", cid, title=clean or None, title_source="owner" if clean else c["title_source"],
+                  title_status="approved" if clean else "removed", title_locked=1 if clean else 0)
+        return _title_saved(c, cid, "Title saved")
+
+    @app.post("/clips/{cid}/title/choose")
+    def clip_title_choose(cid: int, text: str = Form(...)):
+        """Pick one of the engine's own (verified) alternatives; it stays a generated title until the owner approves it."""
+        c = db.clip(cid)
+        if not c:
+            raise HTTPException(404)
+        info = json.loads(c["title_json"] or "{}")
+        offered = {x["text"] for x in info.get("candidates", []) if x.get("accepted")}
+        if text not in offered:
+            return _go(f"/clips/{cid}", err="That wording is not one of the verified suggestions.")
+        db.update("clips", cid, title=text, title_status="proposed", title_source="generated")
+        return _title_saved(c, cid, "Alternative chosen")
+
+    @app.post("/clips/{cid}/title/approve")
+    def clip_title_approve(cid: int, lock: str = Form("1")):
+        c = db.clip(cid)
+        if not c or not c["title"]:
+            raise HTTPException(404)
+        db.update("clips", cid, title_status="approved", title_locked=1 if lock == "1" else 0)
+        return _go(f"/clips/{cid}", msg="Title approved and locked: reprocessing will not change it." if lock == "1" else "Title approved.")
+
+    @app.post("/clips/{cid}/title/unlock")
+    def clip_title_unlock(cid: int):
+        db.update("clips", cid, title_locked=0)
+        return _go(f"/clips/{cid}", msg="Title unlocked.")
+
+    @app.post("/clips/{cid}/title/remove")
+    def clip_title_remove(cid: int):
+        c = db.clip(cid)
+        if not c:
+            raise HTTPException(404)
+        db.update("clips", cid, title=None, title_status="removed", title_locked=1)
+        return _title_saved(c, cid, "Title removed")
+
+    @app.post("/clips/{cid}/title/regenerate")
+    def clip_title_regenerate(cid: int):
+        c = db.clip(cid)
+        if not c:
+            raise HTTPException(404)
+        if c["title_locked"]:
+            return _go(f"/clips/{cid}", err="This title is locked. Unlock it first to regenerate suggestions.")
+        rec = db.recording(c["recording_id"])
+        f = core.pipeline.hook_fields(rec, c["transcript_text"] or "", (c["title_rev"] or 0) + 1)
+        db.update("clips", cid, **f)
+        return _title_saved(db.clip(cid), cid, "New suggestions generated") if f["title"] else _go(
+            f"/clips/{cid}", msg="No verified title could be produced from this passage; please enter one.")
 
     @app.post("/clips/{cid}/package")
     def clip_package(cid: int, platform: str = Form(...), account_id: str = Form("")):

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -516,7 +516,13 @@ MIGRATIONS = [
     ("monitor_sources", "notes", "TEXT"),                          # owner/roster notes (editable)
     # v7: context-complete selection and verified-upload local cleanup
     ("clips", "completeness_json", "TEXT"),                        # PASS/REVIEW/REJECT with per-dimension reasons
-    ("clips", "duration_class", "TEXT"),                           # below | within | above (preferred range)
+    ("clips", "duration_class", "TEXT"),
+    # v8: automatic hook titles (generated vs owner-written, lock, evidence)
+    ("clips", "title_source", "TEXT"),                              # generated | owner
+    ("clips", "title_status", "TEXT"),                              # proposed | neutral | manual_needed | approved | removed
+    ("clips", "title_locked", "INTEGER NOT NULL DEFAULT 0"),
+    ("clips", "title_rev", "INTEGER NOT NULL DEFAULT 0"),
+    ("clips", "title_json", "TEXT"),                                # candidates, support passage, method, warnings                           # below | within | above (preferred range)
     ("clips", "keep_local", "INTEGER NOT NULL DEFAULT 0"),         # owner: never remove the local video
     ("clips", "local_deleted_at", "REAL"),                         # the local MP4 was removed after verified handoff
     ("clips", "cleanup_state", "TEXT"),                            # see cleanup.STATES
