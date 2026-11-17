@@ -11,7 +11,7 @@ import time
 from fastapi import Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import editorial, platforms, storage
+from .. import editorial, platforms, portfolio, storage
 from ..publishing import packages as pk
 
 
@@ -251,6 +251,7 @@ def register(app, core, page, templates) -> None:
         yt = {r["id"]: core.packages.youtube_oauth(r["id"]).connected() for r in rows if r["platform"] == "youtube"}
         return page(request, "accounts.html", rows=rows, yt=yt, msg=msg, err=err,
                     niches=db.query("SELECT key, name FROM niches ORDER BY name"),
+                    brand_names=[(k, b["name"]) for k, b in portfolio.BRANDS.items()],
                     google_ready=bool(settings.google_client_id and settings.google_client_secret))
 
     @app.post("/accounts")
@@ -268,9 +269,26 @@ def register(app, core, page, templates) -> None:
             return _go("/accounts", err="That account is already registered.")
         return _go("/accounts", msg="Account added. It receives only clips from the niches mapped to it.")
 
+    @app.post("/accounts/record")
+    async def account_record(request: Request):
+        """Record the owner's real account for one of the six brands' slots (nothing is created on any platform)."""
+        form = await request.form()
+        try:
+            portfolio.set_account(db, str(form.get("brand") or ""), str(form.get("platform") or ""),
+                                  str(form.get("handle") or "").lstrip("@"), str(form.get("display_name") or "")[:120],
+                                  str(form.get("account_id") or "")[:80])
+        except ValueError as e:
+            return _go("/accounts", err=str(e))
+        return _go("/accounts", msg="Account recorded for that brand. It still needs your authorisation to connect.")
+
     @app.post("/accounts/{aid}/niches")
     async def account_niches(request: Request, aid: int):
         form = await request.form()
+        acct = db.one("SELECT brand FROM social_accounts WHERE id=?", (aid,))
+        own = portfolio.BRANDS.get((acct["brand"] if acct else "") or "")
+        if own and set(form.getlist("niches")) - {own["niche"]}:
+            return _go("/accounts", err=f"This is the {own['name']} account: it can only receive {own['name']} clips. "
+                                        "Brands never share an account.")
         db.update("social_accounts", aid, niches_json=json.dumps(form.getlist("niches")),
                   brand=str(form.get("brand") or "")[:120])
         return _go("/accounts", msg="Mapping saved.")

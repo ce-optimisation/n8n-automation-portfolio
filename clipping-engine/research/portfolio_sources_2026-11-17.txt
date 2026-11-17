@@ -1,0 +1,80 @@
+CLAUDE CODE - SOURCE URL INPUTS - 17 NOVEMBER 2026
+Six approved brands; 18 creators/shows; 27 source records. This is an owner-supplied INPUT LIST, not API confirmation.
+IMPORTANT: source identities below are repository candidate handles, not verified official API channel IDs unless explicitly noted.
+Resolve every identity through the official API / exact official name; require owner confirmation for unresolved Twitch/Kick identities.
+Do not add creators. Podcast RSS feeds should be discovered, not fabricated. Discovery NEVER grants acquisition rights.
+Add Alex Jones Rumble URL https://rumble.com/c/TheAlexJonesShowLive to the existing Alex Jones record using owner_set; retain NEEDS_VERIFICATION until engine evidence confirms.
+Keep existing Nick Fuentes Rumble source and permission status unchanged. Do not auto-enable acquisition.
+
+
+## America First Monitor
+- Nick Fuentes [Rumble]: https://rumble.com/c/nickjfuentes
+  Evidence/status: Owner-configured in engine; existing Rumble listing tested
+- Alex Jones [Rumble]: https://rumble.com/c/TheAlexJonesShowLive
+  Evidence/status: Self-identified as official in 13 June 2026 broadcast; validate via engine
+- Tim Dillon [YouTube]: https://www.youtube.com/@TimDillonShow
+  Evidence/status: Repository candidate handle; official API validation pending
+- Tim Dillon [Podcast]: AUTO-DISCOVER: The Tim Dillon Show
+  Evidence/status: Find actual public RSS via Apple directory; exact-title match
+
+## Afterlive
+- IShowSpeed [YouTube]: https://www.youtube.com/@IShowSpeed
+  Evidence/status: Repository candidate handle; official API validation pending
+- IShowSpeed [Twitch]: https://www.twitch.tv/ishowspeed
+  Evidence/status: Repository candidate handle; official API + owner verification pending
+- Kai Cenat [Twitch]: https://www.twitch.tv/kaicenat
+  Evidence/status: Repository candidate handle; official API + owner verification pending
+- Kai Cenat [YouTube]: https://www.youtube.com/@KaiCenat
+  Evidence/status: Repository candidate handle; official API validation pending
+- N3on [Kick]: https://kick.com/n3on
+  Evidence/status: Official-looking Kick page found; API + owner verification pending
+
+## Operator Notes
+- Steven Bartlett / Diary of a CEO [YouTube]: https://www.youtube.com/@TheDiaryOfACEO
+  Evidence/status: Repository candidate handle; official API validation pending
+- Steven Bartlett / Diary of a CEO [Podcast]: AUTO-DISCOVER: The Diary Of A CEO with Steven Bartlett
+  Evidence/status: Find public RSS via Apple directory; exact-title match
+- Alex Hormozi [YouTube]: https://www.youtube.com/@AlexHormozi
+  Evidence/status: Repository candidate handle; official API validation pending
+- Alex Hormozi [Podcast]: AUTO-DISCOVER: The Game with Alex Hormozi
+  Evidence/status: Find public RSS via Apple directory; exact-title match
+- All-In Podcast [YouTube]: https://www.youtube.com/@allin
+  Evidence/status: Repository candidate handle; official API validation pending
+- All-In Podcast [Podcast]: AUTO-DISCOVER: All-In with Chamath, Jason, Sacks & Friedberg
+  Evidence/status: Find public RSS via Apple directory; exact-title match
+
+## The Spec Edit
+- Mrwhosetheboss [YouTube]: https://www.youtube.com/@Mrwhosetheboss
+  Evidence/status: Repository candidate handle; official API validation pending
+- MKBHD [YouTube]: https://www.youtube.com/@mkbhd
+  Evidence/status: Repository candidate handle; official API validation pending
+- Linus Tech Tips [YouTube]: https://www.youtube.com/@LinusTechTips
+  Evidence/status: Repository candidate handle; official API validation pending
+
+## Dial Study
+- Nico Leonard [YouTube]: https://www.youtube.com/@NicoLeonard
+  Evidence/status: Repository candidate handle; official API validation pending
+- Teddy Baldassarre [YouTube]: https://www.youtube.com/@TeddyBaldassarre
+  Evidence/status: Repository candidate handle; official API validation pending
+- Wristwatch Revival [YouTube]: https://www.youtube.com/@WristwatchRevival
+  Evidence/status: Repository candidate handle; official API validation pending
+
+## Open Floor
+- Shawn Ryan Show [YouTube]: https://www.youtube.com/@ShawnRyanShow
+  Evidence/status: Repository candidate handle; official API validation pending
+- Shawn Ryan Show [Podcast]: AUTO-DISCOVER: Shawn Ryan Show
+  Evidence/status: Find public RSS via Apple directory; exact-title match
+- Joe Rogan Experience [YouTube]: https://www.youtube.com/@joerogan
+  Evidence/status: Repository candidate handle; channel branded PowerfulJRE; API validation pending
+- Joe Rogan Experience [Podcast]: AUTO-DISCOVER: The Joe Rogan Experience
+  Evidence/status: Find public RSS if available; no bypass of exclusive distribution
+- Modern Wisdom / Chris Williamson [YouTube]: https://www.youtube.com/@ChrisWillx
+  Evidence/status: Repository candidate handle; official API validation pending
+- Modern Wisdom / Chris Williamson [Podcast]: AUTO-DISCOVER: Modern Wisdom
+  Evidence/status: Find public RSS via Apple directory; exact-title match
+
+REFERENCE SOURCES
+Source rosters: repo clipping-engine/clipengine/portfolio.py (session 7 branch claude/wizardly-mccarthy-i5kf4r, commit f133367)
+Alex Jones Rumble: channel About page calls itself official; Alex Jones himself referred to rumble.com/TheAlexJonesShowLive as new official channel in June 13, 2026 broadcast transcript.
+Sources: https://rumble.com/c/TheAlexJonesShowLive/about ; https://fight.fudgie.org/search/show/an/episode/20260613_Sat_v792er6
+Title reference provided separately: what_s_going_on_in_little_palestine.png (original mockup). User wants title 20% smaller than pictured; bottom production captions 30% larger than previous setting.

@@ -1,36 +1,70 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+.pf-src{border-top:1px solid #8883;padding:.6rem 0}.pf-src:first-of-type{border-top:0}
+.pf-meta{font-size:.85rem;line-height:1.45;word-break:break-word;overflow-wrap:anywhere}
+.pf-meta dt{display:inline;font-weight:600}.pf-meta dd{display:inline;margin:0 .6rem 0 .15rem}
+.pf-act{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem}.pf-act form{margin:0}
+.pf-act button,.pf-edit button{min-height:44px;padding:0 .9rem}
+.pf-edit input,.pf-edit textarea{width:100%;box-sizing:border-box;font-size:16px;min-height:44px}
+.pf-edit label{display:block;margin:.5rem 0 .15rem;font-size:.85rem}
+.pf-err{color:#b3261e}.pf-cred li{margin:.2rem 0}
+</style>
 <h1>Portfolio monitor</h1>
-{% if msg %}<section class="card">{{ msg }}</section>{% endif %}
-<section class="card muted">Status here is what the engine has actually observed, not what is configured. <b>Discovery</b> (what exists, who is live)
-is separate from <b>acquisition</b> (permission to retrieve footage): finding a video never authorises downloading it.
+{% if msg %}<section class="card" role="status">{{ msg }}</section>{% endif %}
+<section class="card muted">Status here is what the engine has <b>actually observed</b>, not what is configured. <b>Discovery</b> (what exists, who is live)
+is separate from <b>acquisition</b> (permission to retrieve footage): finding a video never authorises downloading it, and every clip still needs your review.
 {% if active_events %}<br><b>Priority event active:</b> {% for e in active_events %}{{ e.name }} (until {{ e.ends_at[:10] }}){% endfor %}{% endif %}
 <br><small>YouTube quota used today: {{ quota }} / {{ quota_limit }} units budgeted.</small></section>
+<section class="card"><h2>Connect the platforms</h2>
+<ul class="list pf-cred">{% for n, label in [('youtube','YouTube API key (YOUTUBE_API_KEY)'),('twitch','Twitch client ID + secret (TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET)'),('kick','Kick client ID + secret (KICK_CLIENT_ID / KICK_CLIENT_SECRET)')] %}
+<li><b>{{ n|capitalize }}</b>: {% if creds[n] %}<span class="badge st-ready">credentials present</span>{% else %}<span class="badge">NEEDS_CREDENTIALS</span> {{ label }}{% endif %}</li>{% endfor %}</ul>
+<small>Add the keys to <code>.env</code> on the laptop (never in chat), restart, then run <code>python scripts\portfolio_admin.py verify</code> on the laptop or press "Check now" on a source. Twitch/Kick accounts that only name-match need your confirmation below.</small>
+<form method="post" action="/portfolio/import-roster" class="pf-act"><button class="btn ghost">Re-import source roster</button></form></section>
+{% if held %}<section class="card"><b>Held work:</b> {% for h in held %}{{ h.brand_key }} · {{ h.state }}: {{ h.n }}{% if not loop.last %} &nbsp;|&nbsp; {% endif %}{% endfor %}</section>{% endif %}
 <p>{% for b in brands %}<a class="badge {{ 'st-ready' if b.key == brand else '' }}" href="/portfolio?brand={{ b.key }}">{{ b.name }}{% if qcount.get(b.key) %} · {{ qcount[b.key] }} queued{% endif %}</a> {% endfor %}
 <a class="badge" href="/portfolio">All</a></p>
-{% set ns = namespace(b='') %}
+{% set ns = namespace(b='', c='') %}
 {% for r in rows %}
-{% if r.brand_key != ns.b %}{% set ns.b = r.brand_key %}<h2>{{ (brands|selectattr('key','equalto',r.brand_key)|first).name }}</h2>{% endif %}
-<section class="card">
-  <b>{{ r.creator }}</b> — {{ r.platform }}
+{% if r.brand_key != ns.b %}{% if ns.b %}</section>{% endif %}{% set ns.b = r.brand_key %}{% set ns.c = '' %}<h2>{{ (brands|selectattr('key','equalto',r.brand_key)|first).name }}</h2><section class="card">{% endif %}
+{% if r.creator_uid != ns.c %}{% set ns.c = r.creator_uid %}<h3 style="margin:.8rem 0 .2rem">{{ r.creator }}</h3>{% endif %}
+<div class="pf-src">
+  <b>{{ r.platform }}</b>
   <span class="badge {{ 'st-ready' if r.state in ('MONITORING','DISCOVERY_ONLY') else '' }}" title="{{ state_help.get(r.state, '') }}">{{ r.state }}</span>
   {% if r.live_state == 'LIVE' %}<span class="badge st-ready">LIVE</span>{% endif %}
-  <br><small>
-  identity: {{ r.verification }}{% if r.channel_name %} · {{ r.channel_name }}{% endif %}{% if r.platform_id %} · id {{ r.platform_id }}{% endif %}
-  {% if r.canonical_url %}· <a href="{{ r.canonical_url }}" rel="noopener">{{ r.canonical_url }}</a>{% endif %}<br>
-  acquisition: {{ r.acquisition }} · last good check: {{ r.last_success|int if r.last_success else 'never' }}
-  {% if r.latest_media_id %}· latest: {{ r.latest_media_id }}{% endif %}
-  {% if r.live_title %}<br>live now: {{ r.live_title }}{% if r.live_category %} ({{ r.live_category }}){% endif %}{% endif %}
-  {% if r.error_code %}<br><b>{{ r.error_code }}</b>: {{ r.last_error }} (failures in a row: {{ r.consecutive_errors }}){% endif %}
-  {% if r.requirement and r.state in ('NEEDS_VERIFICATION','NEEDS_CREDENTIALS') %}<br>Needs: {{ r.requirement }}{% endif %}
-  </small>
-  <form method="post" action="/portfolio/{{ r.id }}/toggle" style="display:inline"><input type="hidden" name="enabled" value="{{ 0 if r.monitoring_enabled else 1 }}"><button>{{ 'Disable' if r.monitoring_enabled else 'Enable' }}</button></form>
-  <form method="post" action="/portfolio/{{ r.id }}/check" style="display:inline"><button>Check now</button></form>
-  {% if r.verification != 'VERIFIED' and r.platform_id %}<form method="post" action="/portfolio/{{ r.id }}/confirm" style="display:inline"><input type="hidden" name="note" value="Confirmed on the dashboard"><button>Confirm official</button></form>{% endif %}
-</section>
-{% endfor %}
+  <dl class="pf-meta">
+    <dt>Identity</dt><dd>{{ r.verification }}{% if r.channel_name %} · {{ r.channel_name }}{% endif %}{% if r.platform_id %} · id {{ r.platform_id }}{% endif %}</dd>
+    <dt>Address</dt><dd>{% if r.canonical_url %}<a href="{{ r.canonical_url }}" rel="noopener">{{ r.canonical_url }}</a>{% elif r.candidate_handle %}candidate {{ r.candidate_handle }} (unverified){% else %}none yet{% endif %}</dd><br>
+    <dt>Acquisition</dt><dd>{{ r.acquisition }}</dd>
+    <dt>Last good check</dt><dd>{{ r.last_success|int if r.last_success else 'never' }}</dd>
+    <dt>Discovered</dt><dd>{{ r.items }}</dd>
+    {% if r.latest_media_id %}<dt>Latest</dt><dd>{{ r.latest_media_id }}</dd>{% endif %}
+    {% if r.live_title %}<br><dt>Live now</dt><dd>{{ r.live_title }}{% if r.live_category %} ({{ r.live_category }}){% endif %}</dd>{% endif %}
+    {% if r.error_code %}<br><span class="pf-err"><b>{{ r.error_code }}</b>: {{ r.last_error }} (failures in a row: {{ r.consecutive_errors }})</span>{% endif %}
+    {% if r.requirement and r.state in ('NEEDS_VERIFICATION','NEEDS_CREDENTIALS') %}<br><dt>Needs</dt><dd>{{ r.requirement }}</dd>{% endif %}
+    {% if r.notes %}<br><dt>Notes</dt><dd>{{ r.notes }}</dd>{% endif %}
+  </dl>
+  <div class="pf-act">
+    <form method="post" action="/portfolio/{{ r.id }}/toggle"><input type="hidden" name="enabled" value="{{ 0 if r.monitoring_enabled else 1 }}"><button>{{ 'Disable' if r.monitoring_enabled else 'Enable' }}</button></form>
+    <form method="post" action="/portfolio/{{ r.id }}/check"><button>Check now</button></form>
+    {% if r.verification != 'VERIFIED' and r.platform_id %}<form method="post" action="/portfolio/{{ r.id }}/confirm"><input type="hidden" name="note" value="Confirmed on the dashboard"><button>Confirm official</button></form>{% endif %}
+    {% if r.platform == 'rumble' and r.canonical_url and not r.legacy_source_id %}<form method="post" action="/portfolio/{{ r.id }}/link-rumble"><button>Add to Sources (switched off)</button></form>{% endif %}
+  </div>
+  <details class="pf-edit"><summary>Edit this source</summary>
+    <form method="post" action="/portfolio/{{ r.id }}/edit">
+      {% if r.platform != 'podcast' and r.platform != 'rumble' %}<label for="h{{ r.id }}">Candidate handle</label><input id="h{{ r.id }}" name="handle" value="{{ r.candidate_handle or '' }}" autocapitalize="off" autocorrect="off">{% endif %}
+      <label for="u{{ r.id }}">Channel / feed URL</label><input id="u{{ r.id }}" name="url" type="url" value="{{ r.canonical_url or '' }}" autocapitalize="off">
+      <label for="p{{ r.id }}">Priority (0-100)</label><input id="p{{ r.id }}" name="priority" type="number" min="0" max="100" inputmode="numeric" value="{{ r.priority }}">
+      <label for="n{{ r.id }}">Notes</label><textarea id="n{{ r.id }}" name="notes" rows="2" maxlength="500">{{ r.notes or '' }}</textarea>
+      <p><small>Changing the handle or URL sends the source back to NEEDS_VERIFICATION. Editing never grants permission or marks an identity verified.</small></p>
+      <button class="btn">Save</button>
+    </form>
+  </details>
+</div>
+{% endfor %}{% if rows %}</section>{% endif %}
 <h2>Newly discovered</h2>
-<ul class="list">{% for d in new_items %}<li><b>{{ d.creator }}</b> · {{ d.kind }} · {{ d.title }} <small>({{ d.state }}{% if d.priority_tags %}, {{ d.priority_tags }}{% endif %}{% if d.detail %} — {{ d.detail }}{% endif %})</small></li>{% else %}<li>Nothing discovered yet.</li>{% endfor %}</ul>
+<ul class="list">{% for d in new_items %}<li><b>{{ d.creator }}</b> · {{ d.kind }} · {{ d.title }} <small>({{ d.state }}{% if d.priority_tags %}, {{ d.priority_tags }}{% endif %}{% if d.detail %} — {{ d.detail }}{% endif %})</small>
+{% if d.state == 'failed' %}<form method="post" action="/portfolio/item/{{ d.id }}/retry" style="display:inline"><button>Retry</button></form>{% endif %}</li>{% else %}<li>Nothing discovered yet.</li>{% endfor %}</ul>
 <h2>Recent transitions &amp; errors</h2>
 <ul class="list">{% for e in evs %}<li><small>{{ e.ts|int }}</small> {{ e.kind }} · {{ e.uid or '' }} — {{ e.message }}</li>{% else %}<li>No events yet.</li>{% endfor %}</ul>
 {% endblock %}

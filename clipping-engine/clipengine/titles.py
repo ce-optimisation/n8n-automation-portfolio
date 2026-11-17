@@ -1,48 +1,67 @@
 """Top title treatment for vertical clips (the upper black/blurred band above the central video).
 
-Look: large white Anton capitals; one or two accented words get a vivid yellow perimeter with a dark
-shadow for contrast. Different clips and brands use different text with no renderer change: the title is
-plain text, and accent words are marked with asterisks, e.g. ``THE *TRUTH* ABOUT THE *DEAL*``.
+The look reproduces the approved America First Monitor concept, 20% smaller:
+  * bold condensed Anton capitals, white, black outline and soft shadow, centred in the upper band;
+  * emphasised words get a thick black ring and a vivid yellow perimeter outside it: `*word*` keeps the white
+    fill, `**word**` fills the word yellow (the concept shows both);
+  * the line that carries the emphasis is set larger than the lead line, as in the concept.
 
-Sizing: the design reference is `reference_size`; the owner asked for the title to be 20% smaller than
-the approved concept, so the effective size is reference_size * scale (scale = 0.80). The mock-up image
-itself was not available in the repository when this was built, so `reference_size` is an explicit,
-configurable setting rather than a measured value: the visual comparison with the concept is PENDING.
-Every title is also auto-fitted (real Anton glyph widths) so it never crosses the safe margins or leaves
-the band, whatever its length.
+Calibration is MEASURED, not assumed: ``scripts/calibrate_title.py concept.png`` reads the approved image
+(cap heights, line pitch, yellow colour, ring thickness, vertical position) and a real libass render
+(Anton's cap-height ratio) and writes ``assets/title_calibration.json``. All sizes below derive from it and are
+multiplied by ``scale`` (0.80) because the owner asked for the title to be 20% smaller than pictured.
 
-The feature is OFF unless enabled in the meta key ``title_style`` ({"enabled": true}); existing renders
-are unchanged until the owner turns it on.
+Titles are plain text (any clip, any brand, no renderer change). They are fitted with real Anton glyph widths so
+nothing crosses the safe margins or leaves the band: long titles shrink uniformly and keep their look.
+
+OFF unless meta key ``title_style`` has {"enabled": true} (a brand can switch it on via ``set_brand_enabled``).
 """
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from . import captions
 
-YELLOW = "&H0000FFFF&"        # ASS colours are BGR: this is #FFFF00
-BLACK = "&H00000000&"
-WHITE = "&H00FFFFFF&"
+CAL_FILE = Path(__file__).resolve().parent / "assets" / "title_calibration.json"
+# Measured from the approved concept on 17 Nov 2026 (used only if the calibration file is missing).
+_DEFAULT_CAL = {"lead_ass_size_1080": 199.4, "emphasis_scale": 1.209, "libass_cap_ratio": 0.495,
+                "libass_cap_centre_offset": 0.06, "line_pitch_px_1080": 152.6,
+                "cap_height_px_1080": {"lead": 98.7, "emphasis": 119.4}, "title_centre_y_frac": 0.2658,
+                "yellow_rgb": [253, 251, 4], "accent_perimeter_px_1080": 4.6, "accent_black_ring_px_1080": 9.2}
+
+
+def calibration() -> dict:
+    try:
+        return {**_DEFAULT_CAL, **json.loads(CAL_FILE.read_text(encoding="utf-8"))}
+    except (OSError, ValueError):
+        return dict(_DEFAULT_CAL)
+
+
+def _bgr(rgb) -> str:
+    r, g, b = rgb
+    return f"&H00{b:02X}{g:02X}{r:02X}&"
 
 
 @dataclass
 class TitleStyle:
     enabled: bool = False
     font: str = "Anton"
-    reference_size: int = 120       # size of the approved concept (assumed until the mock-up is measured)
-    scale: float = 0.80             # owner request: reduce the top-title font size by 20%
-    accent_outline: float = 9.0     # vivid yellow perimeter around accented words
-    outline: float = 4.0
-    max_lines: int = 3
-    side_margin: int = 70
+    scale: float = 0.80             # owner request: 20% smaller than the approved concept
+    max_lines: int = 4
+    side_margin: int = 56
     uppercase: bool = True
-    line_spacing: float = 1.08
+
+    @property
+    def reference_size(self) -> int:
+        """ASS font size of the concept's lead line at 1080 px width (measured)."""
+        return int(round(calibration()["lead_ass_size_1080"]))
 
     @property
     def size(self) -> int:
-        return int(round(self.reference_size * self.scale))
+        return int(round(calibration()["lead_ass_size_1080"] * self.scale))
 
 
 def load_style(db=None) -> TitleStyle:
@@ -55,69 +74,184 @@ def save_style(db, style: TitleStyle) -> None:
     db.set_kv("title_style", json.dumps(asdict(style)))
 
 
-def parse(text: str, upper: bool = True) -> list[tuple[str, bool]]:
-    """Words with an accent flag; `*word*` (or `*two words*`) marks accented words."""
-    words, accent = [], False
-    for tok in re.findall(r"\*|[^\s*]+", text or ""):
-        if tok == "*":
-            accent = not accent
-            continue
-        words.append((tok.upper() if upper else tok, accent))
+def set_brand_enabled(db, brand_key: str, enabled: bool) -> None:
+    """Per-brand switch (meta key title_brands = JSON list). The global `title_style.enabled` still wins if set."""
+    cur = set(json.loads(db.get_kv("title_brands") or "[]"))
+    (cur.add if enabled else cur.discard)(brand_key)
+    db.set_kv("title_brands", json.dumps(sorted(cur)))
+
+
+def style_for(db, brand_key: str | None) -> TitleStyle:
+    st = load_style(db)
+    if not st.enabled and brand_key and brand_key in set(json.loads(db.get_kv("title_brands") or "[]")):
+        st.enabled = True
+    return st
+
+
+# ---- parsing and layout ------------------------------------------------------------------------
+
+def parse(text: str, upper: bool = True) -> list[tuple[str, int, bool]]:
+    """(word, mode, glued): mode 0 plain, 1 `*white with yellow perimeter*`, 2 `**yellow with perimeter**`;
+    glued=True means no space before the word (e.g. the `?` in `**Palestine**?`)."""
+    words, one, two, space = [], False, False, True
+    for m in re.finditer(r"\s+|\*\*|\*|[^\s*]+", text or ""):
+        tok = m.group(0)
+        if tok.isspace():
+            space = True
+        elif tok == "**":
+            two = not two
+        elif tok == "*":
+            one = not one
+        else:
+            words.append((tok.upper() if upper else tok, 2 if two else 1 if one else 0, not space and bool(words)))
+            space = False
     return words
 
 
-def _width(words: list[tuple[str, bool]], size: float, style: TitleStyle) -> float:
-    m = captions.font_metrics(style.font)
-    text = " ".join(w for w, _ in words)
-    return m.width(text, size) if m else len(text) * captions.AVG_EM.get(style.font, 0.5) * size
+def _text(words) -> str:
+    return "".join((" " if i and not g else "") + w for i, (w, _, g) in enumerate(words))
 
 
-def fit(words: list[tuple[str, bool]], style: TitleStyle, width: int, band_h: float) -> tuple[list[list[tuple[str, bool]]], int]:
-    """Largest size <= style.size at which the title wraps into <= max_lines lines that fit the width and
-    the band height (accent outlines included). Returns (lines, size)."""
-    usable = width - 2 * style.side_margin - 2 * style.accent_outline
-    size = style.size
-    while True:
-        lines, cur = [], []
-        for w in words:
-            if cur and _width(cur + [w], size, style) > usable:
-                lines.append(cur)
-                cur = []
-            cur.append(w)
-        if cur:
+def _width(words, size: float, font: str = "Anton") -> float:
+    m = captions.font_metrics(font)
+    text = _text(words)
+    return m.width(text, size) if m else len(text) * captions.AVG_EM.get(font, 0.5) * size
+
+
+def _wrap(words, size: float, usable: float, font: str):
+    """Greedy wrap; a glued word never starts a line (it stays with the word before it)."""
+    lines, cur = [], []
+    for w in words:
+        if cur and not w[2] and _width(cur + [w], size, font) > usable:
             lines.append(cur)
-        widest = max((_width(l, size, style) for l in lines), default=0)
-        height = len(lines) * size * style.line_spacing
-        if (widest <= usable and len(lines) <= style.max_lines and height <= band_h * 0.9) or size <= 24:
-            return lines, size
-        size -= 2
+            cur = []
+        cur.append(w)
+    if cur:
+        lines.append(cur)
+    return lines
 
 
-def ass_text(lines: list[list[tuple[str, bool]]], style: TitleStyle) -> str:
+def _segments(words):
+    first = next((i for i, (_, m, _g) in enumerate(words) if m), None)
+    if first is None:
+        return [(words, False)]
+    return [(s, emph) for s, emph in ((words[:first], False), (words[first:], True)) if s]
+
+
+def layout(words, style: TitleStyle, width: int, height: int, fg_h: float) -> list[dict]:
+    """Lines with their ASS size and the y of their cap-centre, fitted to the width and the band."""
+    cal = calibration()
+    k = style.scale
+    ring = (cal["accent_black_ring_px_1080"] + cal["accent_perimeter_px_1080"]) * k
+    usable = width - 2 * style.side_margin - 2 * ring
+    band_h = (height - fg_h) / 2
+    ratio, off = cal["libass_cap_ratio"], cal["libass_cap_centre_offset"]
+    gap_ratio = (cal["line_pitch_px_1080"] - (cal["cap_height_px_1080"]["lead"] + cal["cap_height_px_1080"]["emphasis"]) / 2) \
+        / cal["cap_height_px_1080"]["lead"]
+    base = cal["lead_ass_size_1080"] * k
+    shrink = 1.0
+    while True:
+        lines = []
+        for seg, emph in _segments(words):
+            size = base * shrink * (cal["emphasis_scale"] if emph else 1.0)
+            for ln in _wrap(seg, size, usable, style.font):
+                lines.append({"words": ln, "size": size, "emph": emph})
+        caps = [ratio * l["size"] for l in lines]
+        gap = gap_ratio * ratio * base * shrink
+        block = sum(caps) + gap * max(0, len(lines) - 1)
+        room = band_h - 48 if band_h >= 160 else 10 ** 6
+        fits_w = all(_width(l["words"], l["size"], style.font) <= usable + 0.5 for l in lines)
+        if (fits_w and len(lines) <= style.max_lines and block <= room) or shrink < 0.25:
+            break
+        shrink -= 0.02
+    centre = cal["title_centre_y_frac"] * height
+    if band_h >= 160:
+        centre = min(max(centre, 24 + block / 2), band_h - 24 - block / 2)
+    else:                                   # a (near) full-frame source leaves no band: sit in the top safe area
+        centre = max(centre * 0.55, block / 2 + 90)
+    y = centre - block / 2
+    for l, cap in zip(lines, caps):
+        l["cap"] = cap
+        l["y"] = y + cap / 2 - off * l["size"]          # \an5 anchors the line box: shift so the CAPS are centred at y
+        y += cap + gap
+    return lines
+
+
+# ---- ASS ---------------------------------------------------------------------------------------
+
+def _line_text(line, style: TitleStyle, ring_layer: bool, cal: dict) -> str:
+    k = style.scale
+    yellow = _bgr(cal["yellow_rgb"])
+    black_ring = cal["accent_black_ring_px_1080"] * k
+    perim = cal["accent_perimeter_px_1080"] * k
+    plain = max(2.0, 0.045 * line["size"])
     out = []
-    for line in lines:
-        parts = []
-        for word, acc in line:
-            word = captions._esc(word)
-            if acc:
-                parts.append(f"{{\\3c{YELLOW}\\bord{style.accent_outline}\\4c{BLACK}\\shad3}}{word}{{\\rTitle}}")
+    for i, (word, mode, glued) in enumerate(line["words"]):
+        w = captions._esc(word)
+        sep = " " if i and not glued else ""
+        if ring_layer:
+            if mode:
+                out.append(f"{sep}{{\\1a&H00&\\3a&H00&\\3c{yellow}\\bord{black_ring + perim:.1f}\\shad0}}{w}")
             else:
-                parts.append(word)
-        out.append(" ".join(parts))
-    return "\\N".join(out)
+                out.append(f"{sep}{{\\1a&HFF&\\3a&HFF&\\bord0\\shad0}}{w}")
+        elif mode:
+            fill = yellow if mode == 2 else "&H00FFFFFF&"
+            out.append(f"{sep}{{\\1a&H00&\\1c{fill}\\3a&H00&\\3c&H00000000&\\bord{black_ring:.1f}\\shad{0.04 * line['size']:.1f}\\4c&H00000000&}}{w}")
+        else:
+            out.append(f"{sep}{{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord{plain:.1f}\\shad{0.03 * line['size']:.1f}\\4c&H00000000&}}{w}")
+    return "".join(out)
 
 
 def build_events(title: str, style: TitleStyle, duration: float, width: int, height: int, fg_h: float) -> tuple[str, str]:
-    """(style line, dialogue line) for the title, centred in the upper band above the picture."""
+    """(style line, dialogue lines) for the title, centred in the upper band above the picture."""
     words = parse(title, style.uppercase)
     if not words or not style.enabled:
         return "", ""
-    band_h = max(1.0, (height - fg_h) / 2)
-    lines, size = fit(words, style, width, band_h)
-    y = int(band_h / 2)
-    white, black = WHITE.rstrip("&"), BLACK.rstrip("&")
-    st = (f"Style: Title,{style.font},{size},{white},{white},{black},{black},0,0,0,0,100,100,0,0,1,"
-          f"{style.outline:.1f},0,5,{style.side_margin},{style.side_margin},0,1")
-    dlg = (f"Dialogue: 2,{captions._ts(0)},{captions._ts(duration)},Title,,0,0,0,,"
-           f"{{\\an5\\pos({width // 2},{y})}}{ass_text(lines, style)}")
-    return st, dlg
+    cal = calibration()
+    lines = layout(words, style, width, height, fg_h)
+    st = (f"Style: Title,{style.font},{style.size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,"
+          f"2,0,5,0,0,0,1")
+    ev = []
+    t0, t1 = captions._ts(0), captions._ts(duration)
+    for ln in lines:
+        pos = f"{{\\an5\\pos({width // 2},{int(round(ln['y']))})\\fs{ln['size']:.0f}}}"
+        if any(m for _, m, _g in ln["words"]):
+            ev.append(f"Dialogue: 2,{t0},{t1},Title,,0,0,0,,{pos}{_line_text(ln, style, True, cal)}")
+        ev.append(f"Dialogue: 3,{t0},{t1},Title,,0,0,0,,{pos}{_line_text(ln, style, False, cal)}")
+    return st, "\n".join(ev)
+
+
+# ---- deterministic title formatting (no model, no invented words) ---------------------------------
+
+_MAX_TITLE = 72
+_EMOJI = re.compile("[\U00010000-\U0010ffff\u2600-\u27bf]")
+
+
+def format_title(text: str, auto_emphasis: bool = True) -> str:
+    """Tidy an owner/clip title: collapse whitespace, drop emoji and stray markup, cut at a word boundary
+    (never mid-word, never adding words), and - unless the text already marks emphasis - accent the LAST two words
+    (the second-last white with a yellow perimeter, the last yellow), as in the approved concept.
+    Wording is never changed, so the title cannot claim anything the owner did not write."""
+    t = _EMOJI.sub("", text or "")
+    marked = "*" in t
+    t = re.sub(r"\s+", " ", t.replace("\u201c", '"').replace("\u201d", '"')).strip(" \"'")
+    if not marked:
+        t = t.replace("*", "")
+    plain = re.sub(r"\*+", "", t)
+    if len(plain) > _MAX_TITLE:
+        cut = plain[:_MAX_TITLE].rsplit(" ", 1)[0].rstrip(" ,;:-")
+        t = cut if not marked else re.sub(r"\*+", "", cut)
+        marked = False
+    if marked or not auto_emphasis:
+        return t
+    toks = t.split(" ")
+    if len(toks) < 3:
+        return t
+    last = toks[-1]
+    core = last.rstrip("?!.,;:")
+    tail = last[len(core):]
+    if not core:
+        return t
+    toks[-1] = f"**{core}**{tail}"
+    toks[-2] = f"*{toks[-2]}*"
+    return " ".join(toks)

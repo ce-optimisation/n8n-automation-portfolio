@@ -1,6 +1,7 @@
 """Portfolio maintenance without any model usage.
 
   python scripts/portfolio_admin.py seed      add missing brands/creators/sources (idempotent; never re-enables or overwrites)
+  python scripts/portfolio_admin.py import-roster [file]   reconcile the owner's source list (never adds creators; reports conflicts)
   python scripts/portfolio_admin.py verify    resolve identities through the official APIs (needs the free keys in .env)
   python scripts/portfolio_admin.py check     run one discovery pass now (reads platforms; downloads nothing)
   python scripts/portfolio_admin.py status    same as: python -m clipengine --portfolio   (read-only)
@@ -12,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from clipengine import discovery, events, portfolio, portfolio_report  # noqa: E402
+from clipengine import discovery, events, portfolio, portfolio_report, roster_import  # noqa: E402
 from clipengine.config import get_settings, load_dotenv  # noqa: E402
 from clipengine.db import Database  # noqa: E402
 
@@ -26,6 +27,8 @@ def main(argv):
     db = Database(s.db_path)
     if cmd == "seed":
         print(portfolio.seed(db, s), "events added:", events.seed_events(db))
+    elif cmd == "import-roster":
+        print(roster_import.render(roster_import.reconcile(s, db, file=Path(argv[2]) if len(argv) > 2 else None)))
     elif cmd == "verify":
         for r in portfolio.verify_all(s, db):
             print({k: v for k, v in r.items() if k != "evidence"}, (r.get("evidence") or "")[:90])

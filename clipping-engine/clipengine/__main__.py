@@ -178,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--portfolio", action="store_true",
                     help="read-only status of all brands, creators and sources, then exit (add --json for machine output)")
     ap.add_argument("--json", action="store_true", help="with --portfolio: JSON output")
+    ap.add_argument("--portfolio-check", action="store_true",
+                    help="laptop setup/verification: versions, schema, credentials (yes/no), identity checks, discovery health")
     ap.add_argument("--setup", action="store_true", help="run the setup assistant, then exit")
     ap.add_argument("--yes", action="store_true", help="with --setup: accept the defaults without asking")
     args = ap.parse_args(argv)
@@ -193,10 +195,13 @@ def main(argv: list[str] | None = None) -> int:
         except autostart.AutostartUnsupported as e:
             print(e)
             return 2
-    if args.supervise and not (args.doctor or args.setup):
+    if args.supervise and not (args.doctor or args.setup or args.portfolio or args.portfolio_check):
         return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
+    if args.portfolio_check:
+        from . import setup_check
+        return setup_check.main(settings)
     if args.portfolio:
         from . import portfolio_report
         return portfolio_report.main(settings, as_json=args.json)

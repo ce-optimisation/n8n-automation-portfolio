@@ -502,6 +502,7 @@ MIGRATIONS = [
     ("creators", "kind", "TEXT"),                                  # creator | show
     ("creators", "roster", "TEXT"),                                # 'approved' = owner-approved portfolio member
     ("creators", "acquisition_state", "TEXT"),                     # separate from monitoring
+    ("monitor_sources", "notes", "TEXT"),                          # owner/roster notes (editable)
 ]
 
 

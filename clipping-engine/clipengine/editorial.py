@@ -31,7 +31,13 @@ FLAG_RULES = {
     "financial_promotion": "Possible financial promotion: needs compliance review before any use",
     "unverifiable_claim": "Earnings, health or product claim that needs checking",
     "political_context": "Political content: needs contextual review (speaker, date, what was replied)",
+    "spoiler_risk": "Possible game spoiler (story, ending, mission or leaked content): check it is not spoiling a new release",
+    "sensitive_scene": "Possible sensitive scene (graphic violence, sexual content or self-harm): review before any use",
 }
+SPOILER = re.compile(r"\b(spoilers?|spoil(?:s|ed|ing)?|the ending|final boss|plot twist|twist ending|story mode|main story|"
+                     r"story mission|campaign ending|leaked|leak|dies at the end|post[- ]credits?)\b", re.I)
+SENSITIVE_SCENE = re.compile(r"\b(gore|gory|decapitat\w*|beheading|tortur\w*|suicide|self[- ]harm|rape|sexual assault|"
+                             r"nude|nudity|graphic (?:violence|scene)|massacre)\b", re.I)
 
 
 @dataclass
@@ -190,8 +196,8 @@ PRESETS: dict[str, NicheProfile] = {p.key: p for p in [
        terms=["clutch", "win", "lost", "let's go", "no way", "bro", "chat", "boss", "ranked", "kill"],
        complete_clip="Setup → decisive event → reaction; understandable without knowing the game.",
        hook="Start just before the event; never on the payoff alone.", min_s=12, max_s=60,
-       selection_profile="v5", reject_rules=["no_payoff"], reaction_weight=0.08, min_quality=30,
-       pacing="Fast", post_style="Describe the moment, not clickbait; credit the streamer.",
+       selection_profile="v5", reject_rules=["no_payoff"], flag_rules=["spoiler_risk", "sensitive_scene"],
+       reaction_weight=0.08, min_quality=30, pacing="Fast", post_style="Describe the moment, not clickbait; credit the streamer.",
        hashtags=["#gaming", "#twitch", "#streamer"], active=False),
     _p(key="irl_streams", name="IRL & personality livestream entertainment", group="audience",
        audience="Fans of IRL, challenge and personality streams",
@@ -380,6 +386,11 @@ class EditorialPolicy:
         if "unverifiable_claim" in frules and CLAIM.search(text):
             flags.append({"category": "claims_review", "term": CLAIM.search(text).group(0),
                           "note": FLAG_RULES["unverifiable_claim"]})
+        if "spoiler_risk" in frules and SPOILER.search(text):
+            flags.append({"category": "spoiler_risk", "term": SPOILER.search(text).group(0), "note": FLAG_RULES["spoiler_risk"]})
+        if "sensitive_scene" in frules and SENSITIVE_SCENE.search(text):
+            flags.append({"category": "sensitive_scene", "term": SENSITIVE_SCENE.search(text).group(0),
+                          "note": FLAG_RULES["sensitive_scene"]})
         if "political_context" in frules:
             flags.append({"category": "political_context", "term": "", "note": FLAG_RULES["political_context"]})
         if self.niche.compliance_review and not any(f["category"] == "compliance_review" for f in flags):
@@ -404,7 +415,22 @@ def seed_presets(db) -> int:
             db.insert("niche_history", key=key, version=p.version, config_json=json.dumps(p.to_dict()),
                       note="preset")
             n += 1
+    _add_review_flags(db, "gaming_streams", ["spoiler_risk", "sensitive_scene"])
     return n
+
+
+def _add_review_flags(db, key: str, rules: list[str]) -> None:
+    """Additive and safe: a niche already in the database gains new REVIEW flags (never rejections, never removed or
+    reordered, owner edits otherwise untouched), so existing installs get them without a profile reset."""
+    row = db.one("SELECT config_json FROM niches WHERE key=?", (key,))
+    if not row:
+        return
+    cfg = json.loads(row["config_json"])
+    have = list(cfg.get("flag_rules") or [])
+    add = [r for r in rules if r not in have]
+    if add:
+        cfg["flag_rules"] = have + add
+        db.execute("UPDATE niches SET config_json=? WHERE key=?", (json.dumps(cfg), key))
 
 
 def load_niche(db, key: str | None) -> NicheProfile | None:

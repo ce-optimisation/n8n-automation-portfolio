@@ -14,6 +14,14 @@ or publishes publicly. YouTube uploads (when connected) are always <b>private</b
   <div class="buttons">{% if a.platform == 'youtube' and not yt.get(a.id) %}{% if google_ready %}<a class="btn" href="/accounts/{{ a.id }}/youtube/connect">Connect (private uploads only)</a>{% else %}<span class="muted">READY FOR OWNER CONNECTION — add the Google client in .env (Storage page steps)</span>{% endif %}{% endif %}
   <form method="post" action="/accounts/{{ a.id }}/delete"><button class="btn ghost">Remove</button></form></div>
 </section>{% endfor %}
+<form method="post" action="/accounts/record" class="card stack"><h2>Record a brand's real account</h2>
+  <p class="muted">Six brands, four platforms each (YouTube, TikTok, Instagram, Facebook Page). The placeholders above are not real accounts. Create the account yourself, then record its handle here; it is tied to that one brand and never receives another brand's clips.</p>
+  <label>Brand <select name="brand">{% for k, n in brand_names %}<option value="{{ k }}">{{ n }}</option>{% endfor %}</select></label>
+  <label>Platform <select name="platform">{% for p in ['youtube','tiktok','instagram','facebook'] %}<option>{{ p }}</option>{% endfor %}</select></label>
+  <label>Handle / Page name <input name="handle" required autocapitalize="off"></label>
+  <label>Official account ID (optional) <input name="account_id"></label>
+  <label>Display name (optional) <input name="display_name"></label>
+  <button class="btn">Record</button></form>
 <form method="post" action="/accounts" class="card stack"><h2>Add an account you own</h2>
   <label>Platform <select name="platform">{% for p in ['youtube','tiktok','instagram','facebook','x','rumble'] %}<option>{{ p }}</option>{% endfor %}</select></label>
   <label>Handle <input name="handle" required placeholder="@yourchannel"></label>

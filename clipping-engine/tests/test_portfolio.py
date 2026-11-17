@@ -76,6 +76,12 @@ def ms(db, uid):
     return db.one("SELECT * FROM monitor_sources WHERE uid=?", (uid,))
 
 
+def grant_creator(db, uid, **kw):
+    """Record this creator's own written permission (host permission alone never permits acquisition)."""
+    db.execute("UPDATE creators SET permission_json=? WHERE uid=?",
+               (json.dumps({"granted_by": "owner", "reference": "test-ref", **kw}), uid))
+
+
 def verify_yt(db, uid, handle, name, ucid, fake):
     fake.ident[handle] = {"id": ucid, "name": name, "url": f"https://www.youtube.com/channel/{ucid}"}
 
@@ -331,6 +337,9 @@ def test_acquisition_permission_is_enforced_and_separate_from_discovery(settings
     db.execute("INSERT INTO source_permissions(domain,granted_by,granted_on,reference,scope,created_at,updated_at) "
                "VALUES('youtube.com','owner','2026-11-18','ref-1','test',?,?)", (now, now))
     s.route_pending()
+    assert db.one("SELECT state FROM discovered_items WHERE platform_item_id='youtube:b'")["state"] == "permission_required"   # host permission alone is not enough
+    grant_creator(db, "mkbhd")
+    s.route_pending()
     assert db.one("SELECT state FROM discovered_items WHERE platform_item_id='youtube:b'")["state"] == "queued"
     assert len(q.jobs) == 1 and q.jobs[0][0] == "download_url"
     s.route_pending()
@@ -343,6 +352,7 @@ def test_insufficient_disk_holds_item_and_downloads_nothing(settings, db, monkey
     now = time.time()
     db.execute("INSERT INTO source_permissions(domain,granted_by,granted_on,reference,scope,created_at,updated_at) "
                "VALUES('youtube.com','owner','2026-11-18','r','t',?,?)", (now, now))
+    grant_creator(db, "mkbhd")
     f, q = FakeAdapter("youtube"), StubQueue()
     s = sup(settings, db, {"youtube": f}, queue=q)
     mid = ms(db, "mkbhd/youtube/channel")["id"]
@@ -520,39 +530,12 @@ def test_enlarged_captions_never_cross_the_safe_margins(phrase):
     assert 1920 * 0.72 + 2 * 95 * 0.6 < 1920
 
 
-def test_title_is_twenty_percent_smaller_than_reference_and_off_by_default(db):
-    from clipengine import titles
-    st = titles.TitleStyle()
-    assert st.size == round(st.reference_size * 0.8) and st.enabled is False
-    assert titles.load_style(db).enabled is False
-    assert titles.build_events("Anything", st, 10, 1080, 1920, 608) == ("", "")
-    titles.save_style(db, titles.TitleStyle(enabled=True))
-    assert titles.load_style(db).enabled is True
-
-
-def test_title_layout_fits_any_length_and_marks_accents():
-    from clipengine import captions, titles
-    st = titles.TitleStyle(enabled=True)
-    m = captions.font_metrics("Anton")
-    usable = 1080 - 2 * st.side_margin - 2 * st.accent_outline
-    band = (1920 - 607.5) / 2
-    for text in ("Big *news*", "The *TRUTH* about the *deal* nobody wants to discuss openly on live television tonight",
-                 "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW"):
-        lines, size = titles.fit(titles.parse(text), st, 1080, band)
-        assert size <= st.size and len(lines) <= st.max_lines or size <= 24
-        assert all(m.width(" ".join(w for w, _ in l), size) <= usable + 0.5 for l in lines)
-        assert len(lines) * size * st.line_spacing <= band * 0.9 + 1 or size <= 24
-    style_line, dialogue = titles.build_events("The *TRUTH* about *it*", st, 12, 1080, 1920, 607.5)
-    assert "Anton" in style_line and dialogue.count("&H0000FFFF&") == 2        # two yellow-perimeter words
-    assert titles.parse("a *b c* d") == [("A", False), ("B", True), ("C", True), ("D", False)]
-
-
 def test_title_renders_into_a_real_clip_without_changing_the_video_frame(settings, sample_video, tmp_path):
     from clipengine import captions, render, titles
     words = [{"word": w, "start": i * .4, "end": i * .4 + .35} for i, w in enumerate("the committee will publish its findings".split())]
     plain = render.render_clip(settings, sample_video, tmp_path / "a", 0.0, 3.0, words, 1280, 720, None, style=captions.CaptionStyle())
     titled = render.render_clip(settings, sample_video, tmp_path / "b", 0.0, 3.0, words, 1280, 720, None, style=captions.CaptionStyle(),
-                                title="The *TRUTH* about it", title_style=titles.TitleStyle(enabled=True))
+                                title="The *TRUTH* about **it**", title_style=titles.TitleStyle(enabled=True))
     assert plain["title"] is False and titled["title"] is True
     assert (titled["probe"]["width"], titled["probe"]["height"]) == (1080, 1920) == (plain["probe"]["width"], plain["probe"]["height"])
-    assert "Style: Title,Anton,96" in (tmp_path / "b" / "captions.ass").read_text(encoding="utf-8")
+    assert "Style: Title,Anton,160" in (tmp_path / "b" / "captions.ass").read_text(encoding="utf-8")

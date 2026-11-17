@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import time
 from collections import Counter
 
@@ -101,6 +102,10 @@ def render(rep: dict) -> str:
 
 
 def main(settings, as_json: bool = False) -> int:
+    try:
+        sys.stdout.reconfigure(errors="replace")      # a Windows cp1252 console must never crash on a symbol
+    except (AttributeError, ValueError):
+        pass
     rep = build(settings)
     print(json.dumps(rep, indent=1, default=str) if as_json else render(rep))
     return 1 if rep.get("error") else 0

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import (autostart, captions, cloud, editorial, hardware, health, inbox, ingest, lifecycle, maintenance,
-               discovery, events, monitor, notify, platforms, portfolio, power, render, segment, setup_status, storage, tailscale)
+               discovery, events, monitor, titles, roster_import, notify, platforms, portfolio, power, render, segment, setup_status, storage, tailscale)
 from ..publishing import packages
 from ..config import Settings, apply_settings
 from ..db import Database
@@ -74,6 +74,7 @@ class App:
         try:
             portfolio.seed(self.db, settings)
             events.seed_events(self.db)
+            roster_import.reconcile(settings, self.db)
         except Exception:  # noqa: BLE001 - the portfolio must never stop the engine
             log.exception("portfolio could not be seeded")
         research_file = Path(__file__).resolve().parents[2] / "research" / "research_dataset.json"
@@ -540,6 +541,19 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                        review_note=f"[Editorial decision on flag] {note.strip()}\n{c['review_note'] or ''}".strip())
         return _back(request, cid)
 
+    @app.post("/clips/{cid}/title")
+    def set_title(request: Request, cid: int, title: str = Form("")):
+        """Working title (also the top title burned into the video when the title style is on for the brand).
+        Re-renders only a clip that has not been approved or published, so an approved clip is never silently changed."""
+        c = _clip(cid)
+        clean = titles.format_title(title, auto_emphasis=False)
+        core.db.update("clips", cid, title=clean or None)
+        if c["status"] in ("ready", "needs_review") and not c["published_at"] and c["video_path"]:
+            core.db.update("clips", cid, render_rev=c["render_rev"] + 1, status="pending_render", reviewed_at=None)
+            core.pipeline.enqueue_render(cid)
+            return _back(request, cid, msg="Title saved; re-rendering with it (the clip returns to review).")
+        return _back(request, cid, msg="Title saved." + (" It will appear in the next render." if c["video_path"] else ""))
+
     @app.post("/clips/{cid}/description")
     def set_description(request: Request, cid: int, description: str = Form(...)):
         _clip(cid)
@@ -631,20 +645,61 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/portfolio", response_class=HTMLResponse)
     def portfolio_page(request: Request, msg: str = "", brand: str = ""):
         rows = portfolio.summary(settings, core.db)
+        counts = {r["monitor_source_id"]: r["n"] for r in core.db.query(
+            "SELECT monitor_source_id, COUNT(*) n FROM discovered_items WHERE state<>'baseline' GROUP BY monitor_source_id")}
+        for r in rows:
+            r["items"] = counts.get(r["id"], 0)
         if brand:
             rows = [r for r in rows if r["brand_key"] == brand]
         brands = core.db.query("SELECT * FROM brands ORDER BY name")
         qcount = {r["brand_key"]: r["n"] for r in core.db.query(
             "SELECT brand_key, COUNT(*) n FROM jobs j JOIN discovered_items d ON d.job_id=j.id "
             "WHERE j.status IN ('queued','running') GROUP BY brand_key")}
+        held = core.db.query("SELECT brand_key, state, COUNT(*) n FROM discovered_items WHERE state IN "
+                             "('permission_required','discovered','failed') AND kind IN ('upload','vod','episode') "
+                             "GROUP BY brand_key, state")
         new_items = core.db.query("SELECT d.*, c.name AS creator FROM discovered_items d JOIN creators c ON c.id=d.creator_id "
                                   "WHERE d.state<>'baseline' ORDER BY d.first_seen DESC LIMIT 30")
         evs = core.db.query("SELECT e.*, m.uid FROM monitor_events e LEFT JOIN monitor_sources m ON m.id=e.monitor_source_id "
                             "ORDER BY e.id DESC LIMIT 25")
-        return page(request, "portfolio.html", rows=rows, brands=brands, brand=brand, msg=msg, qcount=qcount,
-                    new_items=new_items, evs=evs, state_help=portfolio.STATE_HELP,
+        creds = {n: platforms.adapter_for(settings, n).configured() for n in ("youtube", "twitch", "kick")}
+        return page(request, "portfolio.html", rows=rows, brands=brands, brand=brand, msg=msg, qcount=qcount, held=held,
+                    new_items=new_items, evs=evs, state_help=portfolio.STATE_HELP, creds=creds,
                     active_events=events.active_events(core.db, __import__("time").time()),
                     quota=core.discovery.quota_used("youtube"), quota_limit=discovery.YT_DAILY_UNITS)
+
+    def _pf(msg: str, brand: str = ""):
+        return RedirectResponse("/portfolio?" + urlencode({"msg": msg, **({"brand": brand} if brand else {})}), status_code=303)
+
+    @app.post("/portfolio/{ms_id}/edit")
+    def portfolio_edit(ms_id: int, handle: str = Form(None), url: str = Form(None), priority: str = Form(""),
+                       notes: str = Form(None)):
+        try:
+            changed = portfolio.edit_source(core.db, ms_id, handle=handle, url=url, priority=priority or None, notes=notes)
+        except (ValueError, KeyError) as e:
+            return _pf(f"Not saved: {e}")
+        return _pf("Saved " + ", ".join(changed) + ("; identity must be verified again." if {"candidate_handle", "canonical_url"} & set(changed) else ".")
+                   if changed else "Nothing changed.")
+
+    @app.post("/portfolio/{ms_id}/link-rumble")
+    def portfolio_link_rumble(ms_id: int):
+        try:
+            sid = portfolio.link_rumble_source(settings, core.db, ms_id)
+        except ValueError as e:
+            return _pf(str(e))
+        return RedirectResponse("/sources?" + urlencode({"msg": f"Rumble source #{sid} added, switched off. Enable it here "
+                                                              "once Rumble's and the creator's permissions are recorded."}), status_code=303)
+
+    @app.post("/portfolio/import-roster")
+    def portfolio_import_roster():
+        res = roster_import.reconcile(settings, core.db)
+        return _pf("Roster refused: " + "; ".join(res["problems"]) if res["problems"] else
+                   "Roster reconciled: " + ", ".join(f"{k} {v}" for k, v in res["summary"].items() if k != "verification" and v))
+
+    @app.post("/portfolio/item/{item_id}/retry")
+    def portfolio_retry(item_id: int):
+        return _pf("Item will be considered again (permission and disk checks still apply)." if core.discovery.retry_item(item_id)
+                   else "Only failed items can be retried.")
 
     @app.post("/portfolio/{ms_id}/toggle")
     def portfolio_toggle(ms_id: int, enabled: str = Form("0")):

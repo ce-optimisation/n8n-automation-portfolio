@@ -1585,3 +1585,46 @@ reference 120 px x 0.80 = 96 px, auto-fitted. The approved mock-up image was NOT
 **Tests.** `tests/test_portfolio.py` (all mocked: fake adapters / `httpx.MockTransport`). Nothing here is a live
 verification. This sandbox could only reach googleapis (no key), so no platform was exercised for real.
 
+
+## 22. Session 8 (17 Nov 2026): reconciliation, registry completion, calibrated title, laptop onboarding
+
+**CI defect fixed.** Session 7's `scripts/real_recording_test.py` still asserted caption size 73; CI failed on both OSes at that step only.
+It now asserts 95 (73 + 30%).
+
+**Registry.** `roster_import.py` + `research/portfolio_sources_2026-11-17.txt` (the owner's 27-line input list). It validates 6 brands /
+18 creators / 27 sources, never adds creators or sources, fills missing candidates through `owner_set` (locked, re-verification forced),
+reports conflicts instead of overwriting, never re-enables. Runs at start-up and from the Portfolio page. Alex Jones'
+`https://rumble.com/c/TheAlexJonesShowLive` is recorded as a locked candidate, NEEDS_VERIFICATION; "Add to Sources (switched off)" creates the
+existing-engine Rumble source disabled with `record_live=0`. `monitor_sources.notes` added (roster evidence is a note, not verification).
+**Acquisition now needs BOTH** a platform-wide permission and the creator's own recorded permission (`creators.permission_json` with granted_by +
+reference, not expired); an enabled legacy Rumble source still counts as the owner's decision (existing behaviour kept).
+
+**Discovery fixes.** `sync_job_states()` moves queued items to imported / failed / (job vanished) discovered, so nothing stays queued and
+finished items stop reserving disk; `ingest.handle_download_url` and `monitor._download_failed` also update `discovered_item_id` and set the
+recording's creator; failed items can be retried from the dashboard; `seed()` links a channel source added later. `/clips/{id}/title` existed in the
+template but not in the app (404): added; it re-renders only unapproved clips.
+
+**Portfolio page.** Grouped brand > creator > source; shows identity, address/candidate, acquisition, last good check, discovered count, errors,
+held work, credential checklist, retry, edit form (mobile tested with Chromium at iPhone 13: no sideways scroll, 44 px targets, 16 px inputs).
+`portfolio.edit_source` is validated (platform host, safe handle, priority 0-100) and cannot verify or permit anything.
+
+**Title, measured.** `scripts/calibrate_title.py concept.png` measures the approved concept and writes `assets/title_calibration.json` (numbers only;
+the image is not stored). Result at 1080 px width: lead cap height 98.7 px = Anton ASS size 199.4 (NOT the earlier 120 assumption), emphasis line 1.209x,
+yellow perimeter 4.6 px, black ring 9.2 px, centre at 26.6% of height. Effective size = x0.80 (lead 160). `*word*` = white fill + black ring + yellow
+perimeter, `**word**` = yellow fill; punctuation glues. `titles.format_title` is deterministic (cuts at a word boundary, never adds words,
+emphasises the last two words if none marked). On for America First Monitor via `title_brands` (set once at first seed, owner can turn off with
+`titles.set_brand_enabled`; reusable by any brand); other brands off. Titles come from `clips.title`; no title means no overlay.
+
+**Accounts.** 24 clearly-labelled placeholders (6 brands x YouTube/TikTok/Instagram/Facebook), each mapped only to its brand's niche; `set_account`
+and the Accounts page "Record a brand's real account" refuse an account owned by another brand; mapping an account to another brand's niche is refused.
+Nothing is created, connected or published.
+
+**Editorial.** `spoiler_risk` and `sensitive_scene` review flags on gaming_streams (additive, added to existing installs, never rejects).
+
+**Laptop onboarding.** `Check-Portfolio.cmd` / `python -m clipengine --portfolio-check` (ASCII output, no secrets, no admin, never edits `.env`):
+version/commit, Python/packages, schema, credentials present/partial/missing, identity verification when keys exist, discovery health pass,
+accounts needing confirmation, live-report command, next actions. `scripts/portfolio_admin.py import-roster|seed|verify|check|status`.
+`scripts/test_report.py` prints one concise test summary.
+
+**Still not done / unverified:** no platform API has been exercised (no credentials); the Fuentes live test was not inspected; the installed Windows
+copy was not touched; the title was compared visually with the concept only on a synthetic dark source.

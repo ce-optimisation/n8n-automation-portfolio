@@ -771,6 +771,11 @@ class SourceMonitor:
         if iid:
             job = self.db.one("SELECT error FROM jobs WHERE id=?", (ctx.id,))
             self.db.update("source_items", iid, state="failed", error=(job["error"] if job else "failed"))
+        did = ctx.payload.get("discovered_item_id")
+        if did:
+            job = self.db.one("SELECT error FROM jobs WHERE id=?", (ctx.id,))
+            self.db.execute("UPDATE discovered_items SET state='failed', detail=? WHERE id=?",
+                            (((job["error"] if job else None) or "failed")[:300], did))
 
     # -- live recording
     def _handle_hls(self, src, st: dict, first_poll: bool) -> bool:

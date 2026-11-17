@@ -1,0 +1,26 @@
+{
+ "source": "approved America First Monitor title concept, measured 17 Nov 2026 (image not stored)",
+ "image_px": [
+  941,
+  1672
+ ],
+ "scale_to_1080": 1.1477,
+ "cap_height_px_1080": {
+  "lead": 98.7,
+  "emphasis": 119.4
+ },
+ "libass_cap_ratio": 0.495,
+ "libass_cap_centre_offset": 0.06,
+ "lead_ass_size_1080": 199.4,
+ "emphasis_scale": 1.209,
+ "line_pitch_px_1080": 152.6,
+ "title_centre_y_frac": 0.2658,
+ "lead_width_frac": 0.804,
+ "yellow_rgb": [
+  253,
+  251,
+  4
+ ],
+ "accent_perimeter_px_1080": 4.6,
+ "accent_black_ring_px_1080": 9.2
+}

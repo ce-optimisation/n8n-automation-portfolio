@@ -147,3 +147,20 @@ comparison is **pending**. The title is **off** until meta key `title_style` = `
 1. Read `HANDOFF.md` §21 and `clipengine/portfolio.py`, `discovery.py`, `events.py`, `tests/test_portfolio.py`.
 2. Run `python -m clipengine --portfolio` (read-only) and `python -m pytest -q` (about 9 minutes) to establish the baseline.
 3. Work the engineering list above; keep to the rules; report with exact evidence and one consolidated owner checklist.
+
+
+---
+
+## UPDATE, end of session 8 (17 Nov 2026) - supersedes the "outstanding engineering" list above where they differ
+
+Read `HANDOFF.md` §22. Done in session 8: CI fixed (the 73 px assertion in `real_recording_test.py`); roster import with Alex Jones' Rumble URL as a
+locked NEEDS_VERIFICATION candidate; creator-level acquisition permission (host permission alone no longer permits); discovered-item job-state sync
+and disk-reservation fix; editable Portfolio page (mobile tested); title calibrated from the approved concept (lead 160 px = 80% of the measured 199.4;
+enabled for America First Monitor only, owner can switch off); 24 brand account slots with cross-brand refusal; Afterlive spoiler/sensitive-scene
+review flags; `Check-Portfolio.cmd` laptop check; `.env.example` credential guidance.
+
+Remaining (genuine): (1) owner adds YouTube/Twitch/Kick keys on the laptop and runs `Check-Portfolio.cmd`, then confirms Twitch/Kick accounts;
+(2) record platform + creator permissions before any acquisition; (3) inspect the Fuentes live test with `live_report.py`; (4) live-verify every
+adapter once keys exist (Kick field names least certain; Apple podcast directory unreachable from the build sandbox); (5) try `ensure_recorders` and the
+Rumble "Add to Sources" flow on the PC; (6) compare a real America First clip with the concept (only a synthetic dark source was used); (7) install the
+update on the PC and confirm schema v6 upgrades the real database; (8) the older backlog (Outlook email, Drive reconnect weekly, etc.).

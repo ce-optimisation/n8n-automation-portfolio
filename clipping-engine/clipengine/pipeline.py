@@ -405,9 +405,12 @@ class Pipeline:
         label = f"Excerpt · {rec['title'][:48]} · {render.mmss(clip['start'])}"
         ctx.progress(0.05, "Rendering vertical video", force=True)
         from . import captions, titles
+        creator = self.creator_for(rec)
+        tstyle = titles.style_for(self.db, creator["brand_key"] if creator else None)
+        ttext = titles.format_title(clip["title"]) if (clip["title"] and tstyle.enabled) else None
         res = render.render_clip(self.settings, Path(rec["file_path"]), out_dir, clip["start"], clip["end"],
                                  words, rec["width"], rec["height"], label, style=captions.load_style(self.db),
-                                 title=clip["title"], title_style=titles.load_style(self.db),
+                                 title=ttext, title_style=tstyle,
                                  on_progress=lambda f: ctx.progress(0.05 + 0.9 * f, "Rendering"))
         (out_dir / "transcript.txt").write_text(
             f"Source: {rec['source_url'] or rec['original_filename']}\nRecording: {rec['title']}\n"

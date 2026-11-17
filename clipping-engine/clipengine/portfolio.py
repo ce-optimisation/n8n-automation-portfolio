@@ -223,16 +223,23 @@ def seed(db, settings=None) -> dict:
                     upd["candidate_handle"] = s["handle"]
                 if "dup_group" not in locked and not existing["dup_group"]:
                     upd["dup_group"] = _dup_group(c)
+                if not existing["legacy_source_id"] and existing["canonical_url"]:
+                    lg = db.one("SELECT id FROM sources WHERE url=?", (existing["canonical_url"],))
+                    if lg:                                   # a channel source added since (e.g. on the Sources page)
+                        upd["legacy_source_id"] = lg["id"]
                 if upd:
                     db.update("monitor_sources", existing["id"], **upd)
                     out["sources_updated"] += 1
                 # monitoring_enabled, acquisition, verification, priority and runtime state are NEVER touched here.
+    out["account_slots"] = seed_account_slots(db)
+    if db.get_kv("title_brands") is None:          # first run only: the approved title style for America First Monitor
+        db.set_kv("title_brands", json.dumps(["america_first_monitor"]))
     return out
 
 
 # ---- owner edits (locked against the seeder) ---------------------------------------------------
 
-EDITABLE = ("monitoring_enabled", "canonical_url", "candidate_handle", "priority", "dup_group", "requirement")
+EDITABLE = ("monitoring_enabled", "canonical_url", "candidate_handle", "priority", "dup_group", "requirement", "notes")
 
 
 def owner_set(db, ms_id: int, **fields) -> None:
@@ -247,8 +254,52 @@ def owner_set(db, ms_id: int, **fields) -> None:
         fields.setdefault("verification", "NEEDS_VERIFICATION")     # changed identity must be re-verified
         fields.setdefault("platform_id", None)
         fields.setdefault("state", "NEEDS_VERIFICATION")
+        fields.setdefault("requirement", None)
     db.update("monitor_sources", ms_id, owner_locked_json=json.dumps(sorted(locked)), **fields)
     event(db, ms_id, "state", "Owner changed " + ", ".join(sorted(k for k in fields if k in EDITABLE)))
+
+
+PLATFORM_HOSTS = {"youtube": ("youtube.com", "youtu.be"), "twitch": ("twitch.tv",), "kick": ("kick.com",),
+                  "rumble": ("rumble.com",)}
+
+
+def edit_source(db, ms_id: int, *, handle: str | None = None, url: str | None = None, priority=None,
+                notes: str | None = None, enabled=None) -> list[str]:
+    """Validated owner edit from the dashboard. Goes through `owner_set` (locks the fields, and an identity change
+    forces re-verification). It can never mark an identity verified, grant permission or start acquisition."""
+    ms = db.one("SELECT * FROM monitor_sources WHERE id=?", (ms_id,))
+    if not ms:
+        raise KeyError(ms_id)
+    changes = {}
+    if handle is not None and handle.strip() != (ms["candidate_handle"] or ""):
+        h = handle.strip()
+        if h and not re.fullmatch(r"[@A-Za-z0-9_.\-]{1,100}", h):
+            raise ValueError("Handle may only contain letters, digits and @ _ . -")
+        changes["candidate_handle"] = h or None
+    if url is not None and url.strip() != (ms["canonical_url"] or ""):
+        u = url.strip()
+        if u:
+            p = urlparse(u)
+            host = (p.hostname or "").lower().removeprefix("www.")
+            if p.scheme not in ("http", "https") or not host or p.username or p.password:
+                raise ValueError("Enter a full https:// address without a login in it.")
+            allowed = PLATFORM_HOSTS.get(ms["platform"])
+            if allowed and not any(host == a or host.endswith("." + a) for a in allowed):
+                raise ValueError(f"A {ms['platform']} source must use a {allowed[0]} address.")
+        changes["canonical_url"] = u or None
+    if priority not in (None, ""):
+        pr = int(priority)
+        if not 0 <= pr <= 100:
+            raise ValueError("Priority must be between 0 and 100.")
+        if pr != ms["priority"]:
+            changes["priority"] = pr
+    if notes is not None and notes.strip() != (ms["notes"] or ""):
+        changes["notes"] = notes.strip()[:500] or None
+    if enabled is not None and int(bool(enabled)) != ms["monitoring_enabled"]:
+        changes["monitoring_enabled"] = int(bool(enabled))
+    if changes:
+        owner_set(db, ms_id, **changes)
+    return sorted(changes)
 
 
 def event(db, ms_id: int | None, kind: str, message: str) -> None:
@@ -374,22 +425,114 @@ def verify_all(settings, db, adapters: dict | None = None) -> list[dict]:
 
 # ---- acquisition (separate from monitoring) -----------------------------------------------------
 
+def creator_permitted(row) -> bool:
+    """A written permission recorded FOR THIS CREATOR (who granted it, and a reference), not expired.
+    Permission for one creator never extends to another, and a platform-wide permission alone is not enough."""
+    try:
+        p = json.loads((row["permission_json"] if row else None) or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not (p.get("granted_by") and p.get("reference")):
+        return False
+    exp = p.get("expires")
+    if exp:
+        try:
+            if time.strptime(str(exp)[:10], "%Y-%m-%d") < time.localtime():
+                return False
+        except ValueError:
+            return False
+    return True
+
+
 def acquisition_for(settings, db, ms) -> str:
-    """PERMITTED only when the existing rules would allow retrieval from this host: a recorded written
-    permission, or a host the owner declared in ALLOWED_URL_DOMAINS. Discovery never changes this."""
+    """PERMITTED only when BOTH hold: the existing host rules allow retrieval (recorded written permission for the
+    platform, or an owner-declared domain) AND this creator's own permission is on record. An enabled legacy
+    Rumble channel source counts as the owner's explicit decision for that channel (existing behaviour kept).
+    Discovery never changes this."""
     url = ms["canonical_url"]
-    if not url:
-        return "PERMISSION_REQUIRED"
-    host = (urlparse(url).hostname or "").lower()
-    if ms["platform"] == PC:
+    if not url or ms["platform"] == PC:
         return "PERMISSION_REQUIRED"          # enclosures are recorded, never fetched automatically
+    host = (urlparse(url).hostname or "").lower()
     restricted = ingest.restricted_reason(host)
     perm = ingest.permission_for(db, host)
-    if perm:
+    host_ok = bool(perm) or (not restricted and any(ingest.host_matches(host, d) for d in settings.allowed_url_domains))
+    if not host_ok:
+        return "PERMISSION_REQUIRED"
+    creator = db.one("SELECT permission_json FROM creators WHERE id=?", (ms["creator_id"],))
+    if creator_permitted(creator):
         return "PERMITTED"
-    if not restricted and any(ingest.host_matches(host, d) for d in settings.allowed_url_domains):
-        return "PERMITTED"
+    if ms["platform"] == RB and ms["legacy_source_id"]:
+        lg = db.one("SELECT enabled FROM sources WHERE id=?", (ms["legacy_source_id"],))
+        if lg and lg["enabled"]:
+            return "PERMITTED"
     return "PERMISSION_REQUIRED"
+
+
+def link_rumble_source(settings, db, ms_id: int) -> int:
+    """Create (DISABLED, not recording) the existing-engine channel source for a Rumble candidate so the existing
+    Rumble monitor can be switched on from the Sources page. Never enables anything: that needs Rumble's written
+    permission and the creator's own permission."""
+    ms = db.one("SELECT * FROM monitor_sources WHERE id=?", (ms_id,))
+    if not ms or ms["platform"] != RB or not ms["canonical_url"]:
+        raise ValueError("Only a Rumble source with a channel URL can be linked.")
+    if ms["legacy_source_id"]:
+        return ms["legacy_source_id"]
+    lg = db.one("SELECT id FROM sources WHERE url=?", (ms["canonical_url"],))
+    if lg:
+        db.update("monitor_sources", ms_id, legacy_source_id=lg["id"])
+        return lg["id"]
+    creator = db.one("SELECT name FROM creators WHERE id=?", (ms["creator_id"],))
+    sid_ = db.insert("sources", name=f"{creator['name']} (Rumble)", kind="channel", url=ms["canonical_url"], enabled=0,
+                     poll_minutes=5, record_live=0, backfill=0, creator_id=ms["creator_id"], platform="rumble",
+                     authorisation="", status="disabled", next_check=0,
+                     status_detail="Added from the Portfolio, switched off. Enable it on the Sources page once Rumble's "
+                                   "written permission and this creator's permission are recorded.")
+    db.update("monitor_sources", ms_id, legacy_source_id=sid_)
+    event(db, ms_id, "state", f"Linked disabled Rumble source {sid_} (acquisition not enabled)")
+    return sid_
+
+
+# ---- publishing-account registry: six brands x four platforms --------------------------------------------
+
+ACCOUNT_PLATFORMS = ("youtube", "tiktok", "instagram", "facebook")
+
+
+def seed_account_slots(db) -> int:
+    """One clearly-labelled placeholder per brand and platform (24). Nothing is created on any platform; the owner
+    records the real account with `set_account`. Each slot carries only its own brand's niche, so clips from
+    one brand can never be packaged for another brand's account."""
+    n = 0
+    for bk, b in BRANDS.items():
+        for plat in ACCOUNT_PLATFORMS:
+            ph = f"PENDING-{bk}-{plat}"
+            if db.one("SELECT 1 FROM social_accounts WHERE brand=? AND platform=?", (bk, plat)):
+                continue
+            db.insert("social_accounts", platform=plat, handle=ph, display_name=f"{b['name']} ({plat}) - not yet created",
+                      brand=bk, niches_json=json.dumps([b["niche"]]), status="awaiting_connection",
+                      notes="Placeholder. Record the official account with the Accounts page; nothing is created for you.")
+            n += 1
+    return n
+
+
+def set_account(db, brand: str, platform: str, handle: str, display_name: str = "", account_id: str = "") -> int:
+    """Record the owner's real account for a brand slot. Refuses an account already registered to another brand."""
+    if brand not in BRANDS or platform not in ACCOUNT_PLATFORMS:
+        raise ValueError("Unknown brand or platform.")
+    handle = handle.strip()
+    if not handle or handle.startswith("PENDING-"):
+        raise ValueError("Enter the real account handle.")
+    other = db.one("SELECT brand FROM social_accounts WHERE platform=? AND lower(handle)=lower(?) AND COALESCE(brand,'')<>?",
+                   (platform, handle, brand))
+    if other:
+        raise ValueError(f"{platform} @{handle} already belongs to brand '{other['brand']}'; brands never share an account.")
+    slot = db.one("SELECT * FROM social_accounts WHERE brand=? AND platform=? ORDER BY (handle LIKE 'PENDING-%') DESC, id LIMIT 1",
+                  (brand, platform))
+    fields = dict(handle=handle, display_name=display_name or handle, status="awaiting_connection",
+                  notes=(f"Account id: {account_id}. " if account_id else "") + "Registered by the owner; connection still needs authorisation.")
+    if slot:
+        db.update("social_accounts", slot["id"], **fields)
+        return slot["id"]
+    return db.insert("social_accounts", platform=platform, brand=brand, niches_json=json.dumps([BRANDS[brand]["niche"]]), **fields)
 
 
 # ---- operational state (what is actually true, not what is configured) --------------------------

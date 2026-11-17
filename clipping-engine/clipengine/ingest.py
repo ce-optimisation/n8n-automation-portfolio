@@ -677,6 +677,11 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
     if ctx.payload.get("source_item_id"):
         db.update("source_items", ctx.payload["source_item_id"], recording_id=rid,
                   state="duplicate" if dup else "imported", error=None)
+    if ctx.payload.get("creator_id"):
+        db.execute("UPDATE recordings SET creator_id=COALESCE(creator_id, ?) WHERE id=?", (ctx.payload["creator_id"], rid))
+    if ctx.payload.get("discovered_item_id"):
+        db.execute("UPDATE discovered_items SET state=?, detail=? WHERE id=?",
+                   ("duplicate" if dup else "imported", f"recording {rid}", ctx.payload["discovered_item_id"]))
     if dup:
         ctx.log(f"Duplicate of existing recording #{rid}; not re-processing", "WARNING")
         return

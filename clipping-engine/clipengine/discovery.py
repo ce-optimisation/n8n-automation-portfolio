@@ -284,10 +284,40 @@ class DiscoverySupervisor:
             made += 1
         return made
 
+    def sync_job_states(self) -> int:
+        """Bring queued items in line with their download jobs, so nothing stays 'queued' after the job finished
+        or failed (also after a restart), and finished work stops counting against the disk reservation."""
+        n = 0
+        for d in self.db.query("SELECT * FROM discovered_items WHERE state='queued'"):
+            job = self.db.one("SELECT status, error, recording_id FROM jobs WHERE id=?", (d["job_id"],)) if d["job_id"] else None
+            if job is None:
+                new, why = "discovered", "Download job no longer exists; eligible to be queued again"
+            elif job["status"] == "done":
+                new, why = "imported", (f"Downloaded into recording {job['recording_id']}" if job["recording_id"] else "Downloaded")
+            elif job["status"] in ("failed", "cancelled"):
+                new, why = "failed", (job["error"] or job["status"] or "")[:300]
+            else:
+                continue
+            self.db.execute("UPDATE discovered_items SET state=?, detail=? WHERE id=?", (new, why, d["id"]))
+            portfolio.event(self.db, d["monitor_source_id"], "discovered" if new != "failed" else "error",
+                            f"item {d['id']} {new}: {(d['title'] or '')[:60]}")
+            n += 1
+        return n
+
+    def retry_item(self, item_id: int) -> bool:
+        """Owner action: a failed item becomes eligible again (permission and disk checks still apply)."""
+        d = self.db.one("SELECT state FROM discovered_items WHERE id=?", (item_id,))
+        if not d or d["state"] != "failed":
+            return False
+        self.db.execute("UPDATE discovered_items SET state='discovered', job_id=NULL, detail='Retry requested' WHERE id=?",
+                        (item_id,))
+        return True
+
     def route_pending(self) -> int:
         routed = 0
         if self.queue is None:
             return 0
+        self.sync_job_states()
         self.ensure_recorders()
         rows = self.db.query("SELECT d.*, m.canonical_url AS src_url, m.legacy_source_id, m.id AS msid, "
                              "m.platform AS plat FROM discovered_items d JOIN monitor_sources m ON m.id=d.monitor_source_id "
