@@ -79,6 +79,40 @@ def test_restricted_platform_source_stays_disabled_until_permission(settings, mo
     assert monitor.set_enabled(settings, db, sid, True)[0] is True
 
 
+def test_dns_outage_is_retried_and_never_switches_the_source_off(settings, monkeypatch):
+    """Regression (17 Nov 2026): a Wi-Fi blip made rumble.com unresolvable for one check and the
+    source was disabled as 'blocked' for the night, so the live show was missed. A DNS failure is
+    a connection problem: the source stays enabled, is retried within a few minutes, and recovers."""
+    settings.allowed_url_domains = ["example.org"]
+    db = Database(settings.db_path)
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["93.184.216.34"])
+    sid, ok, _ = monitor.add_source(settings, db, name="Show", kind="channel", url="https://example.org/c/show",
+                                    poll_minutes=2)
+    assert ok
+    mon = monitor.SourceMonitor(settings, db, JobQueue(db))
+    mon.lister = lambda s, url, limit=15: [{"key": "a", "title": "Old", "url": "https://example.org/a", "live": False}]
+
+    def no_dns(host):
+        raise OSError(11001, "getaddrinfo failed")
+    monkeypatch.setattr(ingest, "resolve_host", no_dns)
+    for _ in range(4):                                   # several failed checks in a row
+        before = time.time()
+        res = mon.poll(sid)
+        src = db.one("SELECT * FROM sources WHERE id=?", (sid,))
+        assert "blocked" not in res and "Could not resolve" in res["error"]
+        assert src["enabled"] == 1 and src["status"] == "error"
+        # no exponential back-off for a DNS outage: retried at the normal check interval
+        assert src["next_check"] - before <= max(120, src["poll_minutes"] * 60) + 5
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["93.184.216.34"])
+    mon.poll(sid)
+    src = db.one("SELECT * FROM sources WHERE id=?", (sid,))
+    assert src["enabled"] == 1 and src["status"] == "ok" and src["consecutive_errors"] == 0
+    # a real policy refusal still switches the source off
+    monkeypatch.setattr(ingest, "resolve_host", lambda h: ["10.0.0.5"])
+    assert "blocked" in mon.poll(sid)
+    assert db.one("SELECT enabled FROM sources WHERE id=?", (sid,))["enabled"] == 0
+
+
 def feed_xml(items):
     body = "".join(f"<item><guid>{k}</guid><title>{t}</title><enclosure url='{u}' type='video/mp4'/>"
                    f"<pubDate>Mon, 0{i + 1} Jan 2026 10:00:00 GMT</pubDate></item>" for i, (k, t, u) in enumerate(items))

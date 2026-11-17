@@ -49,8 +49,14 @@ ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 # ---- authorisation ------------------------------------------------------------
 
-def check_source_allowed(settings: Settings, db: Database, url: str) -> tuple[bool, str]:
-    """Is recurring automated retrieval from this URL authorised by configuration?"""
+def check_source_allowed(settings: Settings, db: Database, url: str, *,
+                         raise_transient: bool = False) -> tuple[bool, str]:
+    """Is recurring automated retrieval from this URL authorised by configuration?
+
+    With raise_transient, a host that cannot be resolved right now (no internet, Wi-Fi blip) raises
+    the SourceError instead of returning (False, ...): that is a connection problem, not a policy
+    decision, so a scheduled check must retry rather than switch the source off. Nothing is
+    fetched in that case, and the next check runs the full validation again."""
     p = urlparse((url or "").strip())
     host = (p.hostname or "").lower()
     if not host or p.scheme not in ("http", "https"):
@@ -65,6 +71,8 @@ def check_source_allowed(settings: Settings, db: Database, url: str) -> tuple[bo
     try:
         ingest.check_network_target(url, settings)
     except ingest.SourceError as e:
+        if raise_transient and e.code == "unresolvable":
+            raise
         return False, str(e)
     if perm:
         return True, f"Authorised by recorded written permission ({perm['granted_by']}, ref {perm['reference']})."
@@ -595,12 +603,14 @@ class SourceMonitor:
         src = self.db.one("SELECT * FROM sources WHERE id = ?", (sid,))
         if not src:
             return {}
-        ok, msg = check_source_allowed(self.settings, self.db, src["url"])
-        if not ok:
-            self.db.update("sources", sid, enabled=0, status="blocked", status_detail=msg, last_checked=time.time())
-            return {"blocked": msg}
         result = {"new": 0, "live": False}
         try:
+            # A DNS failure raises here and is handled below as a temporary error (retried soon);
+            # only a real policy refusal switches the source off.
+            ok, msg = check_source_allowed(self.settings, self.db, src["url"], raise_transient=True)
+            if not ok:
+                self.db.update("sources", sid, enabled=0, status="blocked", status_detail=msg, last_checked=time.time())
+                return {"blocked": msg}
             # First real listing: what is already published becomes the baseline (noted, not downloaded).
             # A channel whose only "success" was an earlier bogus/empty listing (no real items stored; an
             # empty channel listing is an error since 5edc464) still counts as first, so a repaired
@@ -642,7 +652,11 @@ class SourceMonitor:
             n = src["consecutive_errors"] + 1
             delay = min(6 * 3600, src["poll_minutes"] * 60 * 2 ** min(n, 6))
             text = ANSI_RE.sub("", f"{type(e).__name__}: {e}")
-            if "429" in text or "too many requests" in text.lower():
+            if getattr(e, "code", None) == "unresolvable":
+                # No internet for a moment: keep checking every few minutes so a live show that
+                # starts during or after the outage is still caught (no exponential back-off).
+                delay = min(delay, max(120, src["poll_minutes"] * 60))
+            elif "429" in text or "too many requests" in text.lower():
                 # The site is rate-limiting us. Hammering it makes that worse and is not what any
                 # permission covers: wait at least 30 minutes (longer after repeated refusals).
                 delay = max(delay, min(6 * 3600, 1800 * 2 ** min(n - 1, 3)))
