@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -381,6 +381,88 @@ CREATE TABLE IF NOT EXISTS niche_scores (
     rationale TEXT, sources_json TEXT, observed TEXT, confidence TEXT,
     updated_at REAL NOT NULL
 );
+-- ---- v6: six-brand creator/source portfolio and discovery monitoring --------------------------
+-- DISCOVERY (what exists / who is live) is kept apart from ACQUISITION (permission to retrieve).
+CREATE TABLE IF NOT EXISTS brands (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    niche_key TEXT,
+    description TEXT,
+    editorial_note TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS monitor_sources (
+    id INTEGER PRIMARY KEY,
+    uid TEXT NOT NULL UNIQUE,              -- permanent internal id: <creator uid>/<platform>/<type>
+    creator_id INTEGER NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+    brand_key TEXT NOT NULL,
+    platform TEXT NOT NULL,                -- youtube | twitch | kick | rumble | podcast
+    source_type TEXT NOT NULL,             -- channel | podcast_feed
+    channel_name TEXT,                     -- official name as the platform reports it (verified)
+    candidate_handle TEXT,                 -- UNVERIFIED hint used only to look the identity up
+    canonical_url TEXT,                    -- set from verified evidence, never guessed
+    platform_id TEXT,                      -- stable platform id (UC..., twitch user id, kick user id, feed guid)
+    verification TEXT NOT NULL DEFAULT 'NEEDS_VERIFICATION',   -- VERIFIED | NEEDS_VERIFICATION
+    evidence TEXT, verified_at REAL,
+    capabilities_json TEXT,                -- {"live":bool,"uploads":bool,"premieres":bool,"podcast":bool}
+    monitoring_enabled INTEGER NOT NULL DEFAULT 1,
+    owner_locked_json TEXT NOT NULL DEFAULT '[]',   -- fields the owner changed; the seeder never overwrites them
+    acquisition TEXT NOT NULL DEFAULT 'PERMISSION_REQUIRED',   -- separate from monitoring
+    legacy_source_id INTEGER,              -- existing `sources` row that handles recording (e.g. Rumble)
+    priority INTEGER NOT NULL DEFAULT 50,
+    dup_group TEXT,                        -- sources of the same show (simulcast) share a group
+    live_state TEXT NOT NULL DEFAULT 'UNKNOWN',   -- LIVE | OFFLINE | UNKNOWN
+    live_since TEXT, live_title TEXT, live_category TEXT,
+    state TEXT NOT NULL DEFAULT 'NEEDS_VERIFICATION',  -- operational state shown to the owner
+    error_code TEXT, last_error TEXT,
+    consecutive_errors INTEGER NOT NULL DEFAULT 0,
+    last_checked REAL, next_check REAL, last_success REAL,
+    latest_media_id TEXT,
+    requirement TEXT,                      -- what the owner must do (credentials, verification ...)
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_monitor_sources_due ON monitor_sources(monitoring_enabled, next_check);
+CREATE TABLE IF NOT EXISTS discovered_items (
+    id INTEGER PRIMARY KEY,
+    monitor_source_id INTEGER NOT NULL REFERENCES monitor_sources(id) ON DELETE CASCADE,
+    creator_id INTEGER NOT NULL,
+    brand_key TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    platform_item_id TEXT NOT NULL,
+    kind TEXT NOT NULL,                    -- live | upcoming | upload | vod | episode
+    title TEXT, url TEXT, published TEXT, scheduled_start TEXT, category TEXT,
+    duration_s REAL,
+    content_key TEXT,                      -- confirmed-identical content across platforms (simulcast)
+    dup_of INTEGER,                        -- the first-discovered item for the same content
+    state TEXT NOT NULL DEFAULT 'discovered',   -- discovered | baseline | queued | permission_required | duplicate | ignored | failed
+    priority_tags TEXT,                    -- e.g. gta_vi_launch (a signal for review, never a classification)
+    job_id INTEGER, detail TEXT,
+    first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+    UNIQUE(monitor_source_id, platform_item_id)
+);
+CREATE TABLE IF NOT EXISTS monitor_events (
+    id INTEGER PRIMARY KEY,
+    ts REAL NOT NULL,
+    monitor_source_id INTEGER,
+    kind TEXT NOT NULL,                    -- state | live | discovered | error | recovered | priority | duplicate
+    message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_monitor_events_ts ON monitor_events(ts);
+CREATE TABLE IF NOT EXISTS priority_events (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    brand_key TEXT NOT NULL,
+    starts_at TEXT NOT NULL,               -- ISO-8601 with offset
+    ends_at TEXT NOT NULL,
+    event_date TEXT,                       -- the launch/occurrence itself
+    poll_seconds INTEGER NOT NULL DEFAULT 120,       -- elevated minimum interval for the brand's sources
+    live_poll_seconds INTEGER NOT NULL DEFAULT 60,   -- while a source is live or a broadcast is imminent
+    match_terms_json TEXT,                 -- words whose presence in source metadata tags an item
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
 """
 
 
@@ -414,6 +496,12 @@ MIGRATIONS = [
     ("clips", "review_seconds", "REAL"),
     ("clips", "files_deleted_at", "REAL"),
     ("jobs", "priority", "INTEGER NOT NULL DEFAULT 0"),
+    # v6: portfolio
+    ("creators", "uid", "TEXT"),
+    ("creators", "brand_key", "TEXT"),
+    ("creators", "kind", "TEXT"),                                  # creator | show
+    ("creators", "roster", "TEXT"),                                # 'approved' = owner-approved portfolio member
+    ("creators", "acquisition_state", "TEXT"),                     # separate from monitoring
 ]
 
 

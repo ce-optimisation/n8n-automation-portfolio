@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import (autostart, captions, cloud, editorial, hardware, health, inbox, ingest, lifecycle, maintenance,
-               monitor, notify, platforms, power, render, segment, setup_status, storage, tailscale)
+               discovery, events, monitor, notify, platforms, portfolio, power, render, segment, setup_status, storage, tailscale)
 from ..publishing import packages
 from ..config import Settings, apply_settings
 from ..db import Database
@@ -66,10 +66,16 @@ class App:
         self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
         self.monitor = monitor.SourceMonitor(settings, self.db, self.queue)
+        self.discovery = discovery.DiscoverySupervisor(settings, self.db, self.queue)
         # One heavy workload at a time: transcription/rendering wait while a live capture runs.
         self.queue.recording_active = self.monitor.recording_active
         self.queue.defer_heavy_while_recording = settings.defer_heavy_while_recording
         editorial.seed_presets(self.db)
+        try:
+            portfolio.seed(self.db, settings)
+            events.seed_events(self.db)
+        except Exception:  # noqa: BLE001 - the portfolio must never stop the engine
+            log.exception("portfolio could not be seeded")
         research_file = Path(__file__).resolve().parents[2] / "research" / "research_dataset.json"
         if research_file.is_file() and self.db.get_kv("research_loaded") != str(research_file.stat().st_mtime):
             try:
@@ -141,6 +147,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.maintenance.start()
             core.inbox.start()
             core.monitor.start()
+            core.discovery.start()
             core.keepawake.start()
             core.heartbeat.start()
             __import__("threading").Thread(target=core.check_caption_font, daemon=True).start()
@@ -151,6 +158,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.maintenance.stop()
             core.inbox.stop()
             core.monitor.stop()
+            core.discovery.stop()
             core.keepawake.stop()
             if start_worker:
                 core.heartbeat.stop()
@@ -620,6 +628,43 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return RedirectResponse(request.headers.get("referer") or "/ready", status_code=303)
 
     # ---- sources -----------------------------------------------------------
+    @app.get("/portfolio", response_class=HTMLResponse)
+    def portfolio_page(request: Request, msg: str = "", brand: str = ""):
+        rows = portfolio.summary(settings, core.db)
+        if brand:
+            rows = [r for r in rows if r["brand_key"] == brand]
+        brands = core.db.query("SELECT * FROM brands ORDER BY name")
+        qcount = {r["brand_key"]: r["n"] for r in core.db.query(
+            "SELECT brand_key, COUNT(*) n FROM jobs j JOIN discovered_items d ON d.job_id=j.id "
+            "WHERE j.status IN ('queued','running') GROUP BY brand_key")}
+        new_items = core.db.query("SELECT d.*, c.name AS creator FROM discovered_items d JOIN creators c ON c.id=d.creator_id "
+                                  "WHERE d.state<>'baseline' ORDER BY d.first_seen DESC LIMIT 30")
+        evs = core.db.query("SELECT e.*, m.uid FROM monitor_events e LEFT JOIN monitor_sources m ON m.id=e.monitor_source_id "
+                            "ORDER BY e.id DESC LIMIT 25")
+        return page(request, "portfolio.html", rows=rows, brands=brands, brand=brand, msg=msg, qcount=qcount,
+                    new_items=new_items, evs=evs, state_help=portfolio.STATE_HELP,
+                    active_events=events.active_events(core.db, __import__("time").time()),
+                    quota=core.discovery.quota_used("youtube"), quota_limit=discovery.YT_DAILY_UNITS)
+
+    @app.post("/portfolio/{ms_id}/toggle")
+    def portfolio_toggle(ms_id: int, enabled: str = Form("0")):
+        portfolio.owner_set(core.db, ms_id, monitoring_enabled=1 if enabled == "1" else 0)
+        return RedirectResponse("/portfolio?msg=Saved", status_code=303)
+
+    @app.post("/portfolio/{ms_id}/check")
+    def portfolio_check(ms_id: int):
+        res = core.discovery.poll(ms_id)
+        return RedirectResponse("/portfolio?" + urlencode({"msg": "Checked: " + json.dumps(res, default=str)[:160]}),
+                                status_code=303)
+
+    @app.post("/portfolio/{ms_id}/confirm")
+    def portfolio_confirm(ms_id: int, note: str = Form("Owner checked the account")):
+        try:
+            portfolio.confirm_identity(core.db, ms_id, note)
+        except ValueError as e:
+            return RedirectResponse("/portfolio?" + urlencode({"msg": str(e)}), status_code=303)
+        return RedirectResponse("/portfolio?msg=Confirmed", status_code=303)
+
     @app.get("/sources", response_class=HTMLResponse)
     def sources_page(request: Request, msg: str = "", err: str = ""):
         srcs = core.db.query("SELECT * FROM sources ORDER BY id")

@@ -8,7 +8,8 @@ Approved default ("anton"):
   * Sentence case exactly as transcribed. Text is never upper-cased.
   * Solid white text with a modest solid black outline; no shadow, no background box,
     no colour effects, no animation.
-  * 73 px on a 1080×1920 frame (was 52; enlarged 40% at the owner's request, Nov 2026).
+  * 95 px on a 1080×1920 frame (was 73, which was 52 enlarged 40%; enlarged a further 30% at the owner's
+    request, 17 Nov 2026).
   * Centred horizontally; caption block centred at 72% of the frame height (lower-middle),
     clear of TikTok/Instagram overlays at the bottom and the right-hand button column.
   * At most two lines, wrapped at word boundaries using Anton's average glyph width; any line still
@@ -117,7 +118,7 @@ class CaptionStyle:
     preset: str = "anton"
     enabled: bool = True
     font: str = "Anton"
-    size: int = 73              # was 52; enlarged 40% at the owner's request (16 Nov 2026), same centre line
+    size: int = 95              # was 73 (52 +40%); +30% at the owner's request (17 Nov 2026), same centre line
     outline: float = 3.0
     position: float = 0.72      # vertical centre of the caption block, as a fraction of frame height
     backing: bool = False       # optional subtle dark box behind text (off by default)
@@ -145,6 +146,8 @@ def load_style(db=None) -> CaptionStyle:
     data = json.loads(raw) if raw else {}
     base = PRESETS.get(data.get("preset", "anton"), PRESETS["anton"])
     fields = {k: v for k, v in data.items() if k in CaptionStyle.__dataclass_fields__ and k != "font"}
+    if fields.get("size") == 73:           # the superseded default saved by an earlier Settings page: use the new one
+        fields.pop("size")
     style = replace(base, **fields)
     return clamp(style)
 
@@ -176,7 +179,7 @@ def _ts(t: float) -> str:
 
 
 def build_ass(phrases: list[dict], style: CaptionStyle, width: int = 1080, height: int = 1920,
-              label: str | None = None) -> str:
+              label: str | None = None, title_events: tuple[str, str] | None = None) -> str:
     """ASS document for the given phrases. Text is used verbatim (sentence case preserved)."""
     bold = -1 if style.bold else 0
     if style.backing:
@@ -185,6 +188,7 @@ def build_ass(phrases: list[dict], style: CaptionStyle, width: int = 1080, heigh
     else:
         border_style, outline_col, outline = 1, "&H00000000", style.outline
     label_size = max(24, int(style.size * 0.5))
+    title_style_line = (title_events[0] + "\n") if title_events and title_events[0] else ""
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -196,12 +200,14 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,{style.font},{style.size},&H00FFFFFF,&H00FFFFFF,{outline_col},&H00000000,{bold},0,0,0,100,100,0,0,{border_style},{outline:.1f},0,5,{SIDE_MARGIN},{SIDE_MARGIN},0,1
 Style: Label,{style.font},{label_size},&H00F0F0F0,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{max(1.0, style.outline * 0.6):.1f},0,8,60,60,110,1
-
+{title_style_line}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     x, y = width // 2, int(height * style.position)
     out = []
+    if title_events and title_events[1]:
+        out.append(title_events[1])
     if label and style.source_label and phrases:
         out.append(f"Dialogue: 1,{_ts(0)},{_ts(phrases[-1]['end'] + 5)},Label,,0,0,0,,{_esc(label)}")
     for p in phrases:

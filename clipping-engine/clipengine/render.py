@@ -110,10 +110,15 @@ def layout(settings: Settings, src_w: int, src_h: int) -> dict:
 
 
 def write_ass(phrases: list[dict], path: Path, settings: Settings, src_w: int, src_h: int,
-              label: str | None = None, style=None) -> None:
-    from . import captions
+              label: str | None = None, style=None, title: str | None = None, title_style=None,
+              duration: float = 0.0) -> None:
+    from . import captions, titles
     style = style or captions.PRESETS["anton"]
-    path.write_text(captions.build_ass(phrases, style, settings.out_width, settings.out_height, label),
+    tev = None
+    if title and title_style is not None and title_style.enabled:
+        tev = titles.build_events(title, title_style, duration or (phrases[-1]["end"] + 5 if phrases else 60),
+                                  settings.out_width, settings.out_height, layout(settings, src_w, src_h)["fg_h"])
+    path.write_text(captions.build_ass(phrases, style, settings.out_width, settings.out_height, label, tev),
                     encoding="utf-8")
 
 
@@ -133,14 +138,15 @@ def filter_graph(settings: Settings, ass_name: str | None = "captions.ass", font
 
 def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end: float,
                 words: list[dict], src_w: int, src_h: int, label: str | None,
-                on_progress=None, style=None) -> dict:
+                on_progress=None, style=None, title: str | None = None, title_style=None) -> dict:
     from . import captions
     style = style or captions.PRESETS["anton"]
     out_dir.mkdir(parents=True, exist_ok=True)
     phrases = build_phrases(words, start, end, max_chars=style.max_chars(settings.out_width))
     srt, ass = out_dir / "captions.srt", out_dir / "captions.ass"
     write_srt(phrases, srt)
-    write_ass(phrases, ass, settings, src_w, src_h, label, style)
+    title_on = bool(title and title_style is not None and title_style.enabled)
+    write_ass(phrases, ass, settings, src_w, src_h, label, style, title, title_style, end - start)
     tmp_out = out_dir / "clip.tmp.mp4"
     final = out_dir / "clip.mp4"
     src_info = media.probe(Path(src))
@@ -151,7 +157,7 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     dur = end - start
     media.run_ffmpeg([
         "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(Path(src).resolve()),
-        "-filter_complex", filter_graph(settings, ass.name if style.enabled else None,
+        "-filter_complex", filter_graph(settings, ass.name if (style.enabled or title_on) else None,
                                         captions.fontsdir_for(out_dir)),
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", settings.x264_preset, "-crf", str(settings.video_crf),
@@ -169,4 +175,4 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     if math.isclose(info["duration"], 0.0):
         raise media.PermanentError("Render produced an empty video")
     return {"video": final, "thumb": thumb, "srt": srt, "ass": ass, "probe": info, "phrases": len(phrases),
-            "caption_style": style.preset if style.enabled else "off"}
+            "caption_style": style.preset if style.enabled else "off", "title": title_on}

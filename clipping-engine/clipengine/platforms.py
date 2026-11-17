@@ -33,6 +33,19 @@ from urllib.parse import urlparse
 USER_AGENT = "LocalClippingEngine/1.1 (self-hosted editorial review tool)"
 
 
+# Specific states every integration can report (never a bare "failed").
+ERROR_CODES = {
+    "needs_credentials": "Missing credentials (owner must register a free developer app / key).",
+    "not_found": "Invalid channel identity (the platform has no such channel).",
+    "unauthorised": "API authentication failed (credentials rejected, expired or lacking access).",
+    "rate_limited": "Rate limit or quota reached; the engine waits and retries.",
+    "offline": "Source offline (the site or channel is not reachable).",
+    "inaccessible": "Content inaccessible (removed, private, geo-blocked or login-only).",
+    "permission_missing": "Acquisition permission missing (discovery still works).",
+    "temporary_failure": "Temporary service or network failure; retried with back-off.",
+}
+
+
 class AdapterError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -134,16 +147,44 @@ class Adapter:
         return self.client
 
     def _get(self, url: str, **kw):
+        """GET with the engine's error taxonomy (see ERROR_CODES). Network trouble and 5xx are TEMPORARY."""
+        import httpx
         self._throttle.wait()
-        r = self._http().get(url, **kw)
-        if r.status_code == 429:
+        try:
+            r = self._http().get(url, **kw)
+        except httpx.TransportError as e:
+            raise AdapterError("temporary_failure", f"{self.platform}: network problem ({type(e).__name__}); "
+                                                    "will retry") from e
+        return self._check(r)
+
+    def _check(self, r):
+        code = r.status_code
+        if code == 429:
             raise AdapterError("rate_limited", f"{self.platform}: HTTP 429 (rate limited); back off and retry later")
-        if r.status_code in (401, 403):
-            raise AdapterError("unauthorised", f"{self.platform}: HTTP {r.status_code} — credentials missing, "
-                                               "expired or lacking access")
-        if r.status_code >= 400:
-            raise AdapterError("http_error", f"{self.platform}: HTTP {r.status_code}")
+        if code == 403:
+            body = (r.text or "")[:2000].lower() if hasattr(r, "text") else ""
+            if "quota" in body or "ratelimit" in body:
+                raise AdapterError("rate_limited", f"{self.platform}: API quota exhausted; waiting for it to reset")
+            raise AdapterError("unauthorised", f"{self.platform}: HTTP 403 — credentials missing, expired or "
+                                               "lacking access")
+        if code == 401:
+            raise AdapterError("unauthorised", f"{self.platform}: HTTP 401 — credentials missing, expired or "
+                                               "lacking access")
+        if code == 404:
+            raise AdapterError("not_found", f"{self.platform}: HTTP 404 — the channel or item does not exist")
+        if code in (400,) and "api key" in ((r.text or "").lower() if hasattr(r, "text") else ""):
+            raise AdapterError("unauthorised", f"{self.platform}: the API key was rejected")
+        if code in (410, 451):
+            raise AdapterError("inaccessible", f"{self.platform}: HTTP {code} — content unavailable to this client")
+        if code >= 500:
+            raise AdapterError("temporary_failure", f"{self.platform}: HTTP {code} (service problem); will retry")
+        if code >= 400:
+            raise AdapterError("http_error", f"{self.platform}: HTTP {code}")
         return r
+
+    def identity(self, ref: ChannelRef) -> dict:
+        """Cheap identity lookup (stable id + official name). Never searches by display name."""
+        raise AdapterError("unsupported", f"{self.platform}: identity lookup not available")
 
     def report(self, ref: ChannelRef) -> Report:
         raise NotImplementedError
@@ -192,6 +233,16 @@ class TwitchAdapter(Adapter):
             self._token = (d["access_token"], time.time() + float(d.get("expires_in", 3600)))
         return {"Client-Id": self.settings.twitch_client_id, "Authorization": f"Bearer {self._token[0]}"}
 
+    def identity(self, ref: ChannelRef) -> dict:
+        h = self._headers()
+        users = self._get(f"{self.API}/users", params={"login": ref.handle}, headers=h).json().get("data", [])
+        if not users:
+            raise AdapterError("not_found", f"Twitch: no channel '{ref.handle}'")
+        u = users[0]
+        return {"id": u["id"], "login": u["login"], "name": u.get("display_name"),
+                "url": f"https://www.twitch.tv/{u['login']}", "broadcaster_type": u.get("broadcaster_type") or "",
+                "platform_verified": u.get("broadcaster_type") == "partner"}
+
     def report(self, ref: ChannelRef, clips: bool = True) -> Report:
         rep = Report("twitch", self.capabilities(), source=self.official_api)
         h = self._headers()
@@ -230,7 +281,7 @@ class TwitchAdapter(Adapter):
                 rep.items.append(MediaItem(key=f"twitch:s{seg['id']}", title=seg.get("title", ""),
                                            url=rep.identity["url"], kind="upcoming", published=seg.get("start_time", "")))
         except AdapterError as e:
-            if e.code != "http_error":      # 404 = no schedule set; not an error worth showing
+            if e.code not in ("http_error", "not_found"):      # 404 = no schedule set; not an error worth showing
                 rep.errors.append(str(e))
         return rep
 
@@ -283,6 +334,15 @@ class KickAdapter(Adapter):
             self._token = (d["access_token"], time.time() + float(d.get("expires_in", 3600)))
         return {"Authorization": f"Bearer {self._token[0]}", "Accept": "application/json"}
 
+    def identity(self, ref: ChannelRef) -> dict:
+        h = self._headers()
+        chans = self._get(f"{self.API}/channels", params={"slug": ref.handle}, headers=h).json().get("data", [])
+        if not chans:
+            raise AdapterError("not_found", f"Kick: no channel '{ref.handle}'")
+        c = chans[0]
+        return {"id": c.get("broadcaster_user_id"), "slug": c.get("slug"), "name": c.get("slug"),
+                "url": f"https://kick.com/{c.get('slug', ref.handle)}", "platform_verified": False}
+
     def report(self, ref: ChannelRef) -> Report:
         rep = Report("kick", self.capabilities(), source=self.official_api)
         h = self._headers()
@@ -325,6 +385,24 @@ class YouTubeAdapter(Adapter):
         return {"identity": ok, "live_status": ok, "vods": ok, "clips": False, "schedule": ok, "stats": ok,
                 "acquire_vod": "permission_required", "acquire_live": "permission_required",
                 "state": "ready" if ok else "needs_credentials"}
+
+    def identity(self, ref: ChannelRef) -> dict:
+        """channels.list only (1 quota unit)."""
+        if not self.configured():
+            raise AdapterError("needs_credentials", "YouTube: add YOUTUBE_API_KEY (free, Google Cloud console)")
+        params = {"part": "id,snippet", "key": self.settings.youtube_api_key}
+        if ref.handle.startswith("@"):
+            params["forHandle"] = ref.handle
+        elif ref.handle.startswith("UC"):
+            params["id"] = ref.handle
+        else:
+            params["forUsername"] = ref.handle
+        items = self._get(f"{self.API}/channels", params=params).json().get("items", [])
+        if not items:
+            raise AdapterError("not_found", f"YouTube: no channel '{ref.handle}'")
+        ch = items[0]
+        return {"id": ch["id"], "name": ch["snippet"].get("title"), "url": f"https://www.youtube.com/channel/{ch['id']}",
+                "handle": (ch["snippet"].get("customUrl") or ""), "platform_verified": False}
 
     def report(self, ref: ChannelRef, max_items: int = 15) -> Report:
         """Quota-frugal: channels.list (1 unit) + playlistItems.list (1) + videos.list (1); never search.list
@@ -404,6 +482,12 @@ class RumbleAdapter(Adapter):
                 "stats": False, "acquire_vod": "permission_required", "acquire_live": "permission_required",
                 "state": "ready"}
 
+    def identity(self, ref: ChannelRef) -> dict:
+        from . import monitor
+        entries = monitor.list_channel(self.settings, ref.url)      # raises if the page is not a real channel
+        return {"id": ref.handle, "name": ref.handle, "url": ref.url, "items_seen": len(entries),
+                "platform_verified": False}
+
     def report(self, ref: ChannelRef) -> Report:
         from . import monitor
         rep = Report("rumble", self.capabilities(), source=self.official_api,
@@ -417,7 +501,119 @@ class RumbleAdapter(Adapter):
         return rep
 
 
-ADAPTERS = {"twitch": TwitchAdapter, "kick": KickAdapter, "youtube": YouTubeAdapter, "rumble": RumbleAdapter}
+# ---- Podcast RSS/Atom feeds (lightweight; discovery only) ---------------------------------------
+
+class PodcastAdapter(Adapter):
+    """Reads a public podcast feed. Episodes keep their own guid, so identity survives republishing.
+    The enclosure link is RECORDED but never fetched here: audio/video is only retrieved through the
+    permission-checked acquisition path."""
+    platform = "podcast"
+    official_api = "Public RSS/Atom feed (no credentials)"
+    acquisition = {"acquire_vod": "Enclosure links are stored, never downloaded automatically. Retrieval only "
+                                  "under a recorded permission; protected or login-only media is never fetched."}
+    LOOKUP = "https://itunes.apple.com/search"
+
+    def capabilities(self) -> dict:
+        return {"identity": True, "live_status": False, "vods": True, "clips": False, "schedule": False,
+                "stats": False, "acquire_vod": "permission_required", "acquire_live": False, "state": "ready"}
+
+    def find_feed(self, names: list[str]) -> dict:
+        """Look a show up in Apple's public podcast directory and accept it ONLY on an exact (normalised)
+        title match. Returns {feed_url, title, evidence}; raises not_found otherwise (never guesses)."""
+        wanted = {_norm(n) for n in names}
+        for term in names:
+            data = self._get(self.LOOKUP, params={"media": "podcast", "entity": "podcast", "limit": 10,
+                                                   "term": term}).json()
+            for r in data.get("results", []):
+                if _norm(r.get("collectionName", "")) in wanted and r.get("feedUrl"):
+                    return {"feed_url": r["feedUrl"], "title": r["collectionName"], "id": str(r.get("collectionId")),
+                            "evidence": f"Apple Podcasts directory exact title match '{r['collectionName']}' "
+                                        f"(collection {r.get('collectionId')})"}
+        raise AdapterError("not_found", "Podcast: no directory entry with an exact title match; supply the feed URL")
+
+    def fetch_feed(self, url: str) -> tuple[dict, list[MediaItem]]:
+        r = self._get(url)
+        return parse_podcast_feed(r.text)
+
+    def identity(self, ref: ChannelRef) -> dict:
+        meta, items = self.fetch_feed(ref.url)
+        return {"id": meta.get("guid") or ref.url, "name": meta.get("title"), "url": ref.url, "items_seen": len(items),
+                "platform_verified": False}
+
+    def report(self, ref: ChannelRef) -> Report:
+        meta, items = self.fetch_feed(ref.url)
+        return Report("podcast", self.capabilities(), source=self.official_api,
+                      identity={"id": meta.get("guid") or ref.url, "name": meta.get("title"), "url": ref.url},
+                      items=items, live=LiveStatus(False))
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def parse_podcast_feed(text: str) -> tuple[dict, list[MediaItem]]:
+    """RSS 2.0 (with iTunes/enclosure) or Atom. Stable key = <guid>, else the enclosure/link URL."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise AdapterError("inaccessible", f"Podcast: the feed is not valid XML ({e})") from e
+    ns = {"a": "http://www.w3.org/2005/Atom", "it": "http://www.itunes.com/dtds/podcast-1.0.dtd"}
+    meta, items = {}, []
+
+    def iso(v: str) -> str:
+        try:
+            return parsedate_to_datetime(v).isoformat()
+        except (TypeError, ValueError):
+            return (v or "").strip()
+
+    def dur(v: str):
+        v = (v or "").strip()
+        if not v:
+            return None
+        try:
+            parts = [float(x) for x in v.split(":")]
+        except ValueError:
+            return None
+        sec = 0.0
+        for x in parts:
+            sec = sec * 60 + x
+        return sec
+    ch = root.find("channel")
+    if ch is not None:
+        meta = {"title": (ch.findtext("title") or "").strip(), "guid": (ch.findtext("it:guid", namespaces=ns) or
+                                                                       ch.findtext("link") or "").strip()}
+        for it in ch.findall("item"):
+            enc = it.find("enclosure")
+            link = (enc.get("url") if enc is not None else "") or (it.findtext("link") or "")
+            key = (it.findtext("guid") or link or it.findtext("title") or "").strip()
+            if not key:
+                continue
+            items.append(MediaItem(key=f"podcast:{key}", title=(it.findtext("title") or "").strip(), url=link.strip(),
+                                   kind="episode", published=iso(it.findtext("pubDate") or ""),
+                                   duration_s=dur(it.findtext("it:duration", namespaces=ns))))
+    else:
+        meta = {"title": (root.findtext("a:title", namespaces=ns) or "").strip(), "guid": (root.findtext("a:id", namespaces=ns) or "").strip()}
+        for en in root.findall("a:entry", ns):
+            link = ""
+            for l in en.findall("a:link", ns):
+                if l.get("rel") == "enclosure":
+                    link = l.get("href", "")
+                    break
+                link = link or l.get("href", "")
+            key = (en.findtext("a:id", namespaces=ns) or link or "").strip()
+            if key:
+                items.append(MediaItem(key=f"podcast:{key}", title=(en.findtext("a:title", namespaces=ns) or "").strip(),
+                                       url=link, kind="episode",
+                                       published=(en.findtext("a:published", namespaces=ns) or en.findtext("a:updated", namespaces=ns) or "").strip()))
+    if not meta.get("title") and not items:
+        raise AdapterError("inaccessible", "Podcast: the document is not a podcast feed")
+    return meta, items
+
+
+ADAPTERS = {"twitch": TwitchAdapter, "kick": KickAdapter, "youtube": YouTubeAdapter, "rumble": RumbleAdapter,
+            "podcast": PodcastAdapter}
 
 
 def adapter_for(settings, platform: str, client=None) -> Adapter:

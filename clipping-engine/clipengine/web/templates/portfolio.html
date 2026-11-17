@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Portfolio monitor</h1>
+{% if msg %}<section class="card">{{ msg }}</section>{% endif %}
+<section class="card muted">Status here is what the engine has actually observed, not what is configured. <b>Discovery</b> (what exists, who is live)
+is separate from <b>acquisition</b> (permission to retrieve footage): finding a video never authorises downloading it.
+{% if active_events %}<br><b>Priority event active:</b> {% for e in active_events %}{{ e.name }} (until {{ e.ends_at[:10] }}){% endfor %}{% endif %}
+<br><small>YouTube quota used today: {{ quota }} / {{ quota_limit }} units budgeted.</small></section>
+<p>{% for b in brands %}<a class="badge {{ 'st-ready' if b.key == brand else '' }}" href="/portfolio?brand={{ b.key }}">{{ b.name }}{% if qcount.get(b.key) %} · {{ qcount[b.key] }} queued{% endif %}</a> {% endfor %}
+<a class="badge" href="/portfolio">All</a></p>
+{% set ns = namespace(b='') %}
+{% for r in rows %}
+{% if r.brand_key != ns.b %}{% set ns.b = r.brand_key %}<h2>{{ (brands|selectattr('key','equalto',r.brand_key)|first).name }}</h2>{% endif %}
+<section class="card">
+  <b>{{ r.creator }}</b> — {{ r.platform }}
+  <span class="badge {{ 'st-ready' if r.state in ('MONITORING','DISCOVERY_ONLY') else '' }}" title="{{ state_help.get(r.state, '') }}">{{ r.state }}</span>
+  {% if r.live_state == 'LIVE' %}<span class="badge st-ready">LIVE</span>{% endif %}
+  <br><small>
+  identity: {{ r.verification }}{% if r.channel_name %} · {{ r.channel_name }}{% endif %}{% if r.platform_id %} · id {{ r.platform_id }}{% endif %}
+  {% if r.canonical_url %}· <a href="{{ r.canonical_url }}" rel="noopener">{{ r.canonical_url }}</a>{% endif %}<br>
+  acquisition: {{ r.acquisition }} · last good check: {{ r.last_success|int if r.last_success else 'never' }}
+  {% if r.latest_media_id %}· latest: {{ r.latest_media_id }}{% endif %}
+  {% if r.live_title %}<br>live now: {{ r.live_title }}{% if r.live_category %} ({{ r.live_category }}){% endif %}{% endif %}
+  {% if r.error_code %}<br><b>{{ r.error_code }}</b>: {{ r.last_error }} (failures in a row: {{ r.consecutive_errors }}){% endif %}
+  {% if r.requirement and r.state in ('NEEDS_VERIFICATION','NEEDS_CREDENTIALS') %}<br>Needs: {{ r.requirement }}{% endif %}
+  </small>
+  <form method="post" action="/portfolio/{{ r.id }}/toggle" style="display:inline"><input type="hidden" name="enabled" value="{{ 0 if r.monitoring_enabled else 1 }}"><button>{{ 'Disable' if r.monitoring_enabled else 'Enable' }}</button></form>
+  <form method="post" action="/portfolio/{{ r.id }}/check" style="display:inline"><button>Check now</button></form>
+  {% if r.verification != 'VERIFIED' and r.platform_id %}<form method="post" action="/portfolio/{{ r.id }}/confirm" style="display:inline"><input type="hidden" name="note" value="Confirmed on the dashboard"><button>Confirm official</button></form>{% endif %}
+</section>
+{% endfor %}
+<h2>Newly discovered</h2>
+<ul class="list">{% for d in new_items %}<li><b>{{ d.creator }}</b> · {{ d.kind }} · {{ d.title }} <small>({{ d.state }}{% if d.priority_tags %}, {{ d.priority_tags }}{% endif %}{% if d.detail %} — {{ d.detail }}{% endif %})</small></li>{% else %}<li>Nothing discovered yet.</li>{% endfor %}</ul>
+<h2>Recent transitions &amp; errors</h2>
+<ul class="list">{% for e in evs %}<li><small>{{ e.ts|int }}</small> {{ e.kind }} · {{ e.uid or '' }} — {{ e.message }}</li>{% else %}<li>No events yet.</li>{% endfor %}</ul>
+{% endblock %}

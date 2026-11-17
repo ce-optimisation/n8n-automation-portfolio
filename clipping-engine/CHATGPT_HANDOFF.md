@@ -150,3 +150,12 @@ any reboot; no email alert yet.
 4. Twitch "Get Clips Download" acquisition for creator-authorised work.
 5. Selection: visual payoff detection for gaming/IRL (audio energy, chat rate, scene change); cross-stream de-duplication.
 6. Move the PC to Python 3.12 (yt-dlp has deprecated 3.10).
+
+## Update, session 7 (17 Nov 2026): six-brand portfolio monitor
+
+See `HANDOFF.md` §21. Added schema v6 (brands, monitor_sources, discovered_items, monitor_events, priority_events),
+the 6-brand / 18-creator roster with idempotent seeding, `DiscoverySupervisor`, podcast RSS adapter, specific
+platform error codes, GTA VI launch-week priority (a table row), a Portfolio dashboard page, the read-only
+`python -m clipengine --portfolio`, caption size 95 px (+30%) and an optional top title (96 px = 80% of a 120 px
+reference; mock-up asset absent, comparison pending). All platform checks are MOCK-tested only; no identity is
+verified until the owner adds YouTube/Twitch/Kick keys and runs `scripts/portfolio_admin.py verify`.

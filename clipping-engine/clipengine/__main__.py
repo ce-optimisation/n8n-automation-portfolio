@@ -175,6 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--doctor", action="store_true", help="print a diagnostic report and exit")
     ap.add_argument("--selftest", action="store_true",
                     help="with --doctor: also run the real end-to-end self-test (genuine speech, real Whisper)")
+    ap.add_argument("--portfolio", action="store_true",
+                    help="read-only status of all brands, creators and sources, then exit (add --json for machine output)")
+    ap.add_argument("--json", action="store_true", help="with --portfolio: JSON output")
     ap.add_argument("--setup", action="store_true", help="run the setup assistant, then exit")
     ap.add_argument("--yes", action="store_true", help="with --setup: accept the defaults without asking")
     args = ap.parse_args(argv)
@@ -194,6 +197,9 @@ def main(argv: list[str] | None = None) -> int:
         return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
+    if args.portfolio:
+        from . import portfolio_report
+        return portfolio_report.main(settings, as_json=args.json)
     if args.doctor:
         from . import doctor
         return doctor.main(settings, run_selftest=args.selftest)

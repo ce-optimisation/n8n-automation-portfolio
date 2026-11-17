@@ -1544,3 +1544,44 @@ source). Publishing remains manual (download and post) until the platforms are c
 - Meta Content Publishing (hosts per login type; resumable upload only for Facebook Login):
   <https://developers.facebook.com/documentation/instagram-platform/content-publishing.md>
 - Meta resumable uploads: <https://developers.facebook.com/documentation/instagram-platform/content-publishing/resumable-uploads>
+
+## 21. Six-brand portfolio monitor (session 7, 17 Nov 2026)
+
+**What exists (schema v6).** `brands`, `monitor_sources`, `discovered_items`, `monitor_events`, `priority_events`
+plus creator columns `uid, brand_key, kind, roster, acquisition_state`. Code: `portfolio.py` (roster, idempotent
+`seed`, `verify_source`, `owner_set`/`confirm_identity`, `compute_state`, `reconcile`), `discovery.py`
+(`DiscoverySupervisor`, one thread, started beside `SourceMonitor`), `events.py` (launch-event priority and the
+polling-interval policy), `portfolio_report.py` (`python -m clipengine --portfolio [--json]`, read-only),
+`scripts/portfolio_admin.py` (seed / verify / check / status, no model use), `titles.py` (top title),
+dashboard page **Portfolio** (`/portfolio`).
+
+**Principles.** Discovery is not acquisition. Nothing is queued unless acquisition is PERMITTED for the host
+(recorded written permission or owner-declared domain), the item is not a duplicate, fewer than 4 downloads are
+pending and the disk holds it plus everything already queued; otherwise the item stays metadata
+(`permission_required` / held). Discovery never starts a recorder or heavy job. Rumble keeps using the existing
+channel monitor; the supervisor only mirrors its state (`legacy_source_id`). For a permitted non-Rumble live-capable
+source `ensure_recorders` links/creates ONE legacy channel row per show (simulcast twins share `dup_group`).
+
+**Identity.** `candidate_handle` values are HINTS looked up through the platform API; `canonical_url` and
+`platform_id` are written only from the API answer, and VERIFIED needs an exact official-name match (Twitch/Kick
+also need a platform verification signal, else the owner confirms on the dashboard). Unverified sources are not polled.
+No creator identity in this repository has been verified against a live API yet.
+
+**States** (what was observed, not configured): MONITORING, DISCOVERY_ONLY, PERMISSION_REQUIRED, NEEDS_CREDENTIALS,
+NEEDS_VERIFICATION, OFFLINE, ERROR, PENDING (verified, not yet checked), DISABLED. Error codes: needs_credentials,
+not_found (invalid identity), unauthorised, rate_limited, offline, inaccessible, permission_missing, temporary_failure.
+
+**Launch priority.** Row `gta_vi_launch` (Afterlive, 17-26 Nov 2026, launch 19 Nov): normal polling 5 min and 90 s
+while live or a verified scheduled start is within 30 min; YouTube never faster than 5 min and a daily quota
+budget of 8,000 of 10,000 units is enforced. Tags (`priority_tags`) come from title/category text only. It never
+changes permissions, other brands, or job priorities, and expires by itself. Future events are table rows.
+
+**Rendering (approved 17 Nov).** Caption default 73 -> 95 px (a saved 73 override is treated as the superseded
+default). Top title: `titles.py`, Anton, accent words `*like this*` get a yellow perimeter, effective size =
+reference 120 px x 0.80 = 96 px, auto-fitted. The approved mock-up image was NOT in the repository, so
+`reference_size` is an assumption and the visual comparison is PENDING. The title is OFF until meta key
+`title_style` = `{"enabled": true}` (`titles.save_style`); it uses `clips.title`.
+
+**Tests.** `tests/test_portfolio.py` (all mocked: fake adapters / `httpx.MockTransport`). Nothing here is a live
+verification. This sandbox could only reach googleapis (no key), so no platform was exercised for real.
+
