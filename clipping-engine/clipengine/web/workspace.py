@@ -11,7 +11,7 @@ import time
 from fastapi import Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import editorial, platforms, portfolio, storage
+from .. import cleanup, editorial, platforms, portfolio, storage, titles
 from ..publishing import packages as pk
 
 
@@ -43,7 +43,7 @@ def register(app, core, page, templates) -> None:
             raise HTTPException(404)
         hist = db.query("SELECT version, note, created_at FROM niche_history WHERE key=? ORDER BY version DESC LIMIT 10", (key,))
         return page(request, "niche_edit.html", p=p, hist=hist, msg=msg, err=err, rules=editorial.REJECT_RULES,
-                    flags=editorial.FLAG_RULES, profiles=["v4", "v5"])
+                    flags=editorial.FLAG_RULES, profiles=["v4", "v5", "v6"])
 
     @app.post("/niches/{key}")
     async def niche_save(request: Request, key: str):
@@ -72,8 +72,9 @@ def register(app, core, page, templates) -> None:
             p.reply_required = bool(form.get("reply_required"))
             p.compliance_review = bool(form.get("compliance_review")) or p.risk == "high"
             p.active = bool(form.get("active"))
-            if not 3 <= p.min_s < p.max_s <= 180:
-                raise ValueError("Durations must satisfy 3 ≤ minimum < maximum ≤ 180 seconds.")
+            if not 3 <= p.min_s < p.max_s <= 3600:
+                raise ValueError("Durations must satisfy 3 ≤ minimum < maximum ≤ 3600 seconds "
+                                 "(these are PREFERRED ranges for the v6 selector, not limits).")
         except ValueError as e:
             return _go(f"/niches/{key}", err=str(e))
         editorial.save_niche(db, p, note=str(form.get("note") or "edited in dashboard")[:200])
@@ -348,7 +349,7 @@ def register(app, core, page, templates) -> None:
         recs = db.query("SELECT * FROM recordings WHERE engine_owned=1 AND raw_deleted_at IS NULL AND file_path IS NOT NULL "
                         "ORDER BY id DESC LIMIT 20")
         gates = {r["id"]: core.lifecycle.gates(r["id"]) for r in recs}
-        return page(request, "storage.html", rep=rep, cloud=core.cloud.status(), held=core.cloud.uploads_held(),
+        return page(request, "storage.html", cleanup=core.cleanup.overview(), cleanup_help=cleanup.HELP, rep=rep, cloud=core.cloud.status(), held=core.cloud.uploads_held(),
                     recs=recs, gates=gates, msg=msg, err=err, plan=json.loads(plan) if plan else None,
                     s=settings, redirect=f"{settings.base_url()}/google/oauth/callback",
                     legacy=db.one("SELECT COUNT(*) n FROM recordings WHERE engine_owned=0 AND file_path IS NOT NULL")["n"])
@@ -429,11 +430,98 @@ def register(app, core, page, templates) -> None:
         allowed = [a for a in accts if pk.account_allows(a, c["niche_key"])]
         creator = db.one("SELECT * FROM creators WHERE id=?", (rec["creator_id"],)) if rec["creator_id"] else None
         cloud_rows = db.query("SELECT kind, state FROM cloud_objects WHERE owner_kind='clip' AND owner_id=?", (cid,))
+        ev = core.cleanup.evaluate(cid)
+        raw_gone = bool(rec and rec["raw_deleted_at"])
         return templates.TemplateResponse(request, "_clip_workspace.html", {
+            "completeness": json.loads(c["completeness_json"] or "{}"), "cleanup": ev, "cleanup_help": cleanup.HELP,
+            "raw_gone": raw_gone, "cleanup_on": core.cleanup.enabled(),
+            "ready_text": time.strftime("%d %b %H:%M", time.localtime(ev["ready_at"])) if ev.get("ready_at") else "",
             "c": c, "rec": rec, "pkgs": pkgs, "accounts": allowed, "creator": creator, "PLATFORMS": pk.PLATFORMS,
             "quality": json.loads(c["quality_json"] or "{}"), "cloud_rows": cloud_rows,
             "niche": editorial.load_niche(db, c["niche_key"]),
             "issues": {p: core.packages.check_spec(c, p) for p in pk.PLATFORMS}})
+
+    @app.post("/clips/{cid}/cleanup/{action}")
+    def clip_cleanup(cid: int, action: str, reason: str = Form("")):
+        c = db.clip(cid)
+        if not c:
+            raise HTTPException(404)
+        lc = core.cleanup
+        if action == "keep":
+            lc.keep_local(cid, True)
+            msg = "This clip will stay on this computer."
+        elif action == "unkeep":
+            lc.keep_local(cid, False)
+            msg = "Keep-locally removed."
+        elif action == "auto_on":
+            lc.set_auto(cid, 1)
+            msg = "Automatic cleanup allowed for this clip (once every safeguard passes)."
+        elif action == "auto_off":
+            lc.set_auto(cid, 0)
+            msg = "Automatic cleanup is off for this clip."
+        elif action == "auto_default":
+            lc.set_auto(cid, None)
+            msg = "This clip follows the global cleanup switch."
+        elif action == "cancel":
+            lc.cancel(cid, reason.strip() or "cancelled by the owner")
+            msg = "Cleanup cancelled and held."
+        elif action == "release":
+            lc.release_hold(cid)
+            msg = "Hold released."
+        elif action == "delete":
+            res = lc.delete(cid, manual=True)
+            msg = (f"Local copy removed ({res['bytes'] / 1e6:.1f} MB freed). It is restorable from Google Drive."
+                   if res.get("deleted") else "Not removed: " + res.get("reason", "")[:300])
+        elif action == "restore":
+            try:
+                lc.request_restore(cid)
+                msg = "Restore from Google Drive queued."
+            except ValueError as e:
+                msg = str(e)
+        else:
+            raise HTTPException(404)
+        return _go(f"/clips/{cid}", msg=msg)
+
+    @app.post("/packages/{pid}/confirm")
+    def package_confirm(pid: int, note: str = Form("")):
+        pkg = db.one("SELECT clip_id FROM publication_packages WHERE id=?", (pid,))
+        if not pkg:
+            raise HTTPException(404)
+        try:
+            core.cleanup.confirm_destination(pid, note.strip())
+        except ValueError as e:
+            return _go(f"/clips/{pkg['clip_id']}", err=str(e))
+        return _go(f"/clips/{pkg['clip_id']}", msg="Recorded as confirmed by you (manual).")
+
+    @app.post("/packages/{pid}/exclude")
+    def package_exclude(pid: int, reason: str = Form("")):
+        pkg = db.one("SELECT clip_id FROM publication_packages WHERE id=?", (pid,))
+        if not pkg:
+            raise HTTPException(404)
+        try:
+            core.cleanup.exclude_destination(pid, reason)
+        except ValueError as e:
+            return _go(f"/clips/{pkg['clip_id']}", err=str(e))
+        return _go(f"/clips/{pkg['clip_id']}", msg="Excluded from the required destinations (recorded).")
+
+    @app.post("/packages/{pid}/include")
+    def package_include(pid: int):
+        pkg = db.one("SELECT clip_id FROM publication_packages WHERE id=?", (pid,))
+        if not pkg:
+            raise HTTPException(404)
+        core.cleanup.include_destination(pid)
+        return _go(f"/clips/{pkg['clip_id']}", msg="Required again.")
+
+    @app.post("/storage/cleanup")
+    def storage_cleanup(enabled: str = Form(""), grace_hours: float = Form(24.0)):
+        core.cleanup.set_enabled(enabled == "1")
+        core.cleanup.set_grace_hours(min(max(grace_hours, 0.0), 24 * 30))
+        return _go("/storage", msg="Finished-clip cleanup settings saved." + (" Automatic cleanup is ON." if enabled == "1" else " Automatic cleanup is OFF."))
+
+    @app.post("/storage/cleanup/run")
+    def storage_cleanup_run():
+        res = core.cleanup.run()
+        return _go("/storage", msg=f"Cleanup pass: {res['deleted']} removed ({res['bytes'] / 1e6:.1f} MB), {res['held']} held.")
 
     @app.post("/clips/{cid}/keep")
     def clip_keep(cid: int, on: str = Form("1")):
@@ -442,8 +530,19 @@ def register(app, core, page, templates) -> None:
 
     @app.post("/clips/{cid}/title")
     def clip_title(cid: int, title: str = Form("")):
-        db.update("clips", cid, title=title.strip()[:200] or None)
-        return _go(f"/clips/{cid}", msg="Title saved.")
+        """Working title; also the top title burned into the video where the brand's title style is on. Wording is only
+        tidied (never rewritten). A clip that is not yet approved or published is re-rendered so the title appears;
+        an approved clip is never silently changed."""
+        c = db.clip(cid)
+        if not c:
+            raise HTTPException(404)
+        clean = titles.format_title(title, auto_emphasis=False)
+        db.update("clips", cid, title=clean or None)
+        if c["status"] == "ready" and not c["published_at"] and c["video_path"] and not c["local_deleted_at"]:
+            db.update("clips", cid, render_rev=c["render_rev"] + 1, status="pending_render", reviewed_at=None)
+            core.pipeline.enqueue_render(cid)
+            return _go(f"/clips/{cid}", msg="Title saved; re-rendering with it.")
+        return _go(f"/clips/{cid}", msg="Title saved." + (" Approved clips are not re-rendered automatically." if c["status"] == "approved" else ""))
 
     @app.post("/clips/{cid}/package")
     def clip_package(cid: int, platform: str = Form(...), account_id: str = Form("")):

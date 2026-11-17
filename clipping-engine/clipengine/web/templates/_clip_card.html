@@ -15,6 +15,11 @@
     <p class="src"><a href="/recordings/{{ rec.id if rec else c.recording_id }}">{{ (rec.title if rec else c.title) }}</a>
       {% set url = rec.source_url if rec else c.source_url %}{% if url %} · <a href="{{ url }}" rel="noopener noreferrer" target="_blank">source ↗</a>{% endif %}
       <br><small>{{ c.start|mmss }} → {{ c.end|mmss }} · <b>{{ (c.end - c.start)|round(1) }} s</b> · selected by {{ c.selection_method }} · rights: <b>{{ c.rights_status.replace('_',' ') }}</b> · content review: <b>{{ {'clear': 'no flags', 'flagged': 'FLAGGED', 'acknowledged': 'flag reviewed'}.get(c.safety_status, c.safety_status) }}</b></small></p>
+    {% set comp = (c.completeness_json|fromjson) if c.completeness_json else none %}
+    {% if comp %}<p class="pubrow"><span class="badge {{ 'st-ready' if comp.verdict == 'PASS' else '' }}" title="Context-complete selection">completeness {{ comp.verdict }}</span>
+      {% if comp.duration_class == 'above' %}<span class="badge" title="{{ comp.exceptional or 'beyond the preferred range' }}">longer than usual: justified</span>{% endif %}
+      {% if c.local_deleted_at %}<span class="badge">removed locally, in Drive</span>{% endif %}
+      <small class="muted">{{ comp.reasons[:2]|join(' · ') }}</small></p>{% endif %}
     <details><summary>Context before</summary><p class="context">{{ c.context_before or '(start of recording)' }}</p></details>
     <blockquote class="quote" title="Direct transcript of the excerpt">{{ c.transcript_text }}</blockquote>
     <details><summary>Context after</summary><p class="context">{{ c.context_after or '(end of recording)' }}</p></details>

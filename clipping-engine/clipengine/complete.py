@@ -253,8 +253,8 @@ def assess(sents, i: int, j: int, pref: tuple[float, float], kind: str | None, r
     if nxt is not None and S.QUALIFIER_START.search(S._norm(nxt.text)) and nxt.start - tail.end < 2.5 and not tail.hard_break_after:
         meaning = min(meaning, 0.2)
         hard.append("a qualification that changes the meaning follows this cut")
-    if nxt is not None and nxt.dependency >= 0.3 and nxt.edge != "turn" and nxt.start - tail.end < 2.0 and not tail.hard_break_after:
-        meaning = min(meaning, 0.5)
+    if nxt is not None and nxt.dependency >= 0.15 and nxt.edge != "turn" and nxt.start - tail.end < 2.0 and not tail.hard_break_after:
+        meaning = min(meaning, 0.5 if nxt.dependency >= 0.3 else 0.6)
         reasons.append("the next sentence still leans on this point")
     if any(s.question for s in win[:-1]):
         reasons.append("keeps a question with its answer")
@@ -396,8 +396,10 @@ def select_complete(sents, *, n: int, pref: tuple[float, float], kind: str | Non
     ranked = [c for _, c in assessed]
     chosen = S.pick_diverse([c for c in ranked if c.assessment["verdict"] == "PASS"], n, min_gap=prof.min_gap)
     if len(chosen) < n:
-        chosen = S.pick_diverse([c for c in ranked if c.assessment["verdict"] == "REVIEW"], n, already=chosen,
-                                min_gap=prof.min_gap)
+        # Uncertain passages are offered for human review only when nothing stronger exists, or when they are very close
+        # to passing: quality over quantity, no clutter next to good clips.
+        pool = [c for c in ranked if c.assessment["verdict"] == "REVIEW" and (not chosen or c.assessment["composite"] >= 0.8)]
+        chosen = S.pick_diverse(pool, n, already=chosen, min_gap=prof.min_gap)
     report["pass"] = sum(1 for c in chosen if c.assessment["verdict"] == "PASS")
     report["review"] = sum(1 for c in chosen if c.assessment["verdict"] == "REVIEW")
     if not chosen:

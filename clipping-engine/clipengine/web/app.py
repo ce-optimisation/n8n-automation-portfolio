@@ -543,19 +543,6 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                        review_note=f"[Editorial decision on flag] {note.strip()}\n{c['review_note'] or ''}".strip())
         return _back(request, cid)
 
-    @app.post("/clips/{cid}/title")
-    def set_title(request: Request, cid: int, title: str = Form("")):
-        """Working title (also the top title burned into the video when the title style is on for the brand).
-        Re-renders only a clip that has not been approved or published, so an approved clip is never silently changed."""
-        c = _clip(cid)
-        clean = titles.format_title(title, auto_emphasis=False)
-        core.db.update("clips", cid, title=clean or None)
-        if c["status"] in ("ready", "needs_review") and not c["published_at"] and c["video_path"]:
-            core.db.update("clips", cid, render_rev=c["render_rev"] + 1, status="pending_render", reviewed_at=None)
-            core.pipeline.enqueue_render(cid)
-            return _back(request, cid, msg="Title saved; re-rendering with it (the clip returns to review).")
-        return _back(request, cid, msg="Title saved." + (" It will appear in the next render." if c["video_path"] else ""))
-
     @app.post("/clips/{cid}/description")
     def set_description(request: Request, cid: int, description: str = Form(...)):
         _clip(cid)

@@ -1601,8 +1601,7 @@ reference, not expired); an enabled legacy Rumble source still counts as the own
 
 **Discovery fixes.** `sync_job_states()` moves queued items to imported / failed / (job vanished) discovered, so nothing stays queued and
 finished items stop reserving disk; `ingest.handle_download_url` and `monitor._download_failed` also update `discovered_item_id` and set the
-recording's creator; failed items can be retried from the dashboard; `seed()` links a channel source added later. `/clips/{id}/title` existed in the
-template but not in the app (404): added; it re-renders only unapproved clips.
+recording's creator; failed items can be retried from the dashboard; `seed()` links a channel source added later. (Correction in session 9: `/clips/{id}/title` already existed in `web/workspace.py`; session 8 briefly added a duplicate in `app.py`, removed in session 9. The route now formats the title and re-renders only unapproved clips.)
 
 **Portfolio page.** Grouped brand > creator > source; shows identity, address/candidate, acquisition, last good check, discovered count, errors,
 held work, credential checklist, retry, edit form (mobile tested with Chromium at iPhone 13: no sideways scroll, 44 px targets, 16 px inputs).
@@ -1628,3 +1627,41 @@ accounts needing confirmation, live-report command, next actions. `scripts/portf
 
 **Still not done / unverified:** no platform API has been exercised (no credentials); the Fuentes live test was not inspected; the installed Windows
 copy was not touched; the title was compared visually with the concept only on a synthetic dark source.
+
+## 23. Session 9 (17 Nov 2026): context-complete selection (v6) and verified-upload local cleanup
+
+**A. Selection profile v6 (`complete.py`, `segment.PROFILES["v6"]`; legacy v1-v5 unchanged).** Principle: completeness of meaning ->
+editorial value -> duration suitability. Duration is a constraint: **no editorial ceiling** (the old 3-180 s owner-adjust cap and the
+niche editor's <=180 s cap were removed; platform limits are shown, never enforced by cutting). Method: split into coherent regions;
+bounded seeds (<=120) of the most substantive sentences; expand each seed (earliest necessary opening, an announced topic start, through a
+question's answer, a meaning-changing qualification, the point's own explanation; stop at a topic change or after 6 sentences adding nothing new);
+trim trailing repetition/leading asides; assess on opening / conclusion / meaning / central idea / cohesion / economy -> PASS / REVIEW /
+REJECT with reasons; rank by completeness (length earns nothing; ties go to the shorter). Per-type preferred ranges (`complete.PREFERRED`:
+political 40-180, interview 35-180, business 30-120, podcast 35-180, gaming 12-60, comedy 10-45) are preferences. A window beyond its range is
+"exceptional" only if it stays substantive, cohesive, concludes and does not repeat (the reason is stored and shown); otherwise a shorter complete
+prefix is preferred and the long one is demoted to REVIEW. A bare short extract that does not stand alone is REJECT. Zero clips is valid:
+`process_recording` marks the recording ready with a note (never a failed job), and the raw file is held, not deleted. REVIEW clips get a
+`context_review` flag (the editorial gate then needs an explicit decision) and are offered only when nothing stronger exists (or composite >= 0.8).
+Computational safeguards (`Budget`: seeds, windows scored, expansion sentences) are not editorial limits; a 3-hour transcript is processed in
+seconds. `clips.completeness_json` / `duration_class` store the assessment. Default selector is now v6 (`SELECTION_PROFILE`, niche presets); existing
+niches on v4/v5 move to v6 ONCE (recorded in niche history; a later owner choice sticks). `scripts/compare_selectors.py [--recording N]` compares
+v4/v5/v6 (read-only) and is the way to test the owner's two example recordings (not available in the build environment: real-media evaluation pending).
+
+**B. Verified-upload local cleanup (`cleanup.py`, schema v7).** Separate from the raw-recording lifecycle. States: LOCAL_PRESENT, CLOUD_VERIFIED,
+DESTINATIONS_PENDING, GRACE_PERIOD, READY_FOR_CLEANUP, DELETING, LOCAL_DELETED, RESTORE_PENDING, RESTORED, CLEANUP_HELD, CLEANUP_ERROR. **Off until the
+owner enables it** (Storage page; or per clip). A local MP4 is removed only if all gates pass, re-checked (with a fresh MD5 and a live Drive re-read)
+immediately before deleting, after an atomic claim and after the decision + evidence are written: managed engine render at the exact path; not kept/held;
+editorial gate (approved, rights, flags decided); final (no job, unchanged >60 s); Drive video verified against THIS file (size+MD5, re-read) and
+metadata/transcript objects verified; >=1 explicit required destination, each genuinely complete; brand-isolated accounts; consistent records; recovery
+window (default 24 h) since the LAST required confirmation. Destination states (never invented; manual is labelled): YouTube = private upload with
+video id and `privacyStatus=private` (api); TikTok = only a confirmed publish (inbox delivery is not a draft -> owner confirms); Instagram = only a
+confirmed publish (a container is not a draft -> owner confirms); Facebook/X/Rumble = manual (owner confirms the draft/post exists, or records posted).
+The owner can exclude a destination with a recorded reason, keep a clip locally, cancel/hold, delete one now (waives only the window and the global
+switch), and restore from Drive (download -> size/MD5 check -> atomic replace; never overwrites a different local file; 24 h protection afterwards).
+Drive masters are protected: `CloudService.delete_clip_objects` refuses once a clip is locally removed, and (with `KEEP_DRIVE_MASTER=1`, default) for
+any non-rejected clip; published-clip retention now removes local files only and marks them restorable; the raw-recording `integrity` gate accepts a
+cleaned clip whose Drive copy is verified. Dashboard: clip workspace (Completeness; Storage on this computer; Required destinations with confirm /
+exclude), Storage page overview and switches, review-card badges. Crash recovery: `recover()` resolves a clip left DELETING.
+
+**Not verified live:** no real Drive, YouTube, TikTok or Instagram call was made (fake Drive/mocks only); Facebook draft upload is NOT implemented
+(manual); YouTube "processing complete" is not polled (the upload response's id + private status is the evidence).

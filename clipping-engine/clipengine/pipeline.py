@@ -486,8 +486,11 @@ class Pipeline:
         end = clip["end"] if end is None else float(end)
         if not (0 <= start < end <= (rec["duration"] or end)):
             raise ValueError("Timestamps must satisfy 0 ≤ start < end ≤ recording length.")
-        if end - start < 3 or end - start > 180:
-            raise ValueError("Clip length must be between 3 and 180 seconds.")
+        if end - start < 3:
+            raise ValueError("A clip must be at least 3 seconds long.")     # no editorial ceiling: platform limits are shown, not enforced
+        if rec["raw_deleted_at"] or not (rec["file_path"] and Path(rec["file_path"]).is_file()):
+            raise ValueError("The original recording was removed after verified processing, so this clip cannot be "
+                             "re-cut from the source. The finished clip remains (restore it from Google Drive if needed).")
         fields: dict = {}
         if (start, end) != (clip["start"], clip["end"]):
             # New boundaries: recompute quote, context, flags and description from the stored transcript.

@@ -1,3 +1,48 @@
+{% if completeness %}<section class="card">
+  <h2>Completeness</h2>
+  <p><span class="badge {{ 'st-ready' if completeness.verdict == 'PASS' else '' }}">{{ completeness.verdict }}</span>
+  <small>{{ completeness.content_type|replace('_', ' ') }} · {{ completeness.duration_s|round(0)|int }} s
+  {% if completeness.duration_class == 'above' %}· <b>longer than the preferred {{ completeness.preferred[0]|int }}-{{ completeness.preferred[1]|int }} s</b>
+  {% elif completeness.duration_class == 'below' %}· shorter than the preferred {{ completeness.preferred[0]|int }}-{{ completeness.preferred[1]|int }} s
+  {% else %}· within the preferred {{ completeness.preferred[0]|int }}-{{ completeness.preferred[1]|int }} s{% endif %}</small></p>
+  {% if completeness.exceptional %}<p><small><b>Why this length is justified:</b> {{ completeness.exceptional }}</small></p>{% endif %}
+  <p><small>{% for k, v in completeness.dimensions.items() %}{{ k|replace('_', ' ') }} {{ (v * 100)|round|int }}%{% if not loop.last %} · {% endif %}{% endfor %}</small></p>
+  {% if completeness.reasons %}<ul class="list">{% for r in completeness.reasons %}<li><small>{{ r }}</small></li>{% endfor %}</ul>{% endif %}
+  {% if completeness.verdict == 'REVIEW' %}<p class="err"><small>Context or meaning is uncertain: read the context before and after, and decide.</small></p>{% endif %}
+  {% for pf, spec in PLATFORMS.items() if issues[pf] %}<p class="err"><small>{{ spec.label }}: {{ issues[pf][0] }}</small></p>{% endfor %}
+</section>{% endif %}
+<section class="card">
+  <h2>Storage on this computer</h2>
+  <p><span class="badge {{ 'st-ready' if cleanup.state in ('LOCAL_DELETED','READY_FOR_CLEANUP') else '' }}">{{ cleanup.state }}</span>
+  <small>{{ cleanup_help.get(cleanup.state, '') }}{% if cleanup.bytes %} · {{ '%.1f'|format(cleanup.bytes / 1e6) }} MB{% endif %}
+  {% if ready_text %} · recovery window ends {{ ready_text }}{% endif %}</small></p>
+  <p><small>Google Drive copy: {% for r in cloud_rows %}{{ r.kind }} {{ r.state }}{% if not loop.last %}, {% endif %}{% else %}not uploaded yet{% endfor %}
+  · automatic cleanup is <b>{{ 'ON' if cleanup_on else 'OFF' }}</b> (Storage page){% if c.cleanup_auto == 1 %} · allowed for this clip{% elif c.cleanup_auto == 0 %} · off for this clip{% endif %}
+  {% if c.keep_local %} · <b>kept locally</b>{% endif %}</small></p>
+  <h3 style="margin:.6rem 0 .2rem">Required destinations</h3>
+  {% if not cleanup.destinations %}<p class="muted"><small>None yet. Prepare a version below for each platform this clip is for; nothing is removed locally until at least one is complete.</small></p>{% endif %}
+  <ul class="list">{% for d in cleanup.destinations %}<li><b>{{ d.label }}</b>
+    {% if d.state == 'excluded' %}<span class="badge">excluded</span> <small>{{ d.reason }}</small>
+      <form method="post" action="/packages/{{ d.package_id }}/include" class="inline"><button class="btn ghost sm">Require again</button></form>
+    {% elif d.ok %}<span class="badge st-ready">done</span> <small>{{ d.reason }} · {{ 'confirmed by you' if d.method == 'manual' else 'confirmed by the platform' }}</small>
+    {% else %}<span class="badge">pending</span> <small>{{ d.reason }}</small>
+      <form method="post" action="/packages/{{ d.package_id }}/confirm" class="inline"><input name="note" placeholder="what you checked" aria-label="what you checked"><button class="btn ghost sm">I confirm it is done</button></form>
+      <form method="post" action="/packages/{{ d.package_id }}/exclude" class="inline"><input name="reason" placeholder="why exclude" required aria-label="reason to exclude"><button class="btn ghost sm">Not needed</button></form>
+    {% endif %}{% if not d.duration_ok %}<br><small class="err">This clip's length does not fit {{ d.label }}'s limits; nothing was cut. Exclude it, or regenerate a version.</small>{% endif %}</li>{% endfor %}</ul>
+  {% if cleanup.blockers and cleanup.state != 'LOCAL_DELETED' %}<details><summary>Why it is still on this computer</summary><ul class="list">{% for b in cleanup.blockers %}<li><small>{{ b }}</small></li>{% endfor %}</ul></details>{% endif %}
+  <div class="buttons">
+    {% if c.cleanup_state in ('LOCAL_DELETED', 'RESTORE_PENDING') or c.local_deleted_at %}
+      <form method="post" action="/clips/{{ c.id }}/cleanup/restore"><button class="btn" {% if c.cleanup_state == 'RESTORE_PENDING' %}disabled{% endif %}>Restore from Google Drive</button></form>
+    {% else %}
+      <form method="post" action="/clips/{{ c.id }}/cleanup/{{ 'unkeep' if c.keep_local else 'keep' }}"><button class="btn ghost">{{ 'Allow removal' if c.keep_local else 'Keep locally' }}</button></form>
+      <form method="post" action="/clips/{{ c.id }}/cleanup/{{ 'auto_default' if c.cleanup_auto == 1 else 'auto_on' }}"><button class="btn ghost">{{ 'Follow global switch' if c.cleanup_auto == 1 else 'Allow automatic cleanup' }}</button></form>
+      {% if c.cleanup_hold %}<form method="post" action="/clips/{{ c.id }}/cleanup/release"><button class="btn ghost">Release hold</button></form>
+      {% else %}<form method="post" action="/clips/{{ c.id }}/cleanup/cancel"><button class="btn ghost">Cancel pending cleanup</button></form>{% endif %}
+      <form method="post" action="/clips/{{ c.id }}/cleanup/delete" onsubmit="return confirm('Remove the local video? The Google Drive copy stays and you can restore it.')"><button class="btn bad">Delete local copy now{% if cleanup.bytes %} (frees {{ '%.1f'|format(cleanup.bytes / 1e6) }} MB){% endif %}</button></form>
+    {% endif %}
+  </div>
+  {% if raw_gone %}<p class="muted"><small>The original recording was removed after verified processing, so this clip cannot be re-cut from the source (adjusting start/end needs the original).</small></p>{% endif %}
+</section>
 <section class="card">
   <h2>Editorial assessment</h2>
   <p><small>Niche: <b>{{ niche.name if niche else 'none' }}</b>{% if creator %} · creator <a href="/creators/{{ creator.id }}">{{ creator.name }}</a>{% endif %}

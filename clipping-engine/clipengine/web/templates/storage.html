@@ -9,6 +9,19 @@
   A 4-hour show needs ~{{ '%.1f'|format(rep.four_hour_show.needed_gb) }} GB: {% if rep.four_hour_show.fits %}<b class="ok">fits</b>{% else %}<b class="err">does not fit</b>{% endif %}.</p>
   {% if rep.blocker %}<p class="err">{{ rep.blocker }}</p>{% endif %}
 </section>
+<section class="card"><h2>Finished clips on this computer</h2>
+  <p>{{ cleanup.totals.present }} finished video(s) · <b>{{ '%.1f'|format(cleanup.totals.local_bytes / 1e9) }} GB</b> locally ·
+  {{ cleanup.totals.removed }} removed (restorable from Drive, {{ '%.1f'|format(cleanup.totals.removed_bytes / 1e9) }} GB freed)</p>
+  <p><small>Recoverable now <b>{{ '%.2f'|format(cleanup.recoverable_now / 1e9) }} GB</b> · in the recovery window {{ '%.2f'|format(cleanup.in_grace / 1e9) }} GB ·
+  waiting on uploads/confirmations {{ '%.2f'|format(cleanup.blocked_by_destinations / 1e9) }} GB · held by you {{ '%.2f'|format(cleanup.held / 1e9) }} GB</small></p>
+  <form method="post" action="/storage/cleanup" class="stack">
+    <label><input type="checkbox" name="enabled" value="1" {% if cleanup.enabled %}checked{% endif %}> Automatically remove a finished clip from this computer once its platform handoffs are verified, its Google Drive copy is verified, and the recovery window has passed. <b>Off until you switch it on.</b></label>
+    <label>Recovery window (hours after the last required destination is confirmed) <input name="grace_hours" type="number" min="0" max="720" step="1" inputmode="numeric" value="{{ cleanup.grace_hours|int }}"></label>
+    <button class="btn">Save</button></form>
+  <p class="muted"><small>The Google Drive copy is never deleted by this. A removed clip can be restored from its page. Clips you keep locally, clips still being uploaded, and anything you did not approve are never removed.</small></p>
+  <form method="post" action="/storage/cleanup/run"><button class="btn ghost">Run a cleanup pass now</button></form>
+  {% if cleanup.present %}<details><summary>Largest clips on this computer</summary><ul class="list">{% for p in cleanup.present[:15] %}<li><a href="/clips/{{ p.clip_id }}">Clip #{{ p.clip_id }}</a> · {{ '%.0f'|format(p.bytes / 1e6) }} MB · <span class="badge">{{ p.state }}</span> <small>{{ cleanup_help.get(p.state, '') }}{% if p.blockers %} — {{ p.blockers[0] }}{% endif %}</small></li>{% endfor %}</ul></details>{% endif %}
+</section>
 <section class="card"><h2>Google Drive (free cloud copy of finished clips)</h2>
   <p>Status: <b>{{ cloud.label }}</b>{% if cloud.quota %} · Drive free: {{ '%.1f'|format((cloud.quota.free or 0) / 1e9) if cloud.quota.free is not none else 'unlimited/unknown' }} GB (shared with Gmail and Photos){% endif %}</p>
   {% for st, v in cloud.objects.items() %}<span class="badge">{{ st }}: {{ v.n }} ({{ '%.2f'|format(v.gb) }} GB)</span> {% endfor %}

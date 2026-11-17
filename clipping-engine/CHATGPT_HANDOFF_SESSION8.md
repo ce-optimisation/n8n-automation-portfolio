@@ -96,3 +96,13 @@ Key behaviours: **discovery is not acquisition**. Identity is verified only thro
 1. Read `HANDOFF.md` §21-22, `clipengine/portfolio.py`, `discovery.py`, `roster_import.py`, `titles.py`, `setup_check.py`, `tests/test_portfolio.py`, `tests/test_session8.py`.
 2. Run `python -m clipengine --portfolio` (read-only) and `python scripts/test_report.py` to establish the baseline.
 3. Work the engineering list; keep to the rules; report with exact evidence and one consolidated owner checklist.
+
+---
+
+## UPDATE, end of session 9 (17 Nov 2026) - read `HANDOFF.md` §23
+
+Added: **selection profile v6 (context-complete)** in `complete.py` (default; legacy v1-v5 unchanged; no editorial length ceiling; PASS/REVIEW/REJECT
+with reasons; zero clips is valid; old 180 s caps removed) and **verified-upload local cleanup** in `cleanup.py` (schema v7; OFF until the owner enables it;
+Drive masters protected; restore from Drive; per-destination verification with manual confirmations labelled). 320 tests pass locally (3 skipped, as before);
+everything involving Drive/platforms is mocked. Pending: run `scripts/compare_selectors.py --recording N` on the owner's two example recordings (Alex Jones /
+Fuentes at NX; "Assemble the Army"); try cleanup and restore against the real Drive; Facebook draft upload is not implemented.
