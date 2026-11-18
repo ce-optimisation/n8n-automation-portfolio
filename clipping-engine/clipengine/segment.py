@@ -210,7 +210,7 @@ def _flatten_words(segments: list[dict]) -> list[dict]:
             step = (seg["end"] - seg["start"]) / max(1, len(toks))
             for i, t in enumerate(toks):
                 words.append({"start": seg["start"] + i * step, "end": seg["start"] + (i + 1) * step,
-                              "word": " " + t, "prob": 0.6})
+                              "word": " " + t, "prob": 0.6, "est": True})
     return words
 
 

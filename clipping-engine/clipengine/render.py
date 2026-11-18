@@ -111,14 +111,16 @@ def layout(settings: Settings, src_w: int, src_h: int) -> dict:
 
 def write_ass(phrases: list[dict], path: Path, settings: Settings, src_w: int, src_h: int,
               label: str | None = None, style=None, title: str | None = None, title_style=None,
-              duration: float = 0.0) -> None:
+              duration: float = 0.0, groups: list[dict] | None = None) -> None:
     from . import captions, titles
     style = style or captions.PRESETS["anton"]
     tev = None
+    fg_h = layout(settings, src_w, src_h)["fg_h"]
     if title and title_style is not None and title_style.enabled:
         tev = titles.build_events(title, title_style, duration or (phrases[-1]["end"] + 5 if phrases else 60),
-                                  settings.out_width, settings.out_height, layout(settings, src_w, src_h)["fg_h"])
-    path.write_text(captions.build_ass(phrases, style, settings.out_width, settings.out_height, label, tev),
+                                  settings.out_width, settings.out_height, fg_h)
+    path.write_text(captions.build_ass(phrases, style, settings.out_width, settings.out_height, label, tev,
+                                       groups=groups, fg_h=fg_h),
                     encoding="utf-8")
 
 
@@ -147,7 +149,9 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     srt, ass = out_dir / "captions.srt", out_dir / "captions.ass"
     write_srt(phrases, srt)
     title_on = bool(title and title_style is not None and title_style.enabled)
-    write_ass(phrases, ass, settings, src_w, src_h, label, style, title, title_style, end - start)
+    groups = (captions.build_word_groups(words, start, end, style, settings.out_width)
+              if style.mode == "active_word" else None)
+    write_ass(phrases, ass, settings, src_w, src_h, label, style, title, title_style, end - start, groups)
     tmp_out = out_dir / "clip.tmp.mp4"
     final = out_dir / "clip.mp4"
     src_info = media.probe(Path(src))
@@ -177,5 +181,6 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     if math.isclose(info["duration"], 0.0):
         raise media.PermanentError("Render produced an empty video")
     return {"video": final, "thumb": thumb, "srt": srt, "ass": ass, "probe": info, "phrases": len(phrases),
-            "caption_style": style.preset if style.enabled else "off", "title": title_on,
+            "caption_style": (style.preset + ("/active_word" if style.mode == "active_word" else "")) if style.enabled else "off",
+            "title": title_on,
             "frame_lines": bool(framelines.drawboxes(line_style, settings.out_width, settings.out_height, src_w, src_h))}

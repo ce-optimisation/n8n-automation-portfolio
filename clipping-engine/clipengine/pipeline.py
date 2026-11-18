@@ -458,7 +458,8 @@ class Pipeline:
         tstyle = titles.style_for(self.db, creator["brand_key"] if creator else None)
         ttext = titles.format_title(clip["title"]) if (clip["title"] and tstyle.enabled) else None
         res = render.render_clip(self.settings, Path(rec["file_path"]), out_dir, clip["start"], clip["end"],
-                                 words, rec["width"], rec["height"], label, style=captions.load_style(self.db),
+                                 words, rec["width"], rec["height"], label,
+                                 style=captions.style_for(self.db, creator["brand_key"] if creator else None),
                                  title=ttext, title_style=tstyle,
                                  line_style=framelines.style_for(self.db, creator["brand_key"] if creator else None),
                                  on_progress=lambda f: ctx.progress(0.05 + 0.9 * f, "Rendering"))

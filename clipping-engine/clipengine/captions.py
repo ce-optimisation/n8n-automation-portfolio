@@ -127,6 +127,13 @@ class CaptionStyle:
     # (16 Nov 2026); the source and timestamps stay in each clip's description and provenance record.
     # Settings -> Caption style -> "Small source label at top" turns it back on.
     source_label: bool = False
+    # "phrase" = the approved style above (up to two lines per phrase). "active_word" = PROPOSED single-line style
+    # (18 Nov 2026, owner-approved for America First Monitor the same day): one line only, white words with the usual black outline, and the word
+    # being spoken gets a yellow perimeter outside its black outline, advancing word by word with the audio.
+    # Used for brands in DEFAULT_ACTIVE_BRANDS / set_brand_active_word, or for all if chosen in caption_style.
+    mode: str = "phrase"
+    active_colour: str = "FDFB04"   # the approved title yellow (assets/title_calibration.json)
+    active_ring: float = 5.0        # px of yellow outside the black outline, at 1080 px width
 
     def max_chars(self, width: int = 1080) -> int:
         usable = width - 2 * SIDE_MARGIN
@@ -159,7 +166,167 @@ def clamp(style: CaptionStyle) -> CaptionStyle:
     style.outline = float(min(hi, max(lo, float(style.outline))))
     lo, hi = LIMITS["position"]
     style.position = float(min(hi, max(lo, float(style.position))))
+    if style.mode not in MODES:
+        style.mode = "phrase"
+    c = str(style.active_colour or "").lstrip("#").upper()
+    style.active_colour = c if re.fullmatch(r"[0-9A-F]{6}", c) else "FDFB04"
+    style.active_ring = float(min(10.0, max(2.0, float(style.active_ring))))
     return style
+
+
+MODES = ("phrase", "active_word")
+# Owner approved the single-line active-word captions for America First Monitor on 18 Nov 2026. Every other brand keeps
+# the approved two-line style until the owner approves it for that brand too.
+DEFAULT_ACTIVE_BRANDS = ("america_first_monitor",)
+
+
+def _active_brands(db) -> set:
+    raw = db.get_kv("caption_active_brands") if db is not None else None
+    try:
+        return set(json.loads(raw)) if raw else set(DEFAULT_ACTIVE_BRANDS)
+    except ValueError:
+        return set(DEFAULT_ACTIVE_BRANDS)
+
+
+def set_brand_active_word(db, brand_key: str, enabled: bool) -> None:
+    """Per-brand switch for the single-line active-word captions (meta key caption_active_brands = JSON list).
+    Only call this once the owner has approved the style for that brand."""
+    cur = _active_brands(db)
+    (cur.add if enabled else cur.discard)(brand_key)
+    db.set_kv("caption_active_brands", json.dumps(sorted(cur)))
+
+
+def style_for(db, brand_key: str | None) -> CaptionStyle:
+    """The caption style a brand's clips are rendered with: the saved style, switched to active_word for brands
+    the owner has approved it for (America First Monitor by default)."""
+    st = load_style(db)
+    if brand_key and st.mode == "phrase" and brand_key in _active_brands(db):
+        st.mode = "active_word"
+    return st
+
+
+# ---- single-line, active-word captions -------------------------------------------------------------
+
+MAX_GROUP_WORDS = 6
+WEAK_END = {"a", "an", "the", "of", "to", "in", "on", "at", "for", "and", "or", "but", "with", "from", "by", "my",
+            "your", "our", "their", "his", "her", "its", "that", "this", "i", "we", "you"}
+MAX_GROUP_DUR = 2.6     # s on screen before the next group replaces it
+MAX_GAP = 0.6           # a pause longer than this starts a new group
+MIN_FONT_FRACTION = 0.72  # a single over-long word may shrink this far (95 -> 68 px), never further
+SAFE_BOTTOM = 0.86      # lowest point (fraction of frame height) caption ink may reach: clear of platform UI
+
+
+def _usable(style: CaptionStyle, width: int) -> float:
+    return width - 2 * SIDE_MARGIN - 2 * (style.outline + style.active_ring)
+
+
+def text_width(text: str, style: CaptionStyle, size: float | None = None) -> float:
+    size = size or style.size
+    m = font_metrics(style.font)
+    return m.width(text, size) if m else len(text) * AVG_EM.get(style.font, 0.5) * size
+
+
+def _timing_ok(ws: list[dict]) -> bool:
+    """Word timings usable for word-by-word highlighting: real Whisper timings, positive, ordered and plausible."""
+    prev = -1.0
+    for w in ws:
+        s, e = w.get("start"), w.get("end")
+        if s is None or e is None or w.get("est") or e <= s or e - s > 2.5 or s < prev - 0.05:
+            return False
+        prev = s
+    return True
+
+
+def build_word_groups(words: list[dict], clip_start: float, clip_end: float, style: CaptionStyle,
+                      width: int = 1080) -> list[dict]:
+    """Short single-line groups of words, relative to the clip start, each guaranteed (real Anton glyph widths) to fit
+    between the side margins with its outlines at the normal size. Text is verbatim. A group whose word timings are
+    missing or implausible is marked timed=False and is shown as a plain static line (no highlight)."""
+    ws = [w for w in words if w["end"] > clip_start and w["start"] < clip_end and w["word"].strip()]
+    usable = _usable(style, width)
+    groups: list[dict] = []
+    cur: list[dict] = []
+
+    def flush():
+        if not cur:
+            return
+        toks = [w["word"].strip() for w in cur]
+        text = " ".join(toks)
+        size = style.size
+        wpx = text_width(text, style)
+        if wpx > usable:      # only possible for a single word longer than the line
+            size = max(int(style.size * MIN_FONT_FRACTION), int(style.size * usable / wpx))
+        groups.append({"start": max(0.0, cur[0]["start"] - clip_start),
+                       "end": min(clip_end, cur[-1]["end"]) - clip_start,
+                       "words": [{"text": t, "start": w["start"] - clip_start, "end": w["end"] - clip_start}
+                                 for t, w in zip(toks, cur)],
+                       "timed": _timing_ok(cur), "size": size})
+        cur.clear()
+
+    for w in ws:
+        tok = w["word"].strip()
+        if cur:
+            prev = cur[-1]["word"].strip()
+            line = " ".join(x["word"].strip() for x in cur) + " " + tok
+            natural = w["start"] - cur[-1]["end"] > MAX_GAP or (prev.endswith((",", ";", ":")) and len(cur) >= 2)
+            forced = (w["end"] - cur[0]["start"] > MAX_GROUP_DUR or len(cur) >= MAX_GROUP_WORDS
+                      or text_width(line, style) > usable)
+            if natural:
+                flush()
+            elif forced:
+                # Never end a line on "the", "a", "of"...: carry it into the next group (it is spoken right before).
+                carry = []
+                while len(cur) >= 3 and len(carry) < 2 and cur[-1]["word"].strip().lower() in WEAK_END:
+                    carry.insert(0, cur.pop())
+                flush()
+                cur.extend(carry)
+        cur.append(w)
+        if tok.endswith((".", "?", "!")):
+            flush()
+    flush()
+    for i, g in enumerate(groups):       # same smoothing as the phrase captions
+        nxt = groups[i + 1]["start"] if i + 1 < len(groups) else clip_end - clip_start
+        if nxt - g["end"] < 0.35:
+            g["end"] = nxt
+        if g["end"] - g["start"] < 0.8:
+            g["end"] = min(nxt, g["start"] + 0.8)
+    return groups
+
+
+def active_word_y(style: CaptionStyle, width: int, height: int, fg_h: float | None, line_px: int = 2) -> int:
+    """Centre line for single-line captions: the approved lower-middle position, moved down only as far as needed to
+    clear the picture and its frame line, and never below the platform-safe bottom."""
+    y = height * style.position
+    half = style.size / 2 + style.outline + style.active_ring
+    if fg_h:
+        pic_bottom = (height + fg_h) / 2 + line_px
+        if pic_bottom < height * 0.97:
+            y = max(y, pic_bottom + 24 + half)
+    return int(min(y, height * SAFE_BOTTOM - half))
+
+
+def _group_events(g: dict, style: CaptionStyle, x: int, y: int) -> list[str]:
+    pos = f"\\an5\\pos({x},{y})" + (f"\\fs{g['size']}" if g["size"] != style.size else "")
+    plain = " ".join(_esc(w["text"]) for w in g["words"])
+    if not g["timed"]:
+        return [f"Dialogue: 1,{_ts(g['start'])},{_ts(g['end'])},Caption,,0,0,0,,{{{pos}}}{plain}"]
+    yel = f"&H00{style.active_colour[4:6]}{style.active_colour[2:4]}{style.active_colour[0:2]}&"
+    ring = style.outline + style.active_ring
+    out = []
+    n = len(g["words"])
+    for i, w in enumerate(g["words"]):
+        s = g["start"] if i == 0 else max(g["start"], w["start"])
+        e = g["end"] if i == n - 1 else max(s, min(g["end"], g["words"][i + 1]["start"]))
+        if e - s < 0.01:
+            continue
+        # Layer 0: only the active word is drawn, as a yellow outline ring (fill and others transparent).
+        # Layer 1: the whole line exactly as the approved style draws it. Same string, same anchor -> identical layout,
+        # so the line never moves; only the ring advances.
+        ringed = " ".join((f"{{\\1a&HFF&\\3a&H00&\\3c{yel}\\bord{ring:.1f}}}" if j == i else "{\\alpha&HFF&\\bord0}")
+                          + _esc(v["text"]) for j, v in enumerate(g["words"]))
+        out.append(f"Dialogue: 0,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{{{pos}}}{ringed}")
+        out.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},Caption,,0,0,0,,{{{pos}}}{plain}")
+    return out
 
 
 def save_style(db, style: CaptionStyle) -> None:
@@ -179,7 +346,8 @@ def _ts(t: float) -> str:
 
 
 def build_ass(phrases: list[dict], style: CaptionStyle, width: int = 1080, height: int = 1920,
-              label: str | None = None, title_events: tuple[str, str] | None = None) -> str:
+              label: str | None = None, title_events: tuple[str, str] | None = None,
+              groups: list[dict] | None = None, fg_h: float | None = None) -> str:
     """ASS document for the given phrases. Text is used verbatim (sentence case preserved)."""
     bold = -1 if style.bold else 0
     if style.backing:
@@ -210,6 +378,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         out.append(title_events[1])
     if label and style.source_label and phrases:
         out.append(f"Dialogue: 1,{_ts(0)},{_ts(phrases[-1]['end'] + 5)},Label,,0,0,0,,{_esc(label)}")
+    if style.mode == "active_word" and groups is not None:
+        ya = active_word_y(style, width, height, fg_h)
+        for g in groups:
+            out.extend(_group_events(g, style, x, ya))
+        return header + "\n".join(out) + "\n"
     for p in phrases:
         lines = p["lines"][:2]
         text = "\\N".join(_esc(line) for line in lines)
@@ -226,6 +399,10 @@ def fontsdir_for(cwd: Path) -> str:
     folder is on a different drive."""
     try:
         rel = os.path.relpath(FONTS_DIR, cwd)
+        # libass opens <cwd>/<rel>/<file> un-normalised; past Windows' 260-character limit it silently falls back to
+        # Arial (seen 18 Nov 2026 with a deep working folder). Copy the font next to the job instead.
+        if len(str(Path(cwd).resolve())) + len(rel) + len(ANTON_FILE.name) + 2 > 240:
+            raise ValueError("path too long for libass")
         return rel.replace("\\", "/")
     except ValueError:
         local = Path(cwd) / "fonts"
