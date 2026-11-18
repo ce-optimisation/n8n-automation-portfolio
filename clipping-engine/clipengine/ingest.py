@@ -38,7 +38,7 @@ from .db import Database
 from .jobs import JobContext, PermanentError, TransientError
 from . import media
 
-VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".ts"}
 CONTENT_TYPE_EXT = {"video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
                     "video/x-matroska": ".mkv", "video/x-m4v": ".m4v", "video/x-msvideo": ".avi"}
 BINARY_TYPES = {"application/octet-stream", "binary/octet-stream", "application/mp4"}

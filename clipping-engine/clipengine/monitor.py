@@ -555,6 +555,7 @@ class SourceMonitor:
         # item id -> [first time, last time] the stream's state could not be checked after the
         # recorder stopped (typically the same network drop that stopped it)
         self._unsure: dict[int, list[float]] = {}
+        self._seg_started: dict[int, float] = {}       # item id -> when its current segment file was started
         queue.register("download_url:failed", self._download_failed)
 
     # -- lifecycle
@@ -583,9 +584,9 @@ class SourceMonitor:
 
     def recover(self) -> None:
         """After a restart: items left 'recording' resume (new segment) if still live, else finalize."""
-        for it in self.db.query("SELECT * FROM source_items WHERE state IN ('recording','finalizing')"):
+        for it in self.db.query("SELECT * FROM source_items WHERE state IN ('recording','finalizing','awaiting_space')"):
             src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
-            if it["state"] == "finalizing" or not src or not src["enabled"]:
+            if it["state"] in ("finalizing", "awaiting_space") or not src or not src["enabled"]:
                 self._finalize(it["id"])
                 continue
             if self._stream_live(src, it) is not False:     # live, or cannot tell yet: try (supervise decides)
@@ -600,6 +601,13 @@ class SourceMonitor:
             for src in self.db.query("SELECT * FROM sources WHERE enabled = 1 AND COALESCE(next_check, 0) <= ?", (now,)):
                 self.poll(src["id"])
         self.supervise()
+        self._retry_awaiting_space()
+
+    def _retry_awaiting_space(self) -> None:
+        """Captures that could not be joined for lack of disk are retried when space returns (nothing is lost meanwhile)."""
+        for it in self.db.query("SELECT id FROM source_items WHERE state='awaiting_space'"):
+            if it["id"] not in self.procs:
+                self._finalize(it["id"])
 
     # -- polling
     def poll(self, sid: int) -> dict:
@@ -819,6 +827,9 @@ class SourceMonitor:
         if not it:
             from . import storage
             ok, msg = storage.live_preflight(self.settings, 0.5)   # record what fits at full quality
+            if ok:
+                from . import livestore
+                ok, msg = livestore.admit(self.settings, len(self.procs))   # bounded buffer across ALL captures
             if not ok:
                 # Not stored as an item, so the next check tries again once space has been freed.
                 self.db.update("sources", src["id"], status_detail=f"Live stream detected but NOT recorded: {msg}")
@@ -861,6 +872,7 @@ class SourceMonitor:
                              stdin=subprocess.DEVNULL, **media._popen_kwargs())
         logf.close()      # the child has its own handle; keeping ours would leak (and lock on Windows)
         self.procs[it["id"]] = p
+        self._seg_started[it["id"]] = time.time()
         self.db.update("source_items", it["id"], segments=n, state="recording")
 
     def _stream_live(self, src, it) -> bool | None:
@@ -947,10 +959,10 @@ class SourceMonitor:
                 continue
             elapsed = time.time() - (it["started_at"] or time.time())
             if p.poll() is None:
-                from . import storage
-                if storage.free_bytes(self.settings.data_dir) < self.settings.disk_reserve_gb * 0.5e9:
-                    self._log_item(iid, "Disk almost full: stopping the recording and keeping what was captured",
-                                   "WARNING")
+                from . import livestore
+                if livestore.must_stop(self.settings, len(self.procs)):
+                    self._log_item(iid, "Disk space is running low: stopping the recording now and keeping what was captured "
+                                        "(there must stay room to join it)", "WARNING")
                     p.terminate()
                     p.wait(timeout=15)
                     self.procs.pop(iid, None)
@@ -962,6 +974,22 @@ class SourceMonitor:
                     p.wait(timeout=15)
                     self.procs.pop(iid, None)
                     self._finalize(iid)
+                    continue
+                seg = Path(it["work_dir"]) / f"seg_{it['segments']:03d}.ts"
+                why = livestore.rotation_due(seg, self._seg_started.get(iid, it["started_at"] or time.time()), self.settings)
+                if why:
+                    src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
+                    self._log_item(iid, f"Rotating to a new segment file ({why}); bounded files keep every part recoverable")
+                    p.terminate()
+                    try:
+                        p.wait(timeout=15)
+                    except Exception:  # noqa: BLE001
+                        p.kill()
+                    self.procs.pop(iid, None)
+                    if src and src["enabled"]:
+                        self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (iid,)))
+                    else:
+                        self._finalize(iid)
                 continue
             self.procs.pop(iid, None)
             self._after_recorder_exit(iid, it, p.returncode)
@@ -970,7 +998,7 @@ class SourceMonitor:
         log.log(getattr(logging, level), "source item %s: %s", iid, msg)
 
     def _finalize(self, iid: int) -> None:
-        """Join segments → MP4, verify integrity, hand to the inbox with a provenance sidecar."""
+        """Join segments into one MPEG-TS (consuming each segment as it is appended), verify integrity, hand to the inbox."""
         it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
         if not it:
             return
@@ -979,23 +1007,29 @@ class SourceMonitor:
         self.db.update("source_items", iid, state="finalizing")
         wd = Path(it["work_dir"])
         segs = sorted(p for p in wd.glob("seg_*.ts") if p.stat().st_size > 0)
-        if not segs:
+        if not segs and not (wd / "recording.ts").exists():
             self.db.update("source_items", iid, state="failed", error="No data was recorded.", ended_at=time.time())
             return
-        out = wd / "recording.mp4"
-        listing = wd / "segments.txt"
+        from . import livestore
+        out = wd / "recording.ts"
         text, trims = concat_listing(segs)
-        listing.write_text(text, encoding="utf-8")
+        cuts = {t["segment"]: t["cut_at"] for t in trims}
         if trims:
             self._log_item(iid, f"Removed repeated footage at {len(trims)} restart point(s): "
                                 + ", ".join(f"{t['segment']} cut at {t['cut_at']}s" for t in trims))
         try:
-            media.run_ffmpeg(["-f", "concat", "-safe", "0", "-i", listing.name, "-map", "0:v:0?", "-map", "0:a:0?",
-                              "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", out.name], cwd=wd)
-        except Exception as e:  # noqa: BLE001
-            self.db.update("source_items", iid, state="failed", error=f"Could not join segments: {e}"[:1000],
-                           ended_at=time.time())
+            livestore.join_segments_ts(segs, cuts, out, self.settings)
+        except livestore.InsufficientSpace as e:
+            # Nothing is lost: remaining segments and the joined part are kept and the join resumes when space returns.
+            self.db.update("source_items", iid, state="awaiting_space",
+                           error=f"Waiting for free disk space to finish joining the recording: {e}. Free space (Storage page) "
+                                 "and it resumes automatically."[:1000])
+            self._log_item(iid, f"Joining paused for lack of disk space: {e}", "WARNING")
             return
+        except Exception as e:  # noqa: BLE001
+            self.db.update("source_items", iid, state="failed", error=f"Could not join segments: {e}"[:1000], ended_at=time.time())
+            return
+        segs = sorted(p for p in wd.glob("seg_*.ts"))     # (all consumed; kept for the log line below)
         ok, problems, info = verify_recording(out, self.settings.min_recording_seconds)
         if not ok:
             self.db.update("source_items", iid, state="failed", ended_at=time.time(),
@@ -1003,13 +1037,13 @@ class SourceMonitor:
             return
         src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(it["started_at"] or time.time()))
-        name = f"monitor_{ingest.safe_filename(src['name'] if src else 'source', 40)}_{stamp}_item{iid}.mp4"
+        name = f"monitor_{ingest.safe_filename(src['name'] if src else 'source', 40)}_{stamp}_item{iid}.ts"
         inbox = self.settings.inbox
         inbox.mkdir(parents=True, exist_ok=True)
         sidecar = {"recorder": "clipengine", "source_item_id": iid, "source_id": it["source_id"],
                    "source_name": src["name"] if src else None, "source_url": it["url"],
                    "title": it["title"], "item_key": it["item_key"],
-                   "started_at": it["started_at"], "ended_at": time.time(), "segments": len(segs),
+                   "started_at": it["started_at"], "ended_at": time.time(), "segments": it["segments"],
                    "restarts": it["restarts"], "duration": info.get("duration"), "overlap_trims": trims,
                    "authorisation": src["authorisation"] if src else None}
         (inbox / (name + ".source.json")).write_text(json.dumps(sidecar, indent=1), encoding="utf-8")
@@ -1017,10 +1051,11 @@ class SourceMonitor:
         shutil.move(str(out), tmp)
         tmp.replace(inbox / name)        # becomes visible to the inbox importer only when complete
         self.db.update("source_items", iid, state="handed_off", ended_at=time.time(), error=None)
-        for p in segs:
-            try:
-                p.unlink(missing_ok=True)
-            except OSError:
-                pass      # e.g. Windows still releasing a handle; stale work files are cleaned up later
-        self._log_item(iid, f"Recording complete ({info.get('duration', 0):.0f}s, {len(segs)} segment(s)); "
+        for f in (wd / "recording.join.json",):
+            f.unlink(missing_ok=True)
+        try:
+            wd.rmdir()                # segments were consumed by the join; remove the empty folder
+        except OSError:
+            pass
+        self._log_item(iid, f"Recording complete ({info.get('duration', 0):.0f}s, {it['segments']} segment file(s)); "
                             "handed to inbox")

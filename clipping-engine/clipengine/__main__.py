@@ -163,6 +163,32 @@ def _tolerant_console() -> None:
             pass
 
 
+def _discard_live(settings, item_id: int, names) -> int:
+    """Owner-run: show exactly what would be deleted, verify it is safe, and delete only after 'DISCARD <id>' is typed."""
+    from . import livestore
+    from .db import Database
+    db = Database(settings.db_path)
+    chk = livestore.discard_check(settings, db, item_id, names)
+    item = db.one("SELECT title, state, error FROM source_items WHERE id=?", (item_id,))
+    print(f"Capture #{item_id}: {item['title'] if item else '?'}  state={item['state'] if item else '?'}")
+    for f in chk["files"]:
+        print(f"  would delete  {Path(f).stat().st_size / 1e9:8.3f} GB  {f}")
+    if not chk["ok"]:
+        print("NOT SAFE - nothing was deleted:")
+        for p in chk["problems"]:
+            print("  -", p)
+        return 1
+    print(f"Verified: failed capture, no recording registered from it, no active writer, files are capture files only. Total {chk['bytes'] / 1e9:.2f} GB.")
+    typed = input(f"Type DISCARD {item_id} to permanently delete exactly these files: ").strip()
+    res = livestore.discard(settings, db, item_id, typed, names)
+    if not res["deleted"]:
+        print("Nothing deleted:", res["reason"])
+        return 1
+    print(f"Deleted {len(res['removed'])} file(s). Free space {res['free_before'] / 1e9:.2f} GB -> {res['free_after'] / 1e9:.2f} GB "
+          f"(measured recovery {res['recovered_bytes_measured'] / 1e9:.2f} GB).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     _tolerant_console()
     ap = argparse.ArgumentParser(prog="clipengine")
@@ -184,6 +210,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="read-only report of where the disk space went and what could be recovered (add --json)")
     ap.add_argument("--set-credentials", action="store_true",
                     help="enter YouTube/Twitch/Kick monitoring credentials with hidden prompts, then test them live")
+    ap.add_argument("--discard-live", type=int, metavar="ITEM_ID",
+                    help="verify, then (after you type DISCARD <id>) permanently delete the named files of a FAILED live capture")
+    ap.add_argument("--names", help="with --discard-live: comma-separated file names, e.g. seg_001.ts,recording.mp4")
     ap.add_argument("--setup", action="store_true", help="run the setup assistant, then exit")
     ap.add_argument("--yes", action="store_true", help="with --setup: accept the defaults without asking")
     args = ap.parse_args(argv)
@@ -199,10 +228,12 @@ def main(argv: list[str] | None = None) -> int:
         except autostart.AutostartUnsupported as e:
             print(e)
             return 2
-    if args.supervise and not (args.doctor or args.setup or args.portfolio or args.portfolio_check or args.storage_audit or args.set_credentials):
+    if args.supervise and not (args.doctor or args.setup or args.portfolio or args.portfolio_check or args.storage_audit or args.set_credentials or args.discard_live):
         return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
+    if args.discard_live:
+        return _discard_live(settings, args.discard_live, [n.strip() for n in (args.names or "").split(",") if n.strip()] or None)
     if args.set_credentials:
         from . import credentials_cli
         return credentials_cli.main(settings)

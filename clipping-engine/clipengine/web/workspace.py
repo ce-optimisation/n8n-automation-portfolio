@@ -346,11 +346,13 @@ def register(app, core, page, templates) -> None:
     @app.get("/storage", response_class=HTMLResponse)
     def storage_page(request: Request, msg: str = "", err: str = "", plan: str = ""):
         rep = storage.capacity_report(settings, db)
+        from .. import livestore
+        live = livestore.live_folders(settings, db, set(getattr(getattr(core, "monitor", None), "procs", {}) or {}))
         recs = db.query("SELECT * FROM recordings WHERE engine_owned=1 AND raw_deleted_at IS NULL AND file_path IS NOT NULL "
                         "ORDER BY id DESC LIMIT 20")
         gates = {r["id"]: core.lifecycle.gates(r["id"]) for r in recs}
         return page(request, "storage.html", cleanup=core.cleanup.overview(), cleanup_help=cleanup.HELP, rep=rep, cloud=core.cloud.status(), held=core.cloud.uploads_held(),
-                    recs=recs, gates=gates, msg=msg, err=err, plan=json.loads(plan) if plan else None,
+                    recs=recs, live=live, gates=gates, msg=msg, err=err, plan=json.loads(plan) if plan else None,
                     s=settings, redirect=f"{settings.base_url()}/google/oauth/callback",
                     legacy=db.one("SELECT COUNT(*) n FROM recordings WHERE engine_owned=0 AND file_path IS NOT NULL")["n"])
 
@@ -517,6 +519,14 @@ def register(app, core, page, templates) -> None:
         core.cleanup.set_enabled(enabled == "1")
         core.cleanup.set_grace_hours(min(max(grace_hours, 0.0), 24 * 30))
         return _go("/storage", msg="Finished-clip cleanup settings saved." + (" Automatic cleanup is ON." if enabled == "1" else " Automatic cleanup is OFF."))
+
+    @app.post("/storage/live/{iid}/discard")
+    def storage_live_discard(iid: int, confirm: str = Form("")):
+        from .. import livestore
+        res = livestore.discard(settings, db, iid, confirm.strip(), active_ids=set(getattr(getattr(core, "monitor", None), "procs", {}) or {}))
+        if res["deleted"]:
+            return _go("/storage", msg=f"Discarded {len(res['removed'])} file(s); {res['recovered_bytes_measured'] / 1e9:.2f} GB recovered (measured).")
+        return _go("/storage", err="Nothing was deleted: " + res["reason"])
 
     @app.post("/storage/archive")
     def storage_archive(enabled: str = Form("")):

@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import Settings
 from .db import Database
 from .jobs import JobContext, JobQueue, PermanentError
-from . import hooks, ingest, render, safety, segment
+from . import framelines, hooks, ingest, render, safety, segment
 from .transcribe import get_transcriber
 
 log = logging.getLogger("clipengine.pipeline")
@@ -460,6 +460,7 @@ class Pipeline:
         res = render.render_clip(self.settings, Path(rec["file_path"]), out_dir, clip["start"], clip["end"],
                                  words, rec["width"], rec["height"], label, style=captions.load_style(self.db),
                                  title=ttext, title_style=tstyle,
+                                 line_style=framelines.style_for(self.db, creator["brand_key"] if creator else None),
                                  on_progress=lambda f: ctx.progress(0.05 + 0.9 * f, "Rendering"))
         (out_dir / "transcript.txt").write_text(
             f"Source: {rec['source_url'] or rec['original_filename']}\nRecording: {rec['title']}\n"

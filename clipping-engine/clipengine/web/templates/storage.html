@@ -20,6 +20,17 @@
     <button class="btn">Save</button></form>
   <p class="muted"><small>The Google Drive copy is never deleted by this. A removed clip can be restored from its page. Clips you keep locally, clips still being uploaded, and anything you did not approve are never removed.</small></p>
   <div class="card">
+    <h3>Live capture folders <small class="muted">(bounded segments · {{ s.live_segment_max_gb }} GB each · buffer {{ s.live_buffer_gb }} GB)</small></h3>
+    {% if live %}<ul class="list">{% for f in live %}
+      <li><b>{{ f.title or 'capture' }}</b> · {{ f.state }} · <b>{{ '%.2f'|format(f.bytes / 1e9) }} GB</b> · {{ f.files|length }} file(s)
+        {% if f.error %}<br><small class="err">{{ f.error }}</small>{% endif %}
+        {% if f.kind == 'orphan' and f.item_id %}<form method="post" action="/storage/live/{{ f.item_id }}/discard" class="inline">
+          <input name="confirm" placeholder="type DISCARD {{ f.item_id }}" size="14"><button class="btn ghost">Discard failed capture files</button></form>
+        <small class="muted">Verified first: failed, no recording made from it, nothing writing to it. Deletes only capture files in that folder.</small>{% endif %}
+        {% if f.kind == 'active' %}<small class="muted">in progress: kept</small>{% endif %}</li>{% endfor %}</ul>
+    {% else %}<p><small>No live capture files on disk.</small></p>{% endif %}
+  </div>
+  <div class="card">
     <h3>Drive-only archive <small class="muted">(optional · off by default)</small></h3>
     <p><small>For engine-made clips you have <b>reviewed and approved</b>, whose Google Drive copy is verified: remove the local file even before all 24 publishing accounts exist. The Drive master is never deleted, the file is re-checked against Drive immediately before removal, and <b>Restore from Drive</b> brings it back. Needs a passing restore test. Unreviewed, unverified and owner-supplied files are never touched.</small></p>
     <p><small>Restore test: {% if cleanup.restore_test.get('at') %}{{ 'passed' if cleanup.restore_test.ok else 'FAILED' }} — {{ cleanup.restore_test.reason }}{% if cleanup.restore_test.fresh %} (valid){% else %} (not valid now){% endif %}{% else %}not run yet{% endif %}</small></p>

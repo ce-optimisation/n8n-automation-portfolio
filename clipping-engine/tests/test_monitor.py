@@ -373,7 +373,7 @@ def test_live_hls_recorded_with_interruption_recovery_and_imported(env, sample_v
     item = db.one("SELECT * FROM source_items")
     assert item["state"] == "handed_off", item["error"]
     assert item["segments"] >= 2
-    files = list(s.inbox.glob("monitor_*.mp4"))
+    files = list(s.inbox.glob("monitor_*.ts"))
     assert len(files) == 1 and Path(str(files[0]) + ".source.json").exists()
     # Existing inbox importer picks it up (size must be stable across two scans)
     w = InboxWatcher(s, db, p)
@@ -698,7 +698,7 @@ def test_live_capture_to_verified_cloud_copy_then_safe_raw_deletion(env, sample_
         gen.wait(timeout=120)
         assert wait_for(lambda: (mon.supervise() or True) and db.one(
             "SELECT state FROM source_items WHERE source_id=?", (sid,))["state"] in ("handed_off", "failed"), timeout=90)
-        f = [x for x in s.inbox.glob("monitor_*.mp4") if not db.one("SELECT 1 FROM recordings WHERE original_filename=?", (x.name,))][0]
+        f = [x for x in s.inbox.glob("monitor_*.ts") if not db.one("SELECT 1 FROM recordings WHERE original_filename=?", (x.name,))][0]
         old = time.time() - 60
         os.utime(f, (old, old))
         w = InboxWatcher(s, db, p)

@@ -179,6 +179,9 @@ class Settings:
     inbox_dir: Path | None = None        # watch folder; default data/inbox
     monitor_enabled: bool = True         # poll enabled sources (sources are individually enabled/authorised)
     max_recording_hours: float = 8.0
+    live_segment_max_gb: float = 1.0     # a recorder is rotated to a new file once its segment reaches this size
+    live_segment_max_minutes: float = 30.0
+    live_buffer_gb: float = 20.0         # total local space live captures may hold (all concurrent captures together)
     min_recording_seconds: float = 60.0  # shorter live captures are treated as incomplete
     live_restart_limit: int = 120        # restarts happen only while the video page confirms the stream is live
     allow_private_urls: bool = False     # TEST-ONLY: permits localhost/private URLs
@@ -333,6 +336,9 @@ def get_settings(**overrides) -> Settings:
         monitor_enabled=_bool("MONITOR_ENABLED", True),
         max_recording_hours=_float("MAX_RECORDING_HOURS", 8.0),
         min_recording_seconds=_float("MIN_RECORDING_SECONDS", 60.0),
+        live_segment_max_gb=_float("LIVE_SEGMENT_MAX_GB", 1.0),
+        live_segment_max_minutes=_float("LIVE_SEGMENT_MAX_MINUTES", 30.0),
+        live_buffer_gb=_float("LIVE_BUFFER_GB", 20.0),
         live_restart_limit=_int("LIVE_RESTART_LIMIT", 120),
         allow_private_urls=_bool("ALLOW_PRIVATE_URLS", False),
         http_user_agent=os.environ.get("HTTP_USER_AGENT") or "LocalClippingEngine/1.1 (self-hosted editorial review tool)",

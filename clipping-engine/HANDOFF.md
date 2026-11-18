@@ -1685,3 +1685,14 @@ Run from a Linux cloud container: nothing here was run on the Lenovo. See OWNER_
 - **Credentials**: `credentials_cli.py` + `Set-Credentials.cmd` (hidden prompts, live pass/fail by HTTP status, no secrets in output); Check-Portfolio now runs the same test.
 - **Not verified live (no network/credentials/laptop here)**: Kick official docs were unreachable from the container (docs.kick.com blocked); endpoints match third-party
   clients only. No real Drive restore, no real platform identity checks, no compare_selectors on the two real recordings were run.
+
+
+## 25. Session 11 (18 Nov 2026): bounded live capture, safe discard, blue frame lines
+
+Cloud container again: the owner's laptop was NOT attachable (Remote Control lists `ClippingEngine` as "not available" to cloud sessions), so nothing ran on Windows.
+- Git: `claude/optimistic-noether-k52qjf` fast-forwarded bfb0f8d -> 2259593 (Session 10 head). Session 11 on `claude/sharp-bell-utpc9o`.
+- Root cause of the 17 Nov storage failure and the redesign: see STORAGE_ARCHITECTURE_SESSION11.md (livestore.py; monitor.py rotation/admission/join; .ts recordings).
+- `Recover-FailedRecording.cmd` / `--discard-live ID --names a,b`: verifies state=failed, no recording registered, no active writer, files are capture files, then needs `DISCARD <id>`. Priority 1 deletion is therefore STILL TO RUN on the laptop.
+- framelines.py: #2856D8, 2 px at 1080 wide, top and bottom edge of the central picture only, snapped to even rows; per brand (`set_brand_enabled`, `set_brand_colour`); default ON for America First Monitor only; not applied to already-rendered clips. `scripts/preview_frames.py` makes preview frames.
+- The four Session 10 Linux test failures were missing packages (yt-dlp, faster-whisper): all pass once installed.
+- Bug found by an existing real-ffmpeg test while building the joiner: overlap cut points are absolute timestamps, `-t` is a duration (fixed in `livestore._start_time`).

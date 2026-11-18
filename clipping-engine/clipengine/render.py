@@ -122,7 +122,8 @@ def write_ass(phrases: list[dict], path: Path, settings: Settings, src_w: int, s
                     encoding="utf-8")
 
 
-def filter_graph(settings: Settings, ass_name: str | None = "captions.ass", fontsdir: str | None = None) -> str:
+def filter_graph(settings: Settings, ass_name: str | None = "captions.ass", fontsdir: str | None = None,
+                 lines: str = "") -> str:
     W, H = settings.out_width, settings.out_height
     bw, bh = W // 4, H // 4
     burn = f",ass={ass_name}" + (f":fontsdir={fontsdir}" if fontsdir else "") if ass_name else ""
@@ -131,15 +132,15 @@ def filter_graph(settings: Settings, ass_name: str | None = "captions.ass", font
         f"[bgsrc]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
         f"boxblur=luma_radius=12:luma_power=2,eq=brightness=-0.10:saturation=0.85,scale={W}:{H},setsar=1[bg];"
         f"[fgsrc]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[fg];"
-        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p{burn}[v];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2{lines},format=yuv420p{burn}[v];"
         f"[0:a]highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"
     )
 
 
 def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end: float,
                 words: list[dict], src_w: int, src_h: int, label: str | None,
-                on_progress=None, style=None, title: str | None = None, title_style=None) -> dict:
-    from . import captions
+                on_progress=None, style=None, title: str | None = None, title_style=None, line_style=None) -> dict:
+    from . import captions, framelines
     style = style or captions.PRESETS["anton"]
     out_dir.mkdir(parents=True, exist_ok=True)
     phrases = build_phrases(words, start, end, max_chars=style.max_chars(settings.out_width))
@@ -158,7 +159,8 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     media.run_ffmpeg([
         "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(Path(src).resolve()),
         "-filter_complex", filter_graph(settings, ass.name if (style.enabled or title_on) else None,
-                                        captions.fontsdir_for(out_dir)),
+                                        captions.fontsdir_for(out_dir),
+                                        framelines.drawboxes(line_style, settings.out_width, settings.out_height, src_w, src_h)),
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", settings.x264_preset, "-crf", str(settings.video_crf),
         "-profile:v", "high", "-r", "30", "-c:a", "aac", "-b:a", settings.audio_bitrate,
@@ -175,4 +177,5 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     if math.isclose(info["duration"], 0.0):
         raise media.PermanentError("Render produced an empty video")
     return {"video": final, "thumb": thumb, "srt": srt, "ass": ass, "probe": info, "phrases": len(phrases),
-            "caption_style": style.preset if style.enabled else "off", "title": title_on}
+            "caption_style": style.preset if style.enabled else "off", "title": title_on,
+            "frame_lines": bool(framelines.drawboxes(line_style, settings.out_width, settings.out_height, src_w, src_h))}
