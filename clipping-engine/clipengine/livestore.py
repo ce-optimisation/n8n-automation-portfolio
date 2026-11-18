@@ -35,6 +35,30 @@ class InsufficientSpace(Exception):
     pass
 
 
+class FileStillInUse(Exception):
+    """A segment stayed locked by another process beyond the bounded wait (reported, never ignored)."""
+
+
+RELEASE_TIMEOUT = 20.0              # seconds to wait for Windows (or an AV scanner) to release a just-closed file
+
+
+def unlink_when_released(path: Path, timeout: float = RELEASE_TIMEOUT, sleep=time.sleep) -> None:
+    """Delete ``path``, retrying while Windows reports it in use (WinError 32: a writer that is just exiting,
+    an antivirus or indexer scan). A lock that persists past ``timeout`` raises FileStillInUse; the file is kept."""
+    end = time.monotonic() + timeout
+    delay = 0.1
+    while True:
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError as e:
+            if time.monotonic() >= end:
+                raise FileStillInUse(f"{path.name} is still in use by another process after {timeout:.0f}s "
+                                     f"(kept; nothing lost): {e}") from e
+            sleep(delay)
+            delay = min(delay * 2, 1.0)
+
+
 def _free(settings) -> int:
     return shutil.disk_usage(settings.data_dir).free
 
@@ -114,10 +138,10 @@ def join_segments_ts(segs: list[Path], trims: dict[str, float], out: Path, setti
     mf = out.with_suffix(".join.json")
     state = json.loads(mf.read_text(encoding="utf-8")) if mf.is_file() else {"done": [], "offset": 0.0, "size_before": 0}
     if not mf.is_file() and out.exists():
-        out.unlink()                       # a stale partial output without a manifest is not trustworthy
+        unlink_when_released(out)          # a stale partial output without a manifest is not trustworthy
     for seg in segs:
         if seg.name in state["done"]:
-            seg.unlink(missing_ok=True)    # appended earlier; the crash came before the delete
+            unlink_when_released(seg)      # appended earlier; the crash came before the delete
             continue
         if not seg.is_file():
             continue
@@ -157,7 +181,7 @@ def join_segments_ts(segs: list[Path], trims: dict[str, float], out: Path, setti
         state["done"].append(seg.name)
         state.pop("current", None)
         mf.write_text(json.dumps(state), encoding="utf-8")
-        seg.unlink(missing_ok=True)            # only now: the data is safely in the joined file and recorded
+        unlink_when_released(seg)              # only now: the data is safely in the joined file and recorded
     return state
 
 

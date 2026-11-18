@@ -547,7 +547,7 @@ class SourceMonitor:
 
     def __init__(self, settings: Settings, db: Database, queue, interval: float = 30.0, sleep=time.sleep):
         self.settings, self.db, self.queue, self.interval, self.sleep = settings, db, queue, interval, sleep
-        self.procs: dict[int, subprocess.Popen] = {}
+        self.procs: dict = {}                # item id -> proctree.RecorderProcess (Popen-compatible, stops the whole tree)
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
         self.lister = list_channel           # replaceable in tests (MOCK)
@@ -868,9 +868,15 @@ class SourceMonitor:
         seg = wd / f"seg_{n:03d}.ts"
         method = method or ("hls" if src["kind"] == "hls" else "ytdlp")
         logf = open(wd / f"seg_{n:03d}.log", "w", encoding="utf-8")
-        p = subprocess.Popen(self._recorder_cmd(src, it, seg, method), stdout=logf, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, **media._popen_kwargs())
-        logf.close()      # the child has its own handle; keeping ours would leak (and lock on Windows)
+        # The whole recorder TREE is controlled: yt-dlp runs its own ffmpeg for live HLS and package-manager shims start
+        # the real ffmpeg as a child. Stopping only the top process left the writer holding the segment (WinError 32).
+        from .proctree import RecorderProcess
+        try:
+            p = RecorderProcess(self._recorder_cmd(src, it, seg, method), stdout=logf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, **media._popen_kwargs())
+        finally:
+            logf.close()
+        # (logf closed above: the child has its own handle; keeping ours would leak and lock on Windows)
         self.procs[it["id"]] = p
         self._seg_started[it["id"]] = time.time()
         self.db.update("source_items", it["id"], segments=n, state="recording")
@@ -985,6 +991,7 @@ class SourceMonitor:
                         p.wait(timeout=15)
                     except Exception:  # noqa: BLE001
                         p.kill()
+                        p.wait(timeout=15)      # reaps the tree: the old segment must be released before it is joined
                     self.procs.pop(iid, None)
                     if src and src["enabled"]:
                         self._start_segment(src, self.db.one("SELECT * FROM source_items WHERE id=?", (iid,)))
@@ -1025,6 +1032,12 @@ class SourceMonitor:
                            error=f"Waiting for free disk space to finish joining the recording: {e}. Free space (Storage page) "
                                  "and it resumes automatically."[:1000])
             self._log_item(iid, f"Joining paused for lack of disk space: {e}", "WARNING")
+            return
+        except livestore.FileStillInUse as e:
+            # Nothing is lost (the manifest records progress); stays 'finalizing' so the next restart resumes the join.
+            self.db.update("source_items", iid, state="finalizing",
+                           error=f"Joining paused: a segment is still locked by another process: {e}"[:1000])
+            self._log_item(iid, f"Joining paused, segment still in use: {e}", "WARNING")
             return
         except Exception as e:  # noqa: BLE001
             self.db.update("source_items", iid, state="failed", error=f"Could not join segments: {e}"[:1000], ended_at=time.time())
