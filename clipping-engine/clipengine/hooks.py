@@ -63,6 +63,42 @@ POLICY = {
 }
 DEFAULT_POLICY = dict(shapes={"claim": 1.0, "question": 0.8, "topic": 0.7, "neutral_topic": 0.4})
 
+# Session 13 title-quality fixes. A topic label must be a NOUN phrase and a claim must be a complete clause:
+#  * "Amazon AWS went" (from "It's not like Amazon AWS went down") was a verb fragment that also lost the negation;
+#  * "Down detector data also show" / "Since that second wave of technology" were dangling clauses;
+#  * "What does that tell you?" named no subject at all.
+SUBORDINATOR_START = re.compile(r"^(?:since|although|though|while|whereas|unless|until|because|if|when|whenever|after|before|"
+                                r"as|once|than|whether|which|who|whose|whom)\b", re.I)
+VERBAL_FORMS = set("""went gone goes going came come comes took taken takes gave given gives saw seen sees made makes knew
+known knows wrote written ran runs fell fallen falls felt feels got gotten became begin began begun broke broken brought
+built bought caught chose chosen drove driven ate eaten flew flown forgot held hit kept led left lost met paid put read rose
+sat sold sent set shut spoke spent stood stole taught told thought threw understood woke won wore means mean meant creates
+create created shows show showed shown tells tell tells revolutionizes revolutionize carries carry cascaded cascade
+caused causes cause leads lead brings bring turns turn becomes become gets get gives give takes take needs need wants want
+uses use works work runs run happens happen happened decides decide decided found finds find said say says""".split())
+VERBAL_SUFFIX = re.compile(r"(?:izes|ises|ifies|ized|ised)$", re.I)
+
+
+def _is_verbal(tok: str) -> bool:
+    """True for words that are (or are very likely) verbs, so they cannot sit inside a noun-phrase topic label."""
+    t = tok.lower().strip("'-")
+    return t in VERBAL_FORMS or bool(CLAIM_VERBS.fullmatch(t)) or bool(VERBAL_SUFFIX.search(t)) or _stem(t) in VERBISH
+
+
+def _noun_runs(run: list[str]) -> list[list[str]]:
+    """Split a run of content words at verbs; proper nouns/numbers (capitalised mid-sentence) are never treated as verbs."""
+    out, cur = [], []
+    for w in run:
+        if _is_verbal(w) and not (w[:1].isupper() and len(cur) > 0):
+            if cur:
+                out.append(cur)
+            cur = []
+        else:
+            cur.append(w)
+    if cur:
+        out.append(cur)
+    return out
+
 
 @dataclass
 class Candidate:
@@ -178,9 +214,9 @@ def _topic_phrase(text: str) -> tuple[str, int] | None:
             if re.match(r"[A-Za-z0-9]", t) and t.lower() not in STOP and not (len(run) == 0 and _stem(t) in {"said", "says"}):
                 run.append(t)
                 continue
-            if run:
-                phrase = run[:3]
-                while len(phrase) > 1 and (_stem(phrase[-1]) in VERBISH or CLAIM_VERBS.fullmatch(phrase[-1])):
+            for sub in (_noun_runs(run) if run else []):     # noun phrases only: never a verb fragment
+                phrase = sub[:3]
+                while len(phrase) > 1 and _is_verbal(phrase[-1]):
                     phrase = phrase[:-1]
                 proper = sum(1 for w in phrase if w[:1].isupper() and not s.lower().startswith(w.lower()) or w.isdigit())
                 score = len(phrase) * 1.0 + proper * 1.5 + sum(freq[_stem(w)] - 1 for w in phrase) * 0.7
@@ -272,6 +308,23 @@ def verify(c: Candidate, transcript: str, policy: dict, speaker: str | None = No
     if c.method in ("attributed_topic", "topic") and len(_toks(plain.replace(speaker or "", ""))) <= 2 \
             and not any(t[:1].isupper() or t.isdigit() for t in _toks(plain.replace(speaker or "", "")) if t.lower() != "on"):
         reject.append("topic is a single common word - too vague to be a fair summary")
+    # Session 13 structural checks: complete statements, noun-phrase topics, questions that name a subject.
+    toks_plain = _toks(plain)
+    if c.method == "claim":
+        if SUBORDINATOR_START.match(plain):
+            reject.append("starts as a dependent clause (since/although/when...); it is not a complete statement")
+        if toks_plain and _is_verbal(toks_plain[-1]):
+            reject.append("ends on a verb that still needs its object, so the sentence is left hanging")
+    if c.method == "question" and len(_content(plain)) < 2:
+        reject.append("the question names no subject, so it means nothing without the surrounding clip")
+    if c.method in ("topic", "attributed_topic", "neutral_topic"):
+        body = re.sub(r"^\s*on\s+", "", plain.replace(speaker or "", "", 1).strip(), flags=re.I)
+        if any(_is_verbal(t) for t in _toks(body)):
+            reject.append("the topic label contains a verb, so it is a sentence fragment rather than a subject")
+        src = _best_sentence(body, tx)
+        if src and (NEGATION.search(src) or HEDGE.search(src)):
+            c.warnings.append("the passage this label comes from is negated or hedged; the label names the subject only - "
+                              "check it does not imply the opposite")
     c.warnings = [f"REJECT: {r}" for r in reject] + [w for w in c.warnings if not w.startswith("REJECT")]
     c.accepted = not reject
     return c

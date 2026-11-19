@@ -213,3 +213,70 @@ def test_generated_titles_render_inside_the_frame(settings, sample_video, tmp_pa
     cols = np.where(edge.any(axis=0))[0]
     assert cols.min() >= 20 and cols.max() <= 1080 - 20
     assert np.abs(a[-400:] - b[-400:]).mean() < 3.0                             # captions untouched
+
+
+# ---- Session 13 regressions: real wording from recording 5 (clips 25-30) -----------------------------------------
+AWS = ("It's not like Amazon AWS went down. It's not like Cloudflare went down. It's not like these systemic services "
+       "that carry 70% of the internet had disruption, and it cascaded through the rest of them. No, these are all "
+       "different systems all going down in sequence.")
+WAVE = ("Since that second wave of technology, we have seen youth unemployment rise. What does that tell you? "
+        "Down detector data also show the highest weekly outages in twelve months.")
+
+
+def _accepted_texts(result):
+    return [c["text"] for c in result["candidates"] if c["accepted"]]
+
+
+@pytest.mark.parametrize("brand", [None, "america_first_monitor", "afterlive"])
+def test_negated_passage_never_becomes_a_verb_fragment_title(brand):
+    """'Amazon AWS went' dropped 'not like ... down' and reversed the meaning. No accepted candidate may contain it."""
+    r = hooks.generate(AWS, brand, "Fuentes")
+    assert not any("went" in t.lower().split() for t in _accepted_texts(r)), r["candidates"]
+    if r["title"]:
+        assert "went" not in r["title"].lower().split()
+
+
+def test_topic_labels_are_noun_phrases_without_verbs():
+    for text in (AWS, WAVE, TARIFF, BUSINESS):
+        r = hooks.generate(text, "america_first_monitor", "Fuentes")
+        for c in r["candidates"]:
+            if c["accepted"] and c["method"] in ("topic", "attributed_topic", "neutral_topic"):
+                body = c["text"].replace("Fuentes", "").strip()
+                body = body[3:] if body.lower().startswith("on ") else body
+                assert not any(hooks._is_verbal(t) for t in hooks._toks(body)), c
+
+
+def test_topic_from_a_negated_sentence_is_flagged_for_the_reviewer():
+    r = hooks.generate(AWS, "america_first_monitor", "Fuentes")
+    cand = next(c for c in r["candidates"] if c["accepted"] and "Amazon AWS" in c["text"])
+    assert any("negated or hedged" in w for w in cand["warnings"]), cand
+
+
+def test_dangling_clauses_and_subjectless_questions_are_rejected():
+    r = hooks.generate(WAVE, "afterlive")
+    texts = _accepted_texts(r)
+    assert not any(t.lower().startswith("since ") for t in texts), texts
+    assert "What does that tell you?" not in texts, texts
+    assert not any(t.lower().endswith(" also show") for t in texts), texts
+
+
+def test_complete_factual_claims_still_pass():
+    r = hooks.generate("Over 20,000 flights were affected. Airlines said the delays would continue.", "afterlive")
+    assert "Over 20,000 flights were affected" in _accepted_texts(r), r["candidates"]
+
+
+def test_creator_without_a_brand_gets_its_brand_policy_from_the_niche(settings):
+    """Clips 25-30 were titled with brand_policy 'default'. A politics creator with no brand_key must still be held to
+    the America First Monitor policy (attributed/topic wording only), never the permissive default."""
+    import time
+    db = Database(settings.db_path)
+    now = time.time()
+    db.execute("INSERT OR REPLACE INTO brands (key, name, niche_key, created_at, updated_at) VALUES (?,?,?,?,?)",
+               ("america_first_monitor", "America First Monitor", "politics", now, now))
+    cid = db.insert("creators", name="Some Host", niches_json='["politics"]')
+    rid = db.insert("recordings", title="Rec", source_type="upload", status="ready", creator_id=cid)
+    p = pl.Pipeline(settings, db, JobQueue(db))
+    fields = p.hook_fields(db.recording(rid), AWS)
+    info = json.loads(fields["title_json"])
+    assert info["brand_policy"] == "america_first_monitor", info["brand_policy"]
+    assert all(c["method"] != "claim" for c in info["candidates"] if c["accepted"])

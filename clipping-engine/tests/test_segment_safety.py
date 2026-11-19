@@ -1,3 +1,5 @@
+import pytest
+
 from clipengine import safety, segment
 
 
@@ -88,3 +90,33 @@ def test_low_confidence_words():
     low = safety.low_confidence_words([{"word": " ok", "start": 0, "prob": 0.9},
                                        {"word": " mumble", "start": 1, "prob": 0.2}])
     assert [w["word"] for w in low] == ["mumble"]
+
+
+# ---- Session 13: the three clips the owner rejected (recording 2: clips 9, 10, 12) were all stored as "clear" ----
+def test_group_targeting_cues_are_flagged_for_human_review():
+    f9 = safety.screen("The guy's a Jewish Zionist. I mean, what did you expect? No, that's hilarious.")
+    assert any(f["category"] == "group_targeting_review" for f in f9), f9
+    f10 = safety.screen("Guess who told him to ban the illegals and their employers?")
+    assert any(f["category"] == "group_targeting_review" for f in f10), f10
+    f_ctrl = safety.screen("They say the Jews control the media and the banks.")
+    assert any(f["category"] == "group_targeting_review" for f in f_ctrl), f_ctrl
+
+
+@pytest.mark.parametrize("text", [
+    "The Jewish museum opens its new wing on Friday.",
+    "Immigrants contributed three billion dollars in taxes last year, according to the report.",
+    "Palestinians and Israelis met in Cairo for a third round of talks.",
+    "Of course the budget passed; the council voted on Tuesday.",
+    "We will execute the plan and kill the lights at nine.",
+    "The migrant shelter on Fifth Street reopened after the flood.",
+])
+def test_ordinary_news_wording_is_not_flagged(text):
+    assert safety.screen(text) == [], safety.screen(text)
+
+
+def test_cheap_obfuscation_does_not_hide_a_flagged_term():
+    assert safety.screen("they are v3rmin and sub-humans") != []
+    assert any(f["category"] == "dehumanisation" for f in safety.screen("those people are verrrmin"))
+    assert any(f["category"] == "dehumanisation" for f in safety.screen("call them s.u.b.h.u.m.a.n.s"))
+    assert safety.screen("The code is 1488 on the lockbox") != []        # existing pattern still works on numbers
+    assert safety.screen("It cost $20 and she paid 5 dollars") == []

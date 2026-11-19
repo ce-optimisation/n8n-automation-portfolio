@@ -355,6 +355,17 @@ class Pipeline:
         try:
             creator = self.creator_for(rec)
             brand = creator["brand_key"] if creator else None
+            if not brand:
+                # Session 13: never fall back to the permissive default policy when the niche tells us the brand
+                # (clips 25-30 were titled with brand_policy "default" before their creator had a brand).
+                niche = rec["niche_key"]
+                if not niche and creator and creator["niches_json"]:
+                    try:
+                        niche = (json.loads(creator["niches_json"]) or [None])[0]
+                    except (ValueError, TypeError):
+                        niche = None
+                row = self.db.one("SELECT key FROM brands WHERE niche_key = ?", (niche,)) if niche else None
+                brand = row["key"] if row else None
             speaker = None
             if creator and (creator["kind"] or "creator") == "creator" and creator["name"]:
                 nm = creator["name"].split()
