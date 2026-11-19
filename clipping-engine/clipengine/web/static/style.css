@@ -48,6 +48,10 @@ input[type=checkbox] { width: auto; margin-right: 6px; } label.check { display: 
 .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; align-items: end; }
 .pill { background: var(--accent); color: #fff; border-radius: 10px; padding: 0 7px; font-size: .75rem; }
 .pill.bad { background: var(--bad); }
+.pill.ok { background: var(--good); }
+.recswitch { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }
+.recswitch .pill { padding: 2px 9px; font-weight: 600; }
+.recswitch button { padding: 3px 9px; font-size: .8rem; }
 .badge { display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .badge.ready, .badge.queued { color: var(--accent); } .badge.approved, .badge.done, .badge.confirmed { color: var(--good); }
 .badge.rejected, .badge.failed, .badge.flagged { color: var(--bad); border-color: var(--bad); }

@@ -23,7 +23,7 @@ import re
 import threading
 import time
 
-from . import events, ingest, portfolio
+from . import events, ingest, portfolio, recording_switch
 from .platforms import AdapterError, ChannelRef, ERROR_CODES, adapter_for, parse_channel_url
 
 log = logging.getLogger("clipengine.discovery")
@@ -319,6 +319,8 @@ class DiscoverySupervisor:
             return 0
         self.sync_job_states()
         self.ensure_recorders()
+        if not recording_switch.is_enabled(self.db):
+            return 0            # master switch OFF: discovery still records metadata, but no download is queued
         rows = self.db.query("SELECT d.*, m.canonical_url AS src_url, m.legacy_source_id, m.id AS msid, "
                              "m.platform AS plat FROM discovered_items d JOIN monitor_sources m ON m.id=d.monitor_source_id "
                              "WHERE d.state IN ('discovered','permission_required') AND d.kind IN ('upload','vod','episode') "

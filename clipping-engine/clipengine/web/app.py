@@ -182,6 +182,20 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     templates.env.filters["dt"] = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if t else ""
     templates.env.globals["RIGHTS_CHOICES"] = RIGHTS_CHOICES
     templates.env.globals["PUB_STATES"] = STATES
+    from .. import recording_switch
+    templates.env.globals["recording_enabled"] = lambda: recording_switch.is_enabled(core.db)
+
+    @app.post("/recording/toggle")
+    def recording_toggle(request: Request, enable: str = Form("")):
+        """Master recording switch for ALL platforms and creators (see clipengine/recording_switch.py)."""
+        recording_switch.set_enabled(core.db, enable == "1")
+        back = request.headers.get("referer") or "/"
+        from urllib.parse import urlparse as _up
+        path = _up(back).path or "/"                    # same-site path only; never redirect off-site
+        if not path.startswith("/") or path.startswith("//") or "\\" in path:
+            path = "/"                                  # "//host" would be a protocol-relative redirect off-site
+        return RedirectResponse(path, status_code=303)
+
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     def page(request: Request, name: str, **ctx):

@@ -33,7 +33,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from . import ingest, media
+from . import ingest, media, recording_switch
 from .config import Settings
 from .db import Database
 
@@ -727,6 +727,8 @@ class SourceMonitor:
                 self.db.insert("source_items", source_id=src["id"], item_key=it["key"], title=it["title"],
                                url=it["url"], published=it.get("published"), state="baseline")
                 continue
+            if not recording_switch.is_enabled(self.db):
+                continue        # master switch OFF: not stored, so it is picked up as new once recording is turned on
             decision = ingest.classify_url(it["url"], self.settings, self.db)
             if decision.code == "unresolvable":
                 continue        # no internet right now: not stored, so the next check queues it
@@ -753,6 +755,8 @@ class SourceMonitor:
         ok, msg = check_source_allowed(self.settings, self.db, src["url"])
         if not ok:
             return {"blocked": msg}
+        if not recording_switch.is_enabled(self.db):
+            return {"blocked": "Recording is switched OFF (master switch); turn it on first."}
         rows = self.db.query("SELECT * FROM source_items WHERE source_id=? AND state='baseline' AND kind='vod' "
                              "ORDER BY id LIMIT ?", (sid, max(0, int(count))))
         queued, refused = 0, 0
@@ -825,6 +829,11 @@ class SourceMonitor:
         if it and (it["state"] not in LIVE_STATES or it["id"] in self.procs):
             return it["state"] in LIVE_STATES
         if not it:
+            if not recording_switch.is_enabled(self.db):
+                # Master switch OFF: never start a NEW capture. Not stored as an item, so the next check starts it
+                # if recording is turned back on while the stream is still live. A capture already running is untouched.
+                self.db.update("sources", src["id"], status_detail="Live stream detected but NOT recorded: recording is switched OFF")
+                return False
             from . import storage
             ok, msg = storage.live_preflight(self.settings, 0.5)   # record what fits at full quality
             if ok:

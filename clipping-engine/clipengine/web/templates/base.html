@@ -30,6 +30,15 @@
     <a href="/jobs">Jobs{% if counts and counts.jobs_failed %} <span class="pill bad">{{ counts.jobs_failed }}</span>{% endif %}</a>
     <a href="/settings">Settings</a>
   </nav>
+  <form method="post" action="/recording/toggle" class="recswitch">
+    {% if recording_enabled() %}
+    <span class="pill ok" title="The engine records live shows and downloads new uploads from permitted sources">Recording ON</span>
+    <button type="submit" name="enable" value="0" title="Stop starting any new recording, for every platform and creator. A capture already running finishes.">Turn OFF</button>
+    {% else %}
+    <span class="pill bad" title="No new live captures or automatic downloads are started. Monitoring continues.">Recording OFF</span>
+    <button type="submit" name="enable" value="1">Turn ON</button>
+    {% endif %}
+  </form>
   {% endif %}
 </header>
 <main>
