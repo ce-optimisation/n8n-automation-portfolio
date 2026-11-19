@@ -1,8 +1,9 @@
-"""Approve -> automatic upload to each destination's closest DRAFT workflow (Session 13).
+"""Approve -> automatic upload to each destination (Session 13).
 
-The owner's approval of a clip (one tap) is the explicit command. Nothing here ever publishes publicly:
-  * Facebook  -> a Reel DRAFT;   * YouTube -> a PRIVATE upload;   * Instagram -> never (no draft API; local staging package);
-  * TikTok    -> not handled here.
+The owner's approval of a clip (one tap) is the explicit command. Per destination (``delivery.mode_for``):
+  * DRAFT mode (default): Facebook Reel DRAFT / YouTube PRIVATE upload;
+  * PUBLIC mode (owner typed PUBLISH for that one destination): the approved clip is published there;
+  * Instagram -> not handled here yet (no draft API; local staging package);  * TikTok -> not handled here.
 
 A clip is queued ONLY for destinations that are (a) for the clip's own brand, (b) identity-verified through the platform API and
 (c) switched ON by the owner on the Connections page. ``delivery.deliver_draft`` re-checks every gate again when the job runs.
@@ -20,7 +21,7 @@ from .. import connections as cx
 from .. import recording_switch
 from ..jobs import PermanentError, TransientError
 from .base import PublishError, editorial_gate
-from .delivery import clip_brand, deliver_draft
+from .delivery import clip_brand, deliver_draft, mode_for
 
 log = logging.getLogger("clipengine.autodeliver")
 
@@ -79,7 +80,8 @@ def prepare_and_enqueue(db, queue, clip_id: int) -> dict:
     for a in dests:
         jid = queue.enqueue(KIND, clip_id=clip_id, payload={"clip_id": clip_id, "account_id": a["id"]},
                             dedupe_key=f"deliver:{clip_id}:{a['id']}", max_attempts=400)
-        out["queued"].append({"job": jid, "platform": a["platform"], "handle": a["handle"], "brand": a["brand"]})
+        out["queued"].append({"job": jid, "platform": a["platform"], "handle": a["handle"], "brand": a["brand"],
+                              "account_id": a["id"]})
     return out
 
 
@@ -93,7 +95,7 @@ def sent_today(db, account, now: float | None = None) -> int:
     since = _local_midnight(now)
     n = 0
     for r in db.query("SELECT pa.clip_id FROM publish_attempts pa WHERE pa.platform=? AND pa.status IN "
-                      "('delivered_draft','delivered_private','uploading','processing') AND pa.created_at>=?",
+                      "('delivered_draft','delivered_private','published','uploading','processing') AND pa.created_at>=?",
                       (account["platform"], since)):
         clip = db.clip(r["clip_id"])
         if clip and clip_brand(db, clip) == account["brand"]:

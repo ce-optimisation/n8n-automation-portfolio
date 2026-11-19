@@ -27,11 +27,11 @@
 
 <section class="card">
   <h2>3. Where approved clips go</h2>
-  <p>Approving a clip uploads it to each channel below that is <b>switched on</b> (Connections page): Facebook as a Reel <b>draft</b>, YouTube as a <b>private</b> upload. Nothing is made public. Instagram and TikTok are posted by hand.
+  <p>Approving a clip sends it to each channel below that is <b>switched on</b> (Connections page). In <b>draft</b> mode (the default) Facebook gets a Reel draft and YouTube a private upload; in <b>public</b> mode (you type PUBLISH for that one channel) the clip is published. Instagram and TikTok are posted by hand.
      Limit: <b>{{ cap }}</b> per channel per day; extras wait for the next day.</p>
-  <table class="jobs"><tr><th>Brand</th><th>Platform</th><th>Verified</th><th>Switched on</th><th>Sent today</th></tr>
+  <table class="jobs"><tr><th>Brand</th><th>Platform</th><th>Verified</th><th>Switched on</th><th>Mode</th><th>Sent today</th></tr>
   {% for a in dests %}<tr><td>{{ a.brand }}</td><td>{{ a.platform }}</td><td>{{ "yes" if a.identity_verified_at else "no" }}</td>
-     <td>{{ "ON" if a.publishing_enabled else "off" }}</td><td>{{ a.today }}/{{ cap }}</td></tr>{% endfor %}</table>
+     <td>{{ "ON" if a.publishing_enabled else "off" }}</td><td>{{ "PUBLIC" if a.mode == "public" else "drafts" }}</td><td>{{ a.today }}/{{ cap }}</td></tr>{% endfor %}</table>
   <p class="muted">Switch channels on or off on the <a href="/connections">Connections</a> page. The header button <b>Auto-upload</b> pauses everything at once.</p>
 </section>
 {% endblock %}

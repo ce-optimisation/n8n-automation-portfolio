@@ -66,6 +66,12 @@ class YouTubeClient:
         return res
 
     def upload_private(self, db, account_id: int, video: Path, title: str, description: str) -> dict:
+        return self.upload(db, account_id, video, title, description, public=False)
+
+    def upload(self, db, account_id: int, video: Path, title: str, description: str, public: bool = False) -> dict:
+        """Private by default. With public=True (owner chose public mode for this channel) the upload is requested as PUBLIC;
+        YouTube may still keep it private (API projects that have not passed Google's audit are locked to private), in which case
+        the result says so and nothing is hidden from the owner."""
         acct = db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
         if not acct or acct["platform"] != "youtube" or not acct["identity_verified_at"]:
             raise NotConfigured("This YouTube destination's identity has not been verified.")
@@ -77,9 +83,10 @@ class YouTubeClient:
         live = cx.youtube_identity(self.http, token)                       # re-check immediately before uploading
         if str(acct["verified_platform_id"]) not in {str(o["id"]) for o in live}:
             raise PublishError("The authorised channel is not this brand's verified channel; upload refused.")
+        want = "public" if public else "private"
         meta = {"snippet": {"title": (title or "Clip")[:100], "description": (description or "")[:5000]},
-                "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False}}
-        assert meta["status"]["privacyStatus"] == "private"
+                "status": {"privacyStatus": want, "selfDeclaredMadeForKids": False}}      # always set explicitly: omitted = PUBLIC
+        assert meta["status"]["privacyStatus"] == want
         size = video.stat().st_size
         init = self.http.post(UPLOAD_URL, params={"uploadType": "resumable", "part": "snippet,status"},
                               headers={"Authorization": f"Bearer {token}", "X-Upload-Content-Type": "video/*",
@@ -92,6 +99,9 @@ class YouTubeClient:
         if put.status_code not in (200, 201):
             raise PublishError(f"YouTube upload failed (HTTP {put.status_code}).")
         j = put.json()
-        if (j.get("status") or {}).get("privacyStatus") != "private":
+        got = (j.get("status") or {}).get("privacyStatus")
+        if not public and got != "private":
             raise PublishError("YouTube did not report the video as private; check it in YouTube Studio immediately.")
-        return {"video_id": j.get("id"), "privacy": "private"}
+        if public and got not in ("public", "private"):
+            raise PublishError(f"YouTube reported an unexpected visibility ({got!r}); check it in YouTube Studio.")
+        return {"video_id": j.get("id"), "privacy": got, "requested": want}

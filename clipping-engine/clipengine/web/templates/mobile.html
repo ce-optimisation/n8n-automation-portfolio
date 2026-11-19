@@ -40,7 +40,8 @@
   <div class="card">
     <span class="muted">If you approve</span>
     {% if dests %}
-      <ul>{% for a in dests %}<li>{{ a.platform|capitalize }} for {{ a.handle }}: {{ "Reel draft" if a.platform == "facebook" else "private upload" }}</li>{% endfor %}</ul>
+      <ul>{% for a in dests %}<li>{{ a.platform|capitalize }} for {{ a.handle }}:
+        {% if modes[a.id] == 'public' %}<b>PUBLIC {{ "Reel" if a.platform == "facebook" else "video" }}</b>{% else %}{{ "Reel draft" if a.platform == "facebook" else "private upload" }}{% endif %}</li>{% endfor %}</ul>
     {% else %}<br>No channel is switched on for this brand yet, so it will only be marked approved.{% endif %}
     {% if manual %}<p class="muted">Post by hand: {{ manual|join(", ")|capitalize }}</p>{% endif %}
   </div>

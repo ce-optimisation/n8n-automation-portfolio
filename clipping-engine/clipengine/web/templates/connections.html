@@ -13,8 +13,10 @@
 {% if err %}<section class="card" role="alert" style="border-color:#b3261e">{{ err }}</section>{% endif %}
 <section class="card muted">A destination is <b>VERIFIED</b> only when the platform's own API reports the exact account id recorded for it. One shared
 administrator login never lets one brand reach another brand's account. <b>Delivery is OFF</b> for every destination until you switch it on for that
-one account, and even then nothing is published: only the closest supported draft or private upload is made, one clip at a time, when you type
-<code>DELIVER</code>. Instagram has no draft API, so it uses the local export package only
+one account. Each switched-on destination starts in <b>drafts / private</b> mode (Facebook Reel draft, YouTube private); you can switch one destination to
+<b>PUBLIC</b> mode (type <code>PUBLISH</code>), after which clips you approve are published there. Platforms can still hold a public upload back
+(YouTube keeps uploads private until its API audit; Facebook posts from an app in development mode may be visible only to app roles) and every result
+says what really happened. Instagram has no draft API, so it uses the local export package only
 {% if ig_public %}<b>(INSTAGRAM_PUBLIC_PUBLISH is ON: Instagram sending would be PUBLIC)</b>{% endif %}.</section>
 <section class="card"><h2>Connect</h2>
 <ul class="list">
@@ -47,6 +49,16 @@ one account, and even then nothing is published: only the closest supported draf
       <input name="confirm" placeholder="type ENABLE" autocomplete="off"><button class="btn ghost">Allow drafts</button></form>
     {% else %}
     <form method="post" action="/connections/publishing/{{ r.id }}"><button class="btn ghost">Switch delivery OFF</button></form>
+    {% if r.platform in ('facebook', 'youtube') %}
+      {% if modes[r.id] == 'public' %}
+      <span class="badge cx-warn">mode: PUBLIC</span>
+      <form method="post" action="/connections/mode/{{ r.id }}"><input type="hidden" name="mode" value="draft"><button class="btn ghost">Back to drafts</button></form>
+      {% else %}
+      <span class="badge">mode: drafts / private</span>
+      <form method="post" action="/connections/mode/{{ r.id }}"><input type="hidden" name="mode" value="public">
+        <input name="confirm" placeholder="type PUBLISH" autocomplete="off"><button class="btn ghost">Go public</button></form>
+      {% endif %}
+    {% endif %}
     {% endif %}
   </div>
   {% endif %}

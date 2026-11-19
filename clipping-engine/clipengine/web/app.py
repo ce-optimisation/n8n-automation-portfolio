@@ -228,7 +228,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             rec = core.db.recording(c["recording_id"])
             cr = core.db.one("SELECT name FROM creators WHERE id=?", (rec["creator_id"],)) if rec and rec["creator_id"] else None
             b = core.db.one("SELECT name FROM brands WHERE key=?", (delivery.clip_brand(core.db, c),))
-            ctx.update(dests=autodeliver.destinations_for(core.db, c), manual=autodeliver.manual_platforms(core.db, c),
+            dests_ = autodeliver.destinations_for(core.db, c)
+            ctx.update(dests=dests_, modes={a["id"]: delivery.mode_for(core.db, a["id"]) for a in dests_},
+                       manual=autodeliver.manual_platforms(core.db, c),
                        creator=cr["name"] if cr else "", brand=b["name"] if b else "", rec=rec,
                        duration=round((c["end"] or 0) - (c["start"] or 0)))
         return templates.TemplateResponse(request, "mobile.html", ctx)
@@ -241,7 +243,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_seconds=_review_seconds(c))
         res = autodeliver.prepare_and_enqueue(core.db, core.queue, cid)
         if res["queued"]:
-            txt = "Approved. Uploading to " + ", ".join(f"{q['brand']} {q['platform']}" for q in res["queued"])
+            txt = "Approved. Sending to " + ", ".join(
+                f"{q['brand']} {q['platform']} ({delivery.mode_for(core.db, q['account_id'])})" for q in res["queued"])
         else:
             txt = "Approved (not uploaded: " + (res["reason"] or "no destination") + ")"
         return _mobile_redirect(skip, txt)
@@ -260,7 +263,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                     topic=settings.ntfy_topic, server=settings.ntfy_server, base=settings.dashboard_url,
                     waiting=len(phone.phone_queue(core.db)), cap=settings.delivery_daily_cap,
                     quiet=settings.push_quiet_hours, gap=settings.push_min_gap_minutes,
-                    dests=[dict(a, today=autodeliver.sent_today(core.db, a)) for a in dests])
+                    dests=[dict(a, today=autodeliver.sent_today(core.db, a), mode=delivery.mode_for(core.db, a["id"]))
+                           for a in dests])
 
     @app.post("/phone/test")
     def phone_test():
@@ -1280,6 +1284,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     def connections_page(request: Request, msg: str = "", err: str = ""):
         rows = cx.build_matrix(core.db, settings, core.tokens)
         return page(request, "connections.html", rows=rows, keys=cx.STATE_KEYS, msg=msg, err=err,
+                    modes={r["id"]: delivery.mode_for(core.db, r["id"]) for r in rows},
                     fb_user=core.facebook.user_connected(), fb_cfg=core.facebook.configured,
                     fb_missing=core.facebook.missing_config(), yt_cfg=core.youtube.configured,
                     ig_public=settings.instagram_public_publish)
@@ -1338,6 +1343,25 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                                       "(drafts/private only, per clip, on your command).")
         core.db.update("social_accounts", account_id, publishing_enabled=0)
         return _conn_redirect(msg=f"Delivery switched OFF for {acct['brand']} {acct['platform']}.")
+
+    @app.post("/connections/mode/{account_id}")
+    def connections_mode(account_id: int, mode: str = Form(""), confirm: str = Form("")):
+        """Per-destination visibility: 'draft' (default) or 'public' (needs the destination switched on and typed PUBLISH)."""
+        acct = core.db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
+        if not acct:
+            raise HTTPException(404)
+        if acct["platform"] not in ("facebook", "youtube"):
+            return _conn_redirect(err="Public mode applies to Facebook and YouTube destinations only.")
+        if mode == "public":
+            if not acct["publishing_enabled"]:
+                return _conn_redirect(err="Switch delivery on for this destination first.")
+            if confirm != "PUBLISH":
+                return _conn_redirect(err="Type PUBLISH to make approved clips go PUBLIC on this one destination.")
+            delivery.set_mode(core.db, account_id, "public")
+            return _conn_redirect(msg=f"{acct['brand']} {acct['platform']}: approved clips will now be published PUBLICLY "
+                                      "(subject to the platform's own limits, shown on each result).")
+        delivery.set_mode(core.db, account_id, "draft")
+        return _conn_redirect(msg=f"{acct['brand']} {acct['platform']}: back to drafts / private only.")
 
     @app.post("/connections/deliver/{clip_id}/{account_id}")
     def connections_deliver(clip_id: int, account_id: int, confirm: str = Form("")):

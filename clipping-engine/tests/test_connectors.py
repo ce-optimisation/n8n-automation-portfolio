@@ -159,7 +159,7 @@ def test_youtube_upload_is_always_private_and_rechecks_the_channel(db, store, tm
     v = tmp_path / "c.mp4"
     v.write_bytes(b"123")
     out = _yt(store, handler).upload_private(db, a["id"], v, "T", "D")
-    assert out == {"video_id": "VID1", "privacy": "private"} and sent["meta"]["status"]["privacyStatus"] == "private"
+    assert out == {"video_id": "VID1", "privacy": "private", "requested": "private"} and sent["meta"]["status"]["privacyStatus"] == "private"
 
     def wrong_channel(r):
         return httpx.Response(200, json={"items": [{"id": "UC-someone-else"}]})
@@ -199,13 +199,13 @@ class _Fake:
     def __init__(self):
         self.calls = []
 
-    def upload_private(self, db, account_id, video, title, description):
+    def upload(self, db, account_id, video, title, description, public=False):
         self.calls.append("youtube")
-        return {"video_id": "VID"}
+        return {"video_id": "VID", "privacy": "public" if public else "private"}
 
-    def create_draft_reel(self, db, account_id, video, description):
+    def create_reel(self, db, account_id, video, description, publish=False):
         self.calls.append("facebook")
-        return {"video_id": "REEL"}
+        return {"video_id": "REEL", "success": True}
 
 
 def test_delivery_is_blocked_until_every_gate_passes(db, clip_env):
@@ -247,3 +247,54 @@ def test_delivery_refuses_instagram_and_unapproved_clips(db, clip_env):
     db.update("clips", clip_env, status="approved", rights_status="unreviewed")
     with pytest.raises(PublishError, match="rights"):
         deliver_draft(db, {"youtube": _Fake(), "facebook": _Fake()}, clip_env, fb["id"], owner_command=True)
+
+
+def test_public_mode_requests_public_and_reports_what_youtube_actually_did(db, store, tmp_path):
+    a = _acct(db, "youtube", "afterlive")
+    cx.verify_identity(db, a["id"], [{"id": a["platform_id"]}])
+    _yt_token(store, "afterlive")
+    sent = {}
+
+    def make(result_privacy):
+        def handler(r):
+            u = str(r.url)
+            if "youtube/v3/channels" in u:
+                return httpx.Response(200, json={"items": [{"id": a["platform_id"]}]})
+            if "upload/youtube" in u and r.method == "POST":
+                sent["meta"] = json.loads(r.content)
+                return httpx.Response(200, headers={"location": "https://upload.test/session"})
+            if "upload.test" in u:
+                return httpx.Response(200, json={"id": "VID9", "status": {"privacyStatus": result_privacy}})
+            return httpx.Response(404)
+        return handler
+    v = tmp_path / "c.mp4"
+    v.write_bytes(b"123")
+    out = _yt(store, make("public")).upload(db, a["id"], v, "T", "D", public=True)
+    assert sent["meta"]["status"]["privacyStatus"] == "public" and out["privacy"] == "public"
+    out = _yt(store, make("private")).upload(db, a["id"], v, "T", "D", public=True)      # unaudited project: Google keeps it private
+    assert sent["meta"]["status"]["privacyStatus"] == "public" and out["privacy"] == "private" and out["requested"] == "public"
+    with pytest.raises(PublishError, match="did not report the video as private"):        # draft mode is still strict
+        _yt(store, make("public")).upload(db, a["id"], v, "T", "D", public=False)
+
+
+def test_facebook_public_mode_finishes_with_published_state(db, store, tmp_path):
+    fb = _acct(db, "facebook", "afterlive")
+    cx.verify_identity(db, fb["id"], [{"id": fb["platform_id"]}])
+    store.set("facebook:afterlive", {"access_token": "PT", "page_id": fb["platform_id"]})
+    seen = []
+
+    def handler(r):
+        u = str(r.url)
+        if "video_reels" in u and b"upload_phase=start" in r.content:
+            return httpx.Response(200, json={"video_id": "R1", "upload_url": "https://rupload.test/x"})
+        if "rupload.test" in u:
+            return httpx.Response(200, json={"success": True})
+        if "video_reels" in u:
+            seen.append(r.content.decode())
+            return httpx.Response(200, json={"success": True})
+        return httpx.Response(404)
+    v = tmp_path / "c.mp4"
+    v.write_bytes(b"123")
+    assert _fb(store, handler).create_reel(db, fb["id"], v, "hi", publish=True)["state"] == "PUBLISHED"
+    assert _fb(store, handler).create_reel(db, fb["id"], v, "hi", publish=False)["state"] == "DRAFT"
+    assert "video_state=PUBLISHED" in seen[0] and "video_state=DRAFT" in seen[1]

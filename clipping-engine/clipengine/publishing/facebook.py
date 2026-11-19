@@ -113,8 +113,12 @@ class FacebookClient:
 
     # ---- the closest supported draft workflow (NEVER called by connecting; delivery layer only) -------------------------
     def create_draft_reel(self, db, account_id: int, video: Path, description: str) -> dict:
-        """Reels API: start -> upload -> finish with video_state=DRAFT. The caller has already passed the routing guard; this
-        re-checks that the stored token belongs to the verified Page so a stale token can never reach another brand."""
+        return self.create_reel(db, account_id, video, description, publish=False)
+
+    def create_reel(self, db, account_id: int, video: Path, description: str, publish: bool = False) -> dict:
+        """Reels API: start -> upload -> finish with video_state=DRAFT (default) or PUBLISHED (owner chose public mode for this
+        Page). The caller has already passed the routing guard; this re-checks that the stored token belongs to the verified Page
+        so a stale token can never reach another brand."""
         acct = db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
         tok = self.store.get(f"facebook:{acct['brand']}") if acct else None
         if not acct or acct["platform"] != "facebook" or not tok or str(tok.get("page_id")) != str(acct["verified_platform_id"]):
@@ -130,9 +134,10 @@ class FacebookClient:
         if up.status_code != 200:
             raise PublishError(f"Facebook upload failed (HTTP {up.status_code}).")
         fin = self._json(self.http.post(f"{self.graph}/{page}/video_reels", data={
-            "upload_phase": "finish", "video_id": vid, "video_state": "DRAFT", "description": description or "",
-            "access_token": token}))
-        return {"video_id": vid, "state": "DRAFT", "response": {k: fin.get(k) for k in ("success", "message") if k in fin}}
+            "upload_phase": "finish", "video_id": vid, "video_state": "PUBLISHED" if publish else "DRAFT",
+            "description": description or "", "access_token": token}))
+        return {"video_id": vid, "state": "PUBLISHED" if publish else "DRAFT", "success": bool(fin.get("success", True)),
+                "response": {k: fin.get(k) for k in ("success", "message") if k in fin}}
 
     def reel_status(self, video_id: str, page_token: str) -> dict:
         return self._json(self.http.get(f"{self.graph}/{video_id}", params={"fields": "status", "access_token": page_token}))

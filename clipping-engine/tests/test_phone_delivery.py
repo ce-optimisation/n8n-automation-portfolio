@@ -56,13 +56,15 @@ class Fake:
     def __init__(self):
         self.calls = []
 
-    def upload_private(self, db, aid, video, title, description):
-        self.calls.append("youtube")
-        return {"video_id": "VID"}
+    privacy_result = None            # what the fake YouTube "reports back" in public mode
 
-    def create_draft_reel(self, db, aid, video, description):
-        self.calls.append("facebook")
-        return {"video_id": "REEL"}
+    def upload(self, db, aid, video, title, description, public=False):
+        self.calls.append("youtube-public" if public else "youtube")
+        return {"video_id": "VID", "privacy": (self.privacy_result or ("public" if public else "private"))}
+
+    def create_reel(self, db, aid, video, description, publish=False):
+        self.calls.append("facebook-public" if publish else "facebook")
+        return {"video_id": "REEL", "success": True}
 
 
 # ---- phone queue / alerts ------------------------------------------------------------------------------------------
@@ -217,7 +219,7 @@ def test_a_platform_refusal_fails_the_job_visibly_instead_of_retrying_forever(se
     from clipengine.publishing.base import PublishError
 
     class Boom(Fake):
-        def upload_private(self, *a, **k):
+        def upload(self, *a, **k):
             raise PublishError("YouTube refused the upload session (HTTP 403).")
     yt = enable(db, "youtube")
     cid = mk_clip(settings, db)
@@ -267,3 +269,58 @@ def test_phone_page_switches_and_test_alert(settings, db):
         assert recording_switch.delivery_enabled(db) is False and "Auto-upload OFF" in cl.get("/phone").text
         r = cl.post("/phone/test", follow_redirects=False)
         assert r.status_code == 303 and "err=" in r.headers["location"]                 # no topic -> reported, not crashed
+
+
+# ---- public mode ---------------------------------------------------------------------------------------------------
+
+def test_destinations_default_to_drafts_and_public_mode_publishes_only_there(settings, db):
+    from clipengine.publishing import delivery
+    yt = enable(db, "youtube")
+    fb = enable(db, "facebook")
+    assert delivery.mode_for(db, yt["id"]) == "draft" and delivery.mode_for(db, fb["id"]) == "draft"
+    delivery.set_mode(db, fb["id"], "public")                     # only Facebook goes public
+    fake = Fake()
+    cid = mk_clip(settings, db)
+    db.update("clips", cid, status="approved", rights_status="licensed")
+    for a in (yt, fb):
+        autodeliver.handle(settings, db, {"youtube": fake, "facebook": fake}, Ctx({"clip_id": cid, "account_id": a["id"]}))
+    assert sorted(fake.calls) == ["facebook-public", "youtube"]
+    states = {r["platform"]: r["status"] for r in db.query("SELECT platform,status FROM publish_attempts WHERE clip_id=?", (cid,))}
+    assert states == {"facebook": "published", "youtube": "delivered_private"}
+
+
+def test_public_youtube_upload_forced_private_by_google_is_reported_honestly(settings, db):
+    from clipengine.publishing import delivery
+    yt = enable(db, "youtube")
+    delivery.set_mode(db, yt["id"], "public")
+    fake = Fake()
+    fake.privacy_result = "private"                              # unaudited API project: YouTube keeps it private
+    cid = mk_clip(settings, db)
+    db.update("clips", cid, status="approved", rights_status="licensed")
+    autodeliver.handle(settings, db, {"youtube": fake}, Ctx({"clip_id": cid, "account_id": yt["id"]}))
+    row = db.one("SELECT status, detail FROM publish_attempts WHERE clip_id=?", (cid,))
+    assert row["status"] == "delivered_private" and "kept the video PRIVATE" in row["detail"] and "audit" in row["detail"]
+    fake2 = Fake()
+    cid2 = mk_clip(settings, db)
+    db.update("clips", cid2, status="approved", rights_status="licensed")
+    autodeliver.handle(settings, db, {"youtube": fake2}, Ctx({"clip_id": cid2, "account_id": yt["id"]}))
+    assert db.one("SELECT status FROM publish_attempts WHERE clip_id=?", (cid2,))["status"] == "published"   # audited: truly public
+
+
+def test_going_public_needs_the_switch_on_and_typed_publish_and_can_be_undone(settings, db):
+    from clipengine.publishing import delivery
+    yt = db.one("SELECT * FROM social_accounts WHERE platform='youtube' AND brand='afterlive'")
+    app = create_app(settings, start_worker=False)
+    with TestClient(app) as cl:
+        r = cl.post(f"/connections/mode/{yt['id']}", data={"mode": "public", "confirm": "PUBLISH"}, follow_redirects=False)
+        assert delivery.mode_for(db, yt["id"]) == "draft" and "switch+delivery+on" in r.headers["location"].lower()
+        enable(db, "youtube")
+        cl.post(f"/connections/mode/{yt['id']}", data={"mode": "public", "confirm": "publish"}, follow_redirects=False)
+        assert delivery.mode_for(db, yt["id"]) == "draft"                       # typed confirmation is exact
+        cl.post(f"/connections/mode/{yt['id']}", data={"mode": "public", "confirm": "PUBLISH"}, follow_redirects=False)
+        assert delivery.mode_for(db, yt["id"]) == "public" and "mode: PUBLIC" in cl.get("/connections").text
+        cl.post(f"/connections/mode/{yt['id']}", data={"mode": "draft"}, follow_redirects=False)
+        assert delivery.mode_for(db, yt["id"]) == "draft"
+        ig = db.one("SELECT * FROM social_accounts WHERE platform='instagram' AND brand='afterlive'")
+        r = cl.post(f"/connections/mode/{ig['id']}", data={"mode": "public", "confirm": "PUBLISH"}, follow_redirects=False)
+        assert "Facebook+and+YouTube" in r.headers["location"] and delivery.mode_for(db, ig["id"]) == "draft"
