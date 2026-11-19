@@ -30,7 +30,8 @@ class JsonFormatter(logging.Formatter):
              "logger": record.name, "msg": record.getMessage()}
         if record.exc_info:
             d["exc"] = self.formatException(record.exc_info)
-        return json.dumps(d)
+        from .logsafe import redact        # Session 13: never write an API key/token to the log
+        return redact(json.dumps(d))
 
 
 def setup_logging(data_dir: Path) -> None:
@@ -42,6 +43,9 @@ def setup_logging(data_dir: Path) -> None:
     fh.setFormatter(JsonFormatter())
     sh = logging.StreamHandler()
     sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    from .logsafe import RedactingFilter
+    for h in (fh, sh):
+        h.addFilter(RedactingFilter())
     root.addHandler(fh)
     root.addHandler(sh)
 
@@ -208,6 +212,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="laptop setup/verification: versions, schema, credentials (yes/no), identity checks, discovery health")
     ap.add_argument("--storage-audit", action="store_true",
                     help="read-only report of where the disk space went and what could be recovered (add --json)")
+    ap.add_argument("--connections", action="store_true",
+                    help="read-only matrix of the ten connection states for every publishing destination (add --json)")
+    ap.add_argument("--record-accounts", action="store_true",
+                    help="record the owner-supplied account directory in the database (evidence only; nothing is verified)")
     ap.add_argument("--set-credentials", action="store_true",
                     help="enter YouTube/Twitch/Kick monitoring credentials with hidden prompts, then test them live")
     ap.add_argument("--discard-live", type=int, metavar="ITEM_ID",
@@ -228,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         except autostart.AutostartUnsupported as e:
             print(e)
             return 2
-    if args.supervise and not (args.doctor or args.setup or args.portfolio or args.portfolio_check or args.storage_audit or args.set_credentials or args.discard_live):
+    if args.supervise and not (args.doctor or args.setup or args.portfolio or args.portfolio_check or args.storage_audit or args.set_credentials or args.discard_live or args.connections or args.record_accounts):
         return supervise([a for a in (argv if argv is not None else sys.argv[1:]) if a != "--supervise"])
     add_bundled_ffmpeg_to_path()
     settings = get_settings()
@@ -237,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.set_credentials:
         from . import credentials_cli
         return credentials_cli.main(settings)
+    if args.connections or args.record_accounts:
+        from . import connections
+        return connections.main(settings, record=args.record_accounts, as_json=args.json)
     if args.storage_audit:
         from . import diskaudit
         return diskaudit.main(settings, as_json=args.json)

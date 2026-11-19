@@ -212,6 +212,8 @@ class Settings:
     instagram_app_secret: str = ""
     instagram_redirect_uri: str = ""
     public_media_base_url: str = ""         # https base reachable by Meta, required for instagram mode
+    # Session 13: the Instagram API cannot create drafts; media_publish is PUBLIC. Off unless the owner opts in.
+    instagram_public_publish: bool = False
 
     # Email notifications (nothing is ever sent until the owner approves recipient + template in Settings)
     notify_enabled: bool = True
@@ -361,6 +363,7 @@ def get_settings(**overrides) -> Settings:
         instagram_app_secret=os.environ.get("INSTAGRAM_APP_SECRET", ""),
         instagram_redirect_uri=os.environ.get("INSTAGRAM_REDIRECT_URI", ""),
         public_media_base_url=os.environ.get("PUBLIC_MEDIA_BASE_URL", "").rstrip("/"),
+        instagram_public_publish=_bool("INSTAGRAM_PUBLIC_PUBLISH", False),
         transcriber_backend=os.environ.get("CLIPENGINE_TRANSCRIBER", "whisper"),
         notify_enabled=_bool("NOTIFY_ENABLED", True),
         notify_to=os.environ.get("NOTIFY_TO", "").strip(),

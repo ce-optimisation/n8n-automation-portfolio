@@ -1,0 +1,30 @@
+{
+  "_comment": "Owner-recorded directory of the 19 existing publishing accounts (19 Nov 2026 handoff). The ids are what James saw in each platform's UI: EVIDENCE, not verification. An account is only VERIFIED after an official-API identity read-back matches the expected id exactly. No tokens or secrets belong in this file.",
+  "youtube_admin_login": "clipperhqq@gmail.com",
+  "meta_business_portfolio": {"name": "Clipping HQ", "id": "1110280508720285"},
+  "excluded_unconfirmed_tiktok": ["america_first_monitor", "operator_notes", "spec_edit", "dial_study", "open_floor"],
+  "accounts": [
+    {"brand": "afterlive", "platform": "youtube", "handle": "afterlivehqq", "expected_id": "UCaXNIlwujt0KRvmRxWlpzxA", "alt_ids": [], "url": "https://www.youtube.com/channel/UCaXNIlwujt0KRvmRxWlpzxA"},
+    {"brand": "america_first_monitor", "platform": "youtube", "handle": "americafirstmonitor", "expected_id": "UC7uek7YX1SWNaX0aTWflUpQ", "alt_ids": [], "url": "https://www.youtube.com/channel/UC7uek7YX1SWNaX0aTWflUpQ"},
+    {"brand": "operator_notes", "platform": "youtube", "handle": "operatornoteshq", "expected_id": "UCCx-Nt3Rh_AYDpPxi_nCRUQ", "alt_ids": [], "url": "https://www.youtube.com/channel/UCCx-Nt3Rh_AYDpPxi_nCRUQ"},
+    {"brand": "spec_edit", "platform": "youtube", "handle": "thespecedithq", "expected_id": "UCpyEMnvOz4s-43KuyYUS1jw", "alt_ids": [], "url": "https://www.youtube.com/channel/UCpyEMnvOz4s-43KuyYUS1jw"},
+    {"brand": "dial_study", "platform": "youtube", "handle": "dialstudyhq", "expected_id": "UCuXY1eHTN8vtCNJ0YEvolsA", "alt_ids": [], "url": "https://www.youtube.com/channel/UCuXY1eHTN8vtCNJ0YEvolsA"},
+    {"brand": "open_floor", "platform": "youtube", "handle": "openfloorhqq", "expected_id": "UC-duuxnIa_aMYSxS41k02Ug", "alt_ids": [], "url": "https://www.youtube.com/channel/UC-duuxnIa_aMYSxS41k02Ug"},
+
+    {"brand": "afterlive", "platform": "facebook", "handle": "afterlivehq", "expected_id": "1412058561997498", "alt_ids": ["61596520177525"], "url": "https://www.facebook.com/afterlivehq/"},
+    {"brand": "america_first_monitor", "platform": "facebook", "handle": "americafirstmonitor", "expected_id": "1453603657834043", "alt_ids": ["61596568235408"], "url": "https://www.facebook.com/americafirstmonitor/"},
+    {"brand": "operator_notes", "platform": "facebook", "handle": "operatornoteshq", "expected_id": "1528127307042620", "alt_ids": ["61596584674949"], "url": "https://www.facebook.com/operatornoteshq/"},
+    {"brand": "spec_edit", "platform": "facebook", "handle": "thespecedithq", "expected_id": "1451616471371900", "alt_ids": ["61596766046784"], "url": "https://www.facebook.com/thespecedithq/"},
+    {"brand": "dial_study", "platform": "facebook", "handle": "dialstudyhq", "expected_id": "1372422179295995", "alt_ids": ["61596417282571"], "url": "https://www.facebook.com/dialstudyhq/"},
+    {"brand": "open_floor", "platform": "facebook", "handle": "openfloorhqq", "expected_id": "1531190086733639", "alt_ids": ["61596302417393"], "url": "https://www.facebook.com/openfloorhqq/"},
+
+    {"brand": "afterlive", "platform": "instagram", "handle": "afterlivehq", "expected_id": "17841452912255728", "alt_ids": [], "url": "https://www.instagram.com/afterlivehq/"},
+    {"brand": "america_first_monitor", "platform": "instagram", "handle": "americafirstmonitor", "expected_id": "17841422785643195", "alt_ids": [], "url": "https://www.instagram.com/americafirstmonitor/"},
+    {"brand": "operator_notes", "platform": "instagram", "handle": "operatornoteshq", "expected_id": "17841418780627771", "alt_ids": [], "url": "https://www.instagram.com/operatornoteshq/"},
+    {"brand": "spec_edit", "platform": "instagram", "handle": "thespecedithq", "expected_id": "17841475167341988", "alt_ids": [], "url": "https://www.instagram.com/thespecedithq/"},
+    {"brand": "dial_study", "platform": "instagram", "handle": "dialstudyhq", "expected_id": "17841452591747251", "alt_ids": [], "url": "https://www.instagram.com/dialstudyhq/"},
+    {"brand": "open_floor", "platform": "instagram", "handle": "openfloorhqq", "expected_id": "17841422299297166", "alt_ids": [], "url": "https://www.instagram.com/openfloorhqq/"},
+
+    {"brand": "afterlive", "platform": "tiktok", "handle": "afterlivehq", "expected_id": null, "alt_ids": [], "url": "https://www.tiktok.com/@afterlivehq", "note": "No stable TikTok id was captured; identity is matched on the handle returned by the API (user.info.profile scope) and the open_id is stored on first connection."}
+  ]
+}

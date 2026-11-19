@@ -538,6 +538,13 @@ MIGRATIONS = [
     ("publication_packages", "handoff_method", "TEXT"),            # api | manual
     ("publication_packages", "handoff_at", "REAL"),
     ("publication_packages", "handoff_evidence", "TEXT"),
+    # v9 (Session 13): per-destination identity, evidence and an OFF-by-default publishing switch
+    ("social_accounts", "platform_id", "TEXT"),                    # stable id we EXPECT (owner-recorded evidence)
+    ("social_accounts", "alt_ids_json", "TEXT"),                   # alternate public ids seen in the UI
+    ("social_accounts", "verified_platform_id", "TEXT"),           # set ONLY by an exact API read-back
+    ("social_accounts", "identity_verified_at", "REAL"),
+    ("social_accounts", "evidence_json", "TEXT"),
+    ("social_accounts", "publishing_enabled", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

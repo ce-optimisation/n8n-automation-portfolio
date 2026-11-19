@@ -136,6 +136,7 @@ def test_validate_video_rejects_bad_files(sample_video, tmp_path):
 def svc_env(settings, store, sample_video):
     db = Database(settings.db_path)
     q = JobQueue(db)
+    settings.instagram_public_publish = True      # these tests exercise the (opt-in) Instagram publish path
     rid = db.insert("recordings", title="T", source_type="upload", status="ready")
     clipdir = settings.clips_dir / "c1"
     clipdir.mkdir(parents=True)
@@ -289,3 +290,14 @@ def test_instagram_login_mode_uses_one_time_public_link(svc_env, store):
 def test_editorial_gate():
     clip = {"status": "ready", "rights_status": "unreviewed", "safety_status": "clear", "video_path": None}
     assert len(editorial_gate(clip)) == 3
+
+
+def test_instagram_public_publish_is_disabled_by_default(svc_env, store):
+    """Session 13: Instagram has no draft API, so 'send' means PUBLIC publication. It must be an explicit opt-in."""
+    settings, db, q, cid = svc_env
+    settings.instagram_public_publish = False
+    svc = make_svc(settings, db, q, store, ig_mock=IgMock())
+    svc.clients["instagram"].exchange_code("CODE")
+    with pytest.raises(PublishError, match="no native draft"):
+        svc.request(cid, "instagram")
+    assert db.query("SELECT * FROM publish_attempts") == []

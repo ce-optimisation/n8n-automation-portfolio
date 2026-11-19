@@ -69,6 +69,10 @@ class PublishService:
         problems = editorial_gate(clip)
         if problems:
             raise PublishError(" ".join(problems))
+        if platform == "instagram" and not getattr(self.settings, "instagram_public_publish", False):
+            raise PublishError("Instagram has no native draft API: sending would publish PUBLICLY. Automatic Instagram "
+                               "publishing is disabled (INSTAGRAM_PUBLIC_PUBLISH is off). Use the local staging/export "
+                               "package and post it in the Instagram app instead.")
         if not self.clients[platform].status()["connected"]:
             raise NotConfigured(f"{platform.title()} is not connected. Open Settings → Setup checklist.")
         prev = self.latest(clip_id).get(platform)
