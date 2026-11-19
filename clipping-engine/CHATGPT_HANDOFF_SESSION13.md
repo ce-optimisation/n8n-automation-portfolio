@@ -65,3 +65,11 @@ whether recording 6 (a profane GTA gameplay stream from his channel) belongs und
 
 ## 6. First reply
 Confirm you have absorbed this, restate the two piles in one line each, and wait for James.
+
+## 7. Addendum (late 19 Nov): what was built after section 3
+- **Connected and verified by exact id (owner-authorised):** all 6 Facebook Pages and all 6 YouTube channels. Instagram stays "recorded, not API-verified" (Meta only offers instagram_basic via a never-expiring system-user token; owner chose not to). TikTok Afterlive not started (needs TikTok developer app keys).
+- **Permissions:** owner recorded 4 platform and 18 creator written permissions via `scripts/import_permissions.py` (two CSVs, dry run, typed attestation, verified backup). 17 sources are PERMITTED and recording; podcasts are never auto-fetched.
+- **Master switches (header buttons):** Recording ON/OFF and Auto-upload ON/OFF (`recording_switch.py`).
+- **Volume rules (owner decisions):** `CLIPS_PER_RECORDING=4`; `MIN_SOURCE_SECONDS=180` skips automatically found videos under 3 min (manual imports never skipped); daily cap 6 auto-uploads per channel.
+- **Phone flow:** ntfy alerts (generic text only) -> `/m` one-tap Approve/Reject -> approval queues uploads (`publishing/autodeliver.py`) to each verified, switched-ON channel of the clip's brand: Facebook Reel DRAFT, YouTube PRIVATE. Never public; Instagram/TikTok are posted by hand. Private phone access is Tailscale Serve (already running). Each channel still needs the owner to switch it ON (Connections page, typed ENABLE).
+- **Not done:** draft delivery has not been tested against the live platforms; YouTube audit and Meta app Live mode are needed before anything can be made public; recording-6 titles unreviewed.

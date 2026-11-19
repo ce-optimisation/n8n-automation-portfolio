@@ -31,7 +31,8 @@ from ..publishing.service import PublishService
 from ..publishing.facebook import FacebookClient
 from ..publishing.youtube import YouTubeClient
 from .. import connections as cx
-from ..publishing import delivery
+from .. import phone, recording_switch
+from ..publishing import autodeliver, delivery
 
 log = logging.getLogger("clipengine.web")
 HERE = Path(__file__).resolve().parent
@@ -71,6 +72,9 @@ class App:
         self.youtube = YouTubeClient(settings.youtube_oauth_client_id or settings.google_client_id,
                                      settings.youtube_oauth_client_secret or settings.google_client_secret, self.tokens)
         self.queue.register("download_model", self._download_model)
+        self.queue.register(autodeliver.KIND, lambda ctx: autodeliver.handle(
+            settings, self.db, {"youtube": self.youtube, "facebook": self.facebook}, ctx))
+        self.phone_stop = __import__("threading").Event()
         self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
         self.monitor = monitor.SourceMonitor(settings, self.db, self.queue)
@@ -161,10 +165,12 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.discovery.start()
             core.keepawake.start()
             core.heartbeat.start()
+            phone.start_ticker(settings, core.db, core.phone_stop)
             __import__("threading").Thread(target=core.check_caption_font, daemon=True).start()
         try:
             yield
         finally:
+            core.phone_stop.set()
             core.queue.stop()
             core.maintenance.stop()
             core.inbox.stop()
@@ -182,19 +188,88 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     templates.env.filters["dt"] = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if t else ""
     templates.env.globals["RIGHTS_CHOICES"] = RIGHTS_CHOICES
     templates.env.globals["PUB_STATES"] = STATES
-    from .. import recording_switch
     templates.env.globals["recording_enabled"] = lambda: recording_switch.is_enabled(core.db)
+    templates.env.globals["delivery_enabled"] = lambda: recording_switch.delivery_enabled(core.db)
+
+    def _same_site_back(request: Request) -> RedirectResponse:
+        from urllib.parse import urlparse as _up
+        path = _up(request.headers.get("referer") or "/").path or "/"     # same-site path only; never redirect off-site
+        if not path.startswith("/") or path.startswith("//") or "\\" in path:
+            path = "/"                                  # "//host" would be a protocol-relative redirect off-site
+        return RedirectResponse(path, status_code=303)
 
     @app.post("/recording/toggle")
     def recording_toggle(request: Request, enable: str = Form("")):
         """Master recording switch for ALL platforms and creators (see clipengine/recording_switch.py)."""
         recording_switch.set_enabled(core.db, enable == "1")
-        back = request.headers.get("referer") or "/"
-        from urllib.parse import urlparse as _up
-        path = _up(back).path or "/"                    # same-site path only; never redirect off-site
-        if not path.startswith("/") or path.startswith("//") or "\\" in path:
-            path = "/"                                  # "//host" would be a protocol-relative redirect off-site
-        return RedirectResponse(path, status_code=303)
+        return _same_site_back(request)
+
+    @app.post("/delivery/toggle")
+    def delivery_toggle(request: Request, enable: str = Form("")):
+        """Master AUTO-UPLOAD switch: OFF = approved clips wait and nothing is sent to any platform."""
+        recording_switch.set_delivery_enabled(core.db, enable == "1")
+        return _same_site_back(request)
+
+    # ---- phone: one-tap review queue and alert settings (Session 13) --------------------------------------------
+    def _mobile_redirect(skip: str, msg: str = "") -> RedirectResponse:
+        from urllib.parse import urlencode as _ue
+        q = {k: v for k, v in (("skip", skip), ("msg", msg)) if v}
+        return RedirectResponse("/m" + ("?" + _ue(q) if q else ""), status_code=303)
+
+    @app.get("/m", response_class=HTMLResponse)
+    def mobile_review(request: Request, skip: str = "", msg: str = ""):
+        skipped = {int(x) for x in skip.split(",") if x.strip().isdigit()}
+        rest = [c for c in phone.phone_queue(core.db) if c["id"] not in skipped]
+        c = rest[0] if rest else None
+        ctx = {"c": c, "left": len(rest), "skip": skip, "msg": msg[:200], "dests": [], "manual": [], "creator": "", "brand": ""}
+        if c:
+            if not c["review_opened_at"]:
+                core.db.update("clips", c["id"], review_opened_at=time.time())
+            rec = core.db.recording(c["recording_id"])
+            cr = core.db.one("SELECT name FROM creators WHERE id=?", (rec["creator_id"],)) if rec and rec["creator_id"] else None
+            b = core.db.one("SELECT name FROM brands WHERE key=?", (delivery.clip_brand(core.db, c),))
+            ctx.update(dests=autodeliver.destinations_for(core.db, c), manual=autodeliver.manual_platforms(core.db, c),
+                       creator=cr["name"] if cr else "", brand=b["name"] if b else "", rec=rec,
+                       duration=round((c["end"] or 0) - (c["start"] or 0)))
+        return templates.TemplateResponse(request, "mobile.html", ctx)
+
+    @app.post("/m/{cid}/approve")
+    def mobile_approve(cid: int, skip: str = Form("")):
+        c = _clip(cid)
+        if c["status"] != "ready":
+            return _mobile_redirect(skip, "That clip was already decided.")
+        core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_seconds=_review_seconds(c))
+        res = autodeliver.prepare_and_enqueue(core.db, core.queue, cid)
+        if res["queued"]:
+            txt = "Approved. Uploading to " + ", ".join(f"{q['brand']} {q['platform']}" for q in res["queued"])
+        else:
+            txt = "Approved (not uploaded: " + (res["reason"] or "no destination") + ")"
+        return _mobile_redirect(skip, txt)
+
+    @app.post("/m/{cid}/reject")
+    def mobile_reject(cid: int, skip: str = Form("")):
+        c = _clip(cid)
+        if c["status"] == "ready":
+            core.db.update("clips", cid, status="rejected", reviewed_at=time.time(), review_seconds=_review_seconds(c))
+        return _mobile_redirect(skip, "Rejected.")
+
+    @app.get("/phone", response_class=HTMLResponse)
+    def phone_page(request: Request, msg: str = "", err: str = ""):
+        dests = core.db.query("SELECT * FROM social_accounts WHERE platform IN ('facebook','youtube') ORDER BY brand, platform")
+        return page(request, "phone.html", msg=msg[:200], err=err[:200], configured=phone.configured(settings),
+                    topic=settings.ntfy_topic, server=settings.ntfy_server, base=settings.dashboard_url,
+                    waiting=len(phone.phone_queue(core.db)), cap=settings.delivery_daily_cap,
+                    quiet=settings.push_quiet_hours, gap=settings.push_min_gap_minutes,
+                    dests=[dict(a, today=autodeliver.sent_today(core.db, a)) for a in dests])
+
+    @app.post("/phone/test")
+    def phone_test():
+        from urllib.parse import urlencode as _ue
+        res = phone.send(settings, "Clipping Engine", "Test alert: your phone is connected.",
+                         f"{settings.dashboard_url}/m" if settings.dashboard_url else None)
+        return RedirectResponse("/phone?" + _ue({"msg" if res["ok"] else "err":
+                                                 "Test alert sent." if res["ok"] else f"Not sent: {res['detail']}"}),
+                                status_code=303)
 
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
@@ -514,6 +589,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             return _back(request, cid, err="Only rendered clips can be approved.")
         core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_note=note or c["review_note"],
                        review_seconds=_review_seconds(c))
+        autodeliver.prepare_and_enqueue(core.db, core.queue, cid)       # owner's approval = the command; gates re-checked there
         return _back(request, cid)
 
     @app.post("/clips/{cid}/reject")

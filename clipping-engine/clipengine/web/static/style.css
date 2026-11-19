@@ -104,3 +104,4 @@ main { overflow-x: hidden; }
 .steps > li { counter-increment: st; position: relative; padding: 4px 0 10px 34px; overflow-wrap: anywhere; }
 .steps > li::before { content: counter(st); position: absolute; left: 0; top: 2px; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line); text-align: center; font-size: .8rem; line-height: 24px; }
 .steps > li.done::before { content: "✓"; color: var(--good); border-color: var(--good); }
+.recswitch + .recswitch { margin-left: 8px; }

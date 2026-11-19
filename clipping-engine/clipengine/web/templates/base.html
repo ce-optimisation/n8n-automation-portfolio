@@ -18,6 +18,7 @@
     <a href="/ready">Ready to Post</a>
     <a href="/portfolio">Portfolio</a>
     <a href="/connections">Connections</a>
+    <a href="/phone">Phone</a>
     <a href="/sources">Sources</a>
     <a href="/creators">Creators</a>
     <a href="/research">Research</a>
@@ -36,6 +37,15 @@
     <button type="submit" name="enable" value="0" title="Stop starting any new recording, for every platform and creator. A capture already running finishes.">Turn OFF</button>
     {% else %}
     <span class="pill bad" title="No new live captures or automatic downloads are started. Monitoring continues.">Recording OFF</span>
+    <button type="submit" name="enable" value="1">Turn ON</button>
+    {% endif %}
+  </form>
+  <form method="post" action="/delivery/toggle" class="recswitch">
+    {% if delivery_enabled() %}
+    <span class="pill ok" title="Approved clips are uploaded (Facebook draft, YouTube private) to channels you switched on">Auto-upload ON</span>
+    <button type="submit" name="enable" value="0" title="Approved clips wait; nothing is sent to any platform until you turn it back on.">Turn OFF</button>
+    {% else %}
+    <span class="pill bad" title="Approved clips are waiting; nothing is being sent to any platform.">Auto-upload OFF</span>
     <button type="submit" name="enable" value="1">Turn ON</button>
     {% endif %}
   </form>

@@ -186,6 +186,12 @@ class Settings:
     # Session 13: AUTOMATICALLY found videos shorter than this are skipped (they are already clips, e.g. YouTube Shorts).
     # 0 = off. Videos the owner imports by hand are never skipped.
     min_source_seconds: float = 0.0
+    # Session 13: phone alerts (ntfy) and approve -> auto-upload to the closest DRAFT workflow (never public).
+    ntfy_topic: str = ""                 # private topic name; acts like a password for the alert feed (alerts carry no titles)
+    ntfy_server: str = "https://ntfy.sh"
+    push_min_gap_minutes: float = 10.0   # batch new clips into one alert at most this often (5+ clips alert at once)
+    push_quiet_hours: str = ""           # e.g. "23:00-07:00": no alerts then; they are sent when quiet hours end
+    delivery_daily_cap: int = 6          # max automatic uploads per channel per local day; the rest wait for the next day
     live_restart_limit: int = 120        # restarts happen only while the video page confirms the stream is live
     allow_private_urls: bool = False     # TEST-ONLY: permits localhost/private URLs
     http_user_agent: str = "LocalClippingEngine/1.1 (self-hosted editorial review tool)"
@@ -347,6 +353,11 @@ def get_settings(**overrides) -> Settings:
         max_recording_hours=_float("MAX_RECORDING_HOURS", 8.0),
         min_recording_seconds=_float("MIN_RECORDING_SECONDS", 60.0),
         min_source_seconds=_float("MIN_SOURCE_SECONDS", 0.0),
+        ntfy_topic=os.environ.get("NTFY_TOPIC", "").strip(),
+        ntfy_server=(os.environ.get("NTFY_SERVER", "https://ntfy.sh") or "https://ntfy.sh").strip().rstrip("/"),
+        push_min_gap_minutes=_float("PUSH_MIN_GAP_MINUTES", 10.0),
+        push_quiet_hours=os.environ.get("PUSH_QUIET_HOURS", "").strip(),
+        delivery_daily_cap=max(1, _int("DELIVERY_DAILY_CAP", 6)),
         live_segment_max_gb=_float("LIVE_SEGMENT_MAX_GB", 1.0),
         live_segment_max_minutes=_float("LIVE_SEGMENT_MAX_MINUTES", 30.0),
         live_buffer_gb=_float("LIVE_BUFFER_GB", 20.0),

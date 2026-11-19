@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Phone alerts and auto-upload</h1>
+{% if msg %}<p class="card" style="border-left:4px solid var(--good)">{{ msg }}</p>{% endif %}
+{% if err %}<p class="card" style="border-left:4px solid var(--bad)">{{ err }}</p>{% endif %}
+
+<section class="card">
+  <h2>1. Alerts to your phone</h2>
+  {% if configured %}
+    <p>Alerts are <b>on</b>. In the free <b>ntfy</b> app, tap <b>+</b> and subscribe to this topic on server <code>{{ server }}</code>:</p>
+    <p><code style="font-size:1.05rem;user-select:all">{{ topic }}</code></p>
+    <p class="muted">Treat the topic like a password: anyone who knows it can read the alerts. Alerts only say how many clips are ready; they never contain titles, creators or transcript text.</p>
+    <form method="post" action="/phone/test"><button class="btn">Send a test alert</button></form>
+  {% else %}
+    <p>Not set up. Add <code>NTFY_TOPIC</code> to the engine's <code>.env</code> (a long random name) and restart.</p>
+  {% endif %}
+  <p class="muted">Batching: at most one alert per {{ gap|int }} min unless 5+ clips arrive{% if quiet %}; quiet hours {{ quiet }}{% endif %}.</p>
+</section>
+
+<section class="card">
+  <h2>2. Review on your phone</h2>
+  <p><b>{{ waiting }}</b> clip(s) are ready for one-tap review. Open <a href="/m">/m</a> on your phone.</p>
+  {% if base %}<p>Alert links open: <code>{{ base }}/m</code></p>
+  {% else %}<p class="muted">Set <code>DASHBOARD_URL</code> (and <code>CLIPENGINE_HOST</code>) so the alert link works from your phone, away from this computer (see the Tailscale note below).</p>{% endif %}
+  <p class="muted">Clips with a safety flag, or whose creator has no recorded permission, are reviewed on the desktop page instead.</p>
+</section>
+
+<section class="card">
+  <h2>3. Where approved clips go</h2>
+  <p>Approving a clip uploads it to each channel below that is <b>switched on</b> (Connections page): Facebook as a Reel <b>draft</b>, YouTube as a <b>private</b> upload. Nothing is made public. Instagram and TikTok are posted by hand.
+     Limit: <b>{{ cap }}</b> per channel per day; extras wait for the next day.</p>
+  <table class="jobs"><tr><th>Brand</th><th>Platform</th><th>Verified</th><th>Switched on</th><th>Sent today</th></tr>
+  {% for a in dests %}<tr><td>{{ a.brand }}</td><td>{{ a.platform }}</td><td>{{ "yes" if a.identity_verified_at else "no" }}</td>
+     <td>{{ "ON" if a.publishing_enabled else "off" }}</td><td>{{ a.today }}/{{ cap }}</td></tr>{% endfor %}</table>
+  <p class="muted">Switch channels on or off on the <a href="/connections">Connections</a> page. The header button <b>Auto-upload</b> pauses everything at once.</p>
+</section>
+{% endblock %}

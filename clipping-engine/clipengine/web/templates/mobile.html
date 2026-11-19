@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<title>Review clips</title>
+<style>
+  :root { --bg:#111; --card:#1b1b1b; --fg:#f2f2f2; --muted:#9a9a9a; --good:#1f9d55; --bad:#c0392b; --line:#2c2c2c; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f4f4f4; --card:#fff; --fg:#161616; --muted:#666; --line:#ddd; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; padding:0 14px calc(110px + env(safe-area-inset-bottom)); }
+  header { display:flex; justify-content:space-between; align-items:center; padding:12px 0; }
+  header a { color:var(--muted); font-size:.9rem; }
+  .count { font-weight:600; }
+  video { width:100%; max-height:62vh; background:#000; border-radius:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:12px 0; }
+  .muted { color:var(--muted); font-size:.88rem; }
+  h1 { font-size:1.1rem; margin:10px 0 4px; }
+  .flash { background:var(--card); border-left:4px solid var(--good); padding:8px 12px; border-radius:8px; margin-bottom:8px; font-size:.92rem; }
+  .bar { position:fixed; left:0; right:0; bottom:0; display:grid; grid-template-columns:1fr 1.4fr; gap:10px; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); }
+  .bar form { margin:0; }
+  button { width:100%; min-height:58px; font-size:1.1rem; font-weight:700; border:0; border-radius:12px; color:#fff; }
+  .yes { background:var(--good); } .no { background:var(--bad); }
+  .skip { display:inline-block; margin-top:6px; color:var(--muted); font-size:.9rem; }
+  ul { margin:6px 0 0; padding-left:18px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="count">{{ left }} to review</span>
+  <span><a href="/">Dashboard</a> · <a href="/review">Desktop review</a></span>
+</header>
+{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+{% if c %}
+  <video controls playsinline preload="metadata" poster="/clips/{{ c.id }}/thumb" src="/clips/{{ c.id }}/video"></video>
+  <h1>{{ c.title or "Untitled clip" }}</h1>
+  <p class="muted">{{ brand }}{% if creator %} · {{ creator }}{% endif %} · {{ duration }}s{% if c.score is not none %} · score {{ "%.2f"|format(c.score) }}{% endif %}</p>
+  {% if c.description %}<div class="card"><span class="muted">Description</span><br>{{ c.description }}</div>{% endif %}
+  <div class="card">
+    <span class="muted">If you approve</span>
+    {% if dests %}
+      <ul>{% for a in dests %}<li>{{ a.platform|capitalize }} for {{ a.handle }}: {{ "Reel draft" if a.platform == "facebook" else "private upload" }}</li>{% endfor %}</ul>
+    {% else %}<br>No channel is switched on for this brand yet, so it will only be marked approved.{% endif %}
+    {% if manual %}<p class="muted">Post by hand: {{ manual|join(", ")|capitalize }}</p>{% endif %}
+  </div>
+  <a class="skip" href="/m?skip={{ (skip ~ ',' ~ c.id) if skip else c.id }}">Skip for now</a>
+  <div class="bar">
+    <form method="post" action="/m/{{ c.id }}/reject"><input type="hidden" name="skip" value="{{ skip }}"><button class="no">Reject</button></form>
+    <form method="post" action="/m/{{ c.id }}/approve"><input type="hidden" name="skip" value="{{ skip }}"><button class="yes">Approve</button></form>
+  </div>
+{% else %}
+  <div class="card"><h1>All caught up</h1><p class="muted">No clips are waiting. You will get an alert when new ones are ready.</p>
+  {% if skip %}<p><a class="skip" href="/m">Show the ones I skipped</a></p>{% endif %}</div>
+{% endif %}
+</body>
+</html>
