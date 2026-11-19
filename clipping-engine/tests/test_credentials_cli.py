@@ -37,10 +37,22 @@ def test_network_errors_never_leak_the_key_in_text(settings):
 def test_entry_writes_only_given_keys_hidden_and_keeps_the_rest(settings, monkeypatch):
     env = settings.env_file
     env.write_text("OTHER=keep\nYOUTUBE_API_KEY=\n", encoding="utf-8")
-    answers = iter(["NEW-KEY-123", "", "", "", ""])
+    answers = iter(["NEW-KEY-123", "", "", "", "", "", ""])      # YouTube, Twitch x2, Kick x2, Meta x2
     out = io.StringIO()
     monkeypatch.setattr(cc, "get_settings", lambda: get_settings())
     cc.main(settings, prompt=lambda p: next(answers), out=out, client=_client(lambda r: httpx.Response(200, json={"items": [{"id": "x"}]})))
     text = env.read_text(encoding="utf-8")
     assert "OTHER=keep" in text and "YOUTUBE_API_KEY=NEW-KEY-123" in text
     assert "NEW-KEY-123" not in out.getvalue()
+
+
+def test_meta_app_pair_is_tested_without_ever_printing_the_secret(settings):
+    settings.meta_app_id, settings.meta_app_secret = "APP-ID-1", "APP-SECRET-XYZ"
+    settings.youtube_api_key = ""
+    settings.twitch_client_id = settings.twitch_client_secret = settings.kick_client_id = settings.kick_client_secret = ""
+    ok = cc.authentication_test(settings, _client(lambda r: httpx.Response(200, json={"access_token": "T"})))
+    assert ok["meta"]["state"] == "ok" and "APP-SECRET-XYZ" not in str(ok) and "pair only" in ok["meta"]["detail"]
+    bad = cc.authentication_test(settings, _client(lambda r: httpx.Response(400, json={"error": {}})))
+    assert bad["meta"]["state"] == "failed" and "400" in bad["meta"]["detail"] and "APP-SECRET-XYZ" not in str(bad)
+    settings.meta_app_secret = ""
+    assert cc.authentication_test(settings, _client(lambda r: httpx.Response(200)))["meta"]["state"] == "skipped"

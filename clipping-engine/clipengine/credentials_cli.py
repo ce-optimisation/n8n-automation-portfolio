@@ -21,6 +21,9 @@ FIELDS = {
                ("TWITCH_CLIENT_SECRET", "twitch_client_secret", "Twitch Client Secret (New Secret)")],
     "kick": [("KICK_CLIENT_ID", "kick_client_id", "Kick Client ID (Kick > Settings > Developer)"),
              ("KICK_CLIENT_SECRET", "kick_client_secret", "Kick Client Secret")],
+    # Session 13: the Meta developer app used to connect the six Facebook Pages and their linked Instagram accounts
+    "meta": [("META_APP_ID", "meta_app_id", "Meta App ID (developers.facebook.com > your app > Settings > Basic)"),
+             ("META_APP_SECRET", "meta_app_secret", "Meta App Secret (Settings > Basic > Show)")],
 }
 # A well-known, stable public channel used only to prove the YouTube key is accepted (1 quota unit).
 YT_PROBE_CHANNEL = "UC_x5XG1OV2P6uZZ5FSM9Ttw"
@@ -68,6 +71,19 @@ def authentication_test(settings, client=None) -> dict:
             attempt("kick", lambda: token("https://id.kick.com/oauth/token", settings.kick_client_id, settings.kick_client_secret, "Kick"))
         else:
             out["kick"] = {"state": "skipped", "detail": "KICK_CLIENT_ID / KICK_CLIENT_SECRET not both set"}
+
+        def meta():
+            r = client.get("https://graph.facebook.com/oauth/access_token",
+                           params={"client_id": settings.meta_app_id, "client_secret": settings.meta_app_secret,
+                                   "grant_type": "client_credentials"})
+            if r.status_code == 200 and "access_token" in r.text:
+                return {"state": "ok", "detail": "Meta: app access token issued (HTTP 200); this proves the app id/secret pair only, "
+                                                 "not any Page or Instagram access"}
+            return {"state": "failed", "detail": f"Meta: app id/secret refused (HTTP {r.status_code}) - check both values"}
+        if getattr(settings, "meta_app_id", "") and getattr(settings, "meta_app_secret", ""):
+            attempt("meta", meta)
+        else:
+            out["meta"] = {"state": "skipped", "detail": "META_APP_ID / META_APP_SECRET not both set"}
     finally:
         if own:
             client.close()
