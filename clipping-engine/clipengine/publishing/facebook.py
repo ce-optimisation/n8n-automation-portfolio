@@ -20,7 +20,9 @@ import httpx
 from .. import connections as cx
 from .base import NotConfigured, PublishError
 
-LOGIN_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,business_management"
+# Pages-only. In Meta's newer app system instagram_basic is NOT accepted as a plain scope ("Invalid Scopes", even with the
+# Instagram use case added); it only comes through a Facebook Login for Business configuration (config_id).
+LOGIN_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
 USER_KEY = "facebook:user"
 
 

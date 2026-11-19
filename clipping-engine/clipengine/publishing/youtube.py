@@ -42,7 +42,9 @@ class YouTubeClient:
     def authorize_url(self, brand: str, redirect_uri: str) -> tuple[str, str, str]:
         if not self.configured:
             raise NotConfigured("No Google OAuth client is configured (CLIPENGINE_GOOGLE_CLIENT_ID/SECRET).")
-        return self.oauth(brand).auth_url(redirect_uri)
+        # select_account forces Google's account/channel chooser every time. Without it Google silently reuses the channel
+        # from a previous approval, and every brand would authorise the same channel (the engine then refuses it as CROSS_BRAND).
+        return self.oauth(brand).auth_url(redirect_uri, prompt="select_account consent")
 
     def connected(self, brand: str) -> bool:
         return self.oauth(brand).connected()

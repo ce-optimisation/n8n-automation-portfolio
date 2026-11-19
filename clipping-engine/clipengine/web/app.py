@@ -68,7 +68,8 @@ class App:
         self.publisher = PublishService(settings, self.db, self.queue, self.tiktok, self.instagram)
         self.facebook = FacebookClient(settings.meta_app_id, settings.meta_app_secret, settings.meta_redirect_uri,
                                        self.tokens, settings.meta_graph_version)
-        self.youtube = YouTubeClient(settings.google_client_id, settings.google_client_secret, self.tokens)
+        self.youtube = YouTubeClient(settings.youtube_oauth_client_id or settings.google_client_id,
+                                     settings.youtube_oauth_client_secret or settings.google_client_secret, self.tokens)
         self.queue.register("download_model", self._download_model)
         self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)

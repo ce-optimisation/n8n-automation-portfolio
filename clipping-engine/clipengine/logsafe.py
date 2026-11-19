@@ -9,8 +9,11 @@ from __future__ import annotations
 import logging
 import re
 
-_PARAM = re.compile(r"(?i)([?&;\s](?:key|api_key|apikey|access_token|refresh_token|id_token|client_secret|token|code|"
-                    r"password|passwd|secret|sig|signature|x-amz-signature)=)[^&\s\"'<>]+")
+# Any parameter whose NAME contains token/secret/key/password/sig (so fb_exchange_token, client_secret, x-amz-signature...)
+# or is exactly "code".
+_PARAM = re.compile(r"(?i)([?&;\s](?:[a-z0-9_\-]*(?:token|secret|key|password|passwd|sig|signature)[a-z0-9_\-]*|code)=)"
+                    r"[^&\s\"'<>]+")
+_FB_TOKEN = re.compile(r"\bEA[A-Za-z0-9]{3,}[A-Za-z0-9_\-]{40,}")
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=\-]{8,}")
 _GOOGLE_KEY = re.compile(r"AIza[0-9A-Za-z_\-]{30,}")
 _JSON_SECRET = re.compile(r"(?i)(\"(?:access_token|refresh_token|client_secret|api_key|password|id_token)\"\s*:\s*\")[^\"]+")
@@ -22,6 +25,7 @@ def redact(text: str) -> str:
     t = _PARAM.sub(lambda m: m.group(1) + "<redacted>", text)
     t = _BEARER.sub(lambda m: m.group(1) + " <redacted>", t)
     t = _GOOGLE_KEY.sub("<redacted-google-key>", t)
+    t = _FB_TOKEN.sub("<redacted-meta-token>", t)
     return _JSON_SECRET.sub(lambda m: m.group(1) + "<redacted>", t)
 
 

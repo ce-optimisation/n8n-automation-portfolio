@@ -22,6 +22,8 @@ FIELDS = {
     "kick": [("KICK_CLIENT_ID", "kick_client_id", "Kick Client ID (Kick > Settings > Developer)"),
              ("KICK_CLIENT_SECRET", "kick_client_secret", "Kick Client Secret")],
     # Session 13: the Meta developer app used to connect the six Facebook Pages and their linked Instagram accounts
+    "youtube_oauth": [("YOUTUBE_OAUTH_CLIENT_ID", "youtube_oauth_client_id", "YouTube OAuth Client ID (Google Cloud > Auth Platform > Clients, Desktop app)"),
+                      ("YOUTUBE_OAUTH_CLIENT_SECRET", "youtube_oauth_client_secret", "YouTube OAuth Client Secret")],
     "meta": [("META_APP_ID", "meta_app_id", "Meta App ID (developers.facebook.com > your app > Settings > Basic)"),
              ("META_APP_SECRET", "meta_app_secret", "Meta App Secret (Settings > Basic > Show)")],
 }

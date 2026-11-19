@@ -65,12 +65,12 @@ class GoogleOAuth:
         t = self.tokens.get(self.key)
         return bool(t and t.get("refresh_token"))
 
-    def auth_url(self, redirect_uri: str) -> tuple[str, str, str]:
+    def auth_url(self, redirect_uri: str, prompt: str = "consent") -> tuple[str, str, str]:
         verifier = secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         state = secrets.token_urlsafe(24)
         q = {"client_id": self.client_id, "redirect_uri": redirect_uri, "response_type": "code",
-             "scope": " ".join(self.scopes), "access_type": "offline", "prompt": "consent", "state": state,
+             "scope": " ".join(self.scopes), "access_type": "offline", "prompt": prompt, "state": state,
              "code_challenge": challenge, "code_challenge_method": "S256"}
         return f"{GOOGLE_AUTH}?{urlencode(q)}", state, verifier
 

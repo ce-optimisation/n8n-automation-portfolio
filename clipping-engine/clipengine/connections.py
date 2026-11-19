@@ -191,9 +191,13 @@ def tiktok_identity(http, access_token: str) -> list[dict]:
 
 def _dev_app(settings, platform: str) -> tuple[str, str]:
     if platform == "youtube":
-        ok = bool(getattr(settings, "google_client_id", "") and getattr(settings, "google_client_secret", ""))
-        return (READY, "Existing Google OAuth client found; YouTube scopes must be added to its consent screen and the "
-                       "YouTube Data API enabled in its project.") if ok else (BLOCKED, "No Google OAuth client configured.")
+        own = bool(getattr(settings, "youtube_oauth_client_id", "") and getattr(settings, "youtube_oauth_client_secret", ""))
+        ok = own or bool(getattr(settings, "google_client_id", "") and getattr(settings, "google_client_secret", ""))
+        if own:
+            return (READY, "Dedicated YouTube OAuth client configured; authorise each channel separately.")
+        return (READY, "Only the Drive OAuth client is configured; YouTube scopes must be on its consent screen and the "
+                       "YouTube Data API enabled in its project (or add a dedicated YOUTUBE_OAUTH_CLIENT_ID/SECRET).") if ok \
+            else (BLOCKED, "No Google OAuth client configured.")
     if platform in ("facebook", "instagram"):
         ok = bool(getattr(settings, "meta_app_id", "") and getattr(settings, "meta_app_secret", ""))
         return (READY, "Meta app credentials present; app roles/permissions (Advanced access) unconfirmed.") if ok \

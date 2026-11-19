@@ -242,6 +242,10 @@ class Settings:
     # Google (Drive storage and YouTube private uploads): the owner's own OAuth "Desktop app" client
     google_client_id: str = ""
     google_client_secret: str = ""
+    # Session 13: a SEPARATE Google OAuth client (own project/consent screen) used only for the six YouTube channels.
+    # Falls back to the Drive client if unset.
+    youtube_oauth_client_id: str = ""
+    youtube_oauth_client_secret: str = ""
     cloud_provider: str = "gdrive"          # gdrive | none
     cloud_folder_name: str = "Clipping Engine"
     cloud_min_free_gb: float = 2.0          # hold uploads (and warn) below this much free Drive space
@@ -388,6 +392,8 @@ def get_settings(**overrides) -> Settings:
         youtube_api_key=os.environ.get("YOUTUBE_API_KEY", "").strip(),
         google_client_id=os.environ.get("CLIPENGINE_GOOGLE_CLIENT_ID", "").strip(),
         google_client_secret=os.environ.get("CLIPENGINE_GOOGLE_CLIENT_SECRET", "").strip(),
+        youtube_oauth_client_id=os.environ.get("YOUTUBE_OAUTH_CLIENT_ID", "").strip(),
+        youtube_oauth_client_secret=os.environ.get("YOUTUBE_OAUTH_CLIENT_SECRET", "").strip(),
         cloud_provider=(os.environ.get("CLOUD_PROVIDER", "gdrive") or "gdrive").lower(),
         cloud_folder_name=os.environ.get("CLOUD_FOLDER_NAME", "Clipping Engine") or "Clipping Engine",
         cloud_min_free_gb=_float("CLOUD_MIN_FREE_GB", 2.0),

@@ -24,6 +24,13 @@ def test_redacts_tokens_secrets_bearer_and_bare_google_keys():
     assert "state=ok" in out and '"name": "keep"' in out
 
 
+def test_redacts_facebook_exchange_token_and_bare_meta_tokens():
+    tok = "EAAO" + "Z" * 60
+    s = f"GET https://graph.facebook.com/v23.0/oauth/access_token?grant_type=fb_exchange_token&client_id=123&fb_exchange_token={tok}&x=1 raw {tok}"
+    out = redact(s)
+    assert tok not in out and "client_id=123" in out and "grant_type=fb_exchange_token" in out and "x=1" in out
+
+
 def test_ordinary_text_is_unchanged():
     msg = "Selected 4 candidate excerpts; render jobs queued (keyboard 12)"
     assert redact(msg) == msg

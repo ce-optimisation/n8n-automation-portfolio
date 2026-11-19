@@ -37,7 +37,7 @@ def test_network_errors_never_leak_the_key_in_text(settings):
 def test_entry_writes_only_given_keys_hidden_and_keeps_the_rest(settings, monkeypatch):
     env = settings.env_file
     env.write_text("OTHER=keep\nYOUTUBE_API_KEY=\n", encoding="utf-8")
-    answers = iter(["NEW-KEY-123", "", "", "", "", "", ""])      # YouTube, Twitch x2, Kick x2, Meta x2
+    answers = iter(["NEW-KEY-123", "", "", "", "", "", "", "", ""])      # YouTube, Twitch x2, Kick x2, YT OAuth x2, Meta x2
     out = io.StringIO()
     monkeypatch.setattr(cc, "get_settings", lambda: get_settings())
     cc.main(settings, prompt=lambda p: next(answers), out=out, client=_client(lambda r: httpx.Response(200, json={"items": [{"id": "x"}]})))
