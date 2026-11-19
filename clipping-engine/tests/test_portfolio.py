@@ -539,3 +539,34 @@ def test_title_renders_into_a_real_clip_without_changing_the_video_frame(setting
     assert plain["title"] is False and titled["title"] is True
     assert (titled["probe"]["width"], titled["probe"]["height"]) == (1080, 1920) == (plain["probe"]["width"], plain["probe"]["height"])
     assert "Style: Title,Anton,160" in (tmp_path / "b" / "captions.ass").read_text(encoding="utf-8")
+
+
+def test_short_videos_are_skipped_when_a_minimum_is_set_and_long_ones_still_queue(settings, db):
+    """Owner decision 19 Nov: automatically found videos under MIN_SOURCE_SECONDS are already clips (e.g. Shorts)."""
+    settings.allow_private_urls = True
+    settings.min_source_seconds = 180
+    make_verified(db, "mkbhd/youtube/channel", "UC1")
+    now = time.time()
+    db.execute("INSERT INTO source_permissions(domain,granted_by,granted_on,reference,scope,created_at,updated_at) "
+               "VALUES('youtube.com','owner','2026-11-18','r','t',?,?)", (now, now))
+    grant_creator(db, "mkbhd")
+    f, q = FakeAdapter("youtube"), StubQueue()
+    s = sup(settings, db, {"youtube": f}, queue=q)
+    mid = ms(db, "mkbhd/youtube/channel")["id"]
+    f.rep = yt_report([])
+    s.poll(mid)
+    short = MediaItem("youtube:short", "A Short", "https://www.youtube.com/watch?v=short", "upload", "2026-11-18T09:00:00Z", 59)
+    long_ = MediaItem("youtube:long", "A Review", "https://www.youtube.com/watch?v=long", "upload", "2026-11-18T09:05:00Z", 900)
+    f.rep = yt_report([short, long_])
+    s.clock_box["t"] += 3600
+    s.poll(mid)
+    s.route_pending()
+    assert db.one("SELECT state FROM discovered_items WHERE platform_item_id='youtube:short'")["state"] == "skipped"
+    assert db.one("SELECT state FROM discovered_items WHERE platform_item_id='youtube:long'")["state"] == "queued"
+    assert len(q.jobs) == 1 and q.jobs[0][1]["payload"]["url"].endswith("v=long")
+    s.route_pending()
+    assert len(q.jobs) == 1                                   # the skipped Short is never reconsidered
+
+
+def test_minimum_is_off_by_default_so_short_videos_are_unchanged(settings, db):
+    assert settings.min_source_seconds == 0

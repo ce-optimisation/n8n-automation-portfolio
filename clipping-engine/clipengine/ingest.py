@@ -660,6 +660,24 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
         source_media_id = str(info.get("id")) if info.get("id") else None
         site = info.get("extractor_key") or site
         original_name = file.name
+        min_src = float(getattr(settings, "min_source_seconds", 0) or 0)
+        dur = info.get("duration")
+        automatic = bool(ctx.payload.get("discovered_item_id") or ctx.payload.get("source_item_id"))
+        if min_src and automatic and isinstance(dur, (int, float)) and 0 < dur < min_src:
+            # Safety net for items whose length was unknown at discovery: never register or re-clip a short video that
+            # was found automatically. (Videos the owner imports by hand have no item id and are never skipped.)
+            ctx.log(f"Skipping: {dur:.0f}s is under the {min_src:.0f}s minimum (already a short clip)")
+            if file.parent.name.startswith("ytdlp_"):
+                shutil.rmtree(file.parent, ignore_errors=True)
+            else:
+                file.unlink(missing_ok=True)
+            note = f"Skipped: only {int(dur)}s, under the {int(min_src)}s minimum (already a short clip)"
+            if ctx.payload.get("source_item_id"):
+                db.update("source_items", ctx.payload["source_item_id"], state="skipped", error=note)
+            if ctx.payload.get("discovered_item_id"):
+                db.execute("UPDATE discovered_items SET state='skipped', detail=? WHERE id=?",
+                           (note, ctx.payload["discovered_item_id"]))
+            return
     ctx.progress(0.95, "Registering download", force=True)
     perm = permission_for(db, decision.host)
     attestation = ctx.payload.get("rights_attestation") or ""

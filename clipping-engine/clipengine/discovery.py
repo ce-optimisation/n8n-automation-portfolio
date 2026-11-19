@@ -327,6 +327,12 @@ class DiscoverySupervisor:
                              "ORDER BY (d.priority_tags IS NULL), d.first_seen LIMIT 25")
         for d in rows:
             ms = self.db.one("SELECT * FROM monitor_sources WHERE id=?", (d["msid"],))
+            min_src = float(getattr(self.settings, "min_source_seconds", 0) or 0)
+            if min_src and d["duration_s"] and d["duration_s"] < min_src:
+                # Owner decision (19 Nov): videos this short are already clips (e.g. Shorts); do not download or re-clip them.
+                self._mark(d, "skipped", f"Skipped: only {int(d['duration_s'])}s, under the {int(min_src)}s minimum "
+                                         "(already a short clip)")
+                continue
             if ms["platform"] in ("podcast", "rumble"):
                 self._mark(d, "permission_required" if ms["platform"] == "podcast" else "discovered",
                            "Podcast enclosures are recorded, not auto-downloaded" if ms["platform"] == "podcast"

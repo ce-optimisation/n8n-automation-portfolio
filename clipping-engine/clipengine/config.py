@@ -183,6 +183,9 @@ class Settings:
     live_segment_max_minutes: float = 30.0
     live_buffer_gb: float = 20.0         # total local space live captures may hold (all concurrent captures together)
     min_recording_seconds: float = 60.0  # shorter live captures are treated as incomplete
+    # Session 13: AUTOMATICALLY found videos shorter than this are skipped (they are already clips, e.g. YouTube Shorts).
+    # 0 = off. Videos the owner imports by hand are never skipped.
+    min_source_seconds: float = 0.0
     live_restart_limit: int = 120        # restarts happen only while the video page confirms the stream is live
     allow_private_urls: bool = False     # TEST-ONLY: permits localhost/private URLs
     http_user_agent: str = "LocalClippingEngine/1.1 (self-hosted editorial review tool)"
@@ -343,6 +346,7 @@ def get_settings(**overrides) -> Settings:
         monitor_enabled=_bool("MONITOR_ENABLED", True),
         max_recording_hours=_float("MAX_RECORDING_HOURS", 8.0),
         min_recording_seconds=_float("MIN_RECORDING_SECONDS", 60.0),
+        min_source_seconds=_float("MIN_SOURCE_SECONDS", 0.0),
         live_segment_max_gb=_float("LIVE_SEGMENT_MAX_GB", 1.0),
         live_segment_max_minutes=_float("LIVE_SEGMENT_MAX_MINUTES", 30.0),
         live_buffer_gb=_float("LIVE_BUFFER_GB", 20.0),
