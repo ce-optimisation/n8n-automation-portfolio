@@ -377,7 +377,11 @@ class Pipeline:
                     extra = hooks.ollama_candidates(s.ollama_url, s.ollama_model, transcript, brand or "")
                 except Exception:      # a local model is optional; deterministic generation still runs
                     extra = None
-            return hooks.fields_for(hooks.generate(transcript, brand, speaker, extra, self.settings.data_dir), rev)
+            result = hooks.generate(transcript, brand, speaker, extra, self.settings.data_dir)
+            if getattr(self.settings, "title_semantic", False):
+                from . import semantic
+                result = semantic.rerank(result, transcript)       # reorders VERIFIED candidates only
+            return hooks.fields_for(result, rev)
         except Exception as e:         # noqa: BLE001
             return hooks.fields_for({"status": "manual_needed", "title": None, "warnings": [f"title generation failed: {e}"]}, rev)
 

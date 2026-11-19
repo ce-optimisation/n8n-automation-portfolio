@@ -280,3 +280,40 @@ def test_creator_without_a_brand_gets_its_brand_policy_from_the_niche(settings):
     info = json.loads(fields["title_json"])
     assert info["brand_policy"] == "america_first_monitor", info["brand_policy"]
     assert all(c["method"] != "claim" for c in info["candidates"] if c["accepted"])
+
+
+# ---- Session 13, part 2: real recording-6 wording (a profane GTA gameplay stream) --------------------------------------
+GTA_RAGE = "What are you looking at, bitch? Huh? You fucking bitch. What are you looking at? Like the leg sweep. Idiot, bitch."
+GTA_STUMBLE = "I'm gonna just straight up rage quit this game. Here's the gun store. This car is broke. Civilians dude dude dude."
+GTA_FILLER = "Where's the good stuff? Is it time, sure, let me see. I gotta get rid of the evidence, huh? Where's the gun store?"
+SENTENCE_RUNON = "Tomorrow they're putting me in a holding pattern and starting all the paperwork It's great. That's a problem That's gonna be an issue."
+
+
+@pytest.mark.parametrize("brand", [None, "america_first_monitor", "afterlive", "operator_notes", "open_floor"])
+def test_profanity_never_reaches_a_generated_headline(brand):
+    r = hooks.generate(GTA_RAGE, brand, "Fuentes")
+    assert not any(hooks.PROFANE.search(t) for t in _accepted_texts(r)), r["candidates"]
+    assert not (r["title"] and hooks.PROFANE.search(r["title"]))
+
+
+def test_stumbles_contractions_and_filler_are_not_subjects():
+    for text in (GTA_STUMBLE, SENTENCE_RUNON, GTA_FILLER):
+        r = hooks.generate(text, "america_first_monitor", "Fuentes")
+        for t in _accepted_texts(r):
+            toks = hooks._toks(t)
+            assert not any(a.lower() == b.lower() for a, b in zip(toks, toks[1:])), t          # 'dude dude'
+            assert not any(hooks.CONTRACTION.search(w) for w in toks if t.startswith("Fuentes on")), t
+            assert not (t.startswith("Fuentes on") and any(w.lower() in hooks.GENERIC for w in toks)), t
+        assert "Where's the good stuff?" not in _accepted_texts(r)
+
+
+def test_political_brand_never_turns_a_first_person_line_into_a_headline():
+    r = hooks.generate(GTA_FILLER, "america_first_monitor", "Fuentes")
+    assert not any(t.lower().startswith(("i ", "i'm", "we ", "my ")) for t in _accepted_texts(r)), r["candidates"]
+
+
+def test_unusable_chatter_falls_back_to_a_manual_title_not_an_invented_one():
+    r = hooks.generate(GTA_STUMBLE, "america_first_monitor", "Fuentes")
+    assert r["status"] in ("manual_needed", "proposed", "neutral")
+    if r["status"] == "manual_needed":
+        assert r["title"] is None

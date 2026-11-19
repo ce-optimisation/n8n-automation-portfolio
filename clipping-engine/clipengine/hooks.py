@@ -75,8 +75,22 @@ built bought caught chose chosen drove driven ate eaten flew flown forgot held h
 sat sold sent set shut spoke spent stood stole taught told thought threw understood woke won wore means mean meant creates
 create created shows show showed shown tells tell tells revolutionizes revolutionize carries carry cascaded cascade
 caused causes cause leads lead brings bring turns turn becomes become gets get gives give takes take needs need wants want
-uses use works work runs run happens happen happened decides decide decided found finds find said say says""".split())
+uses use works work runs run happens happen happened decides decide decided found finds find said say says
+lives live lived living looks look looked seems seem seemed feels feel knows know thinks think thinking wants wanted
+playing plays played tries try tried getting coming doing saying telling asking asks asked sits stands waits wait waited
+helps help helped keeps keep kept starts start started stops stop stopped opens open opened""".split())
 VERBAL_SUFFIX = re.compile(r"(?:izes|ises|ifies|ized|ised)$", re.I)
+# Conversational filler that carries no subject ('the good stuff', 'time sure let'). A topic may not contain it and a question
+# needs two words that are NOT in this list.
+GENERIC = set("""time sure let stuff thing things guy guys dude dudes man bro way lot lots bit kind something anything everything
+nothing someone anyone everyone good bad great nice real right wrong little big new old other same own much many more most
+whole entire actual literally damn okay alright yeah nah gonna gotta wanna""".split())
+# A headline must never carry profanity or slurs, whatever the brand: recording 6 (a profane gameplay stream) produced
+# 'Fuentes on fucking bitch'. The owner can still write such a title by hand; the generator never will.
+PROFANE = re.compile(r"\b(?:f+u+c+k\w*|sh[i1]+t\w*|b[i1]tch\w*|cunt\w*|assh\w*|bastard\w*|whore\w*|slut\w*|dickhead\w*|"
+                     r"n[i1]gg\w*|fagg?[o0]t\w*|retard\w*|k[i1]ke\w*|sp[i1]c\b|ch[i1]nk\b|tranny\w*|motherf\w*)\b", re.I)
+CONTRACTION = re.compile(r"^(?:i|you|he|she|it|we|they|that|there|here|what|who|how|let|ain|do|does|did|is|are|was|were|"
+                         r"have|has|had|would|could|should|can|will|wo)'(?:s|re|m|ll|d|ve|t)$|n't$", re.I)
 
 
 def _is_verbal(tok: str) -> bool:
@@ -89,7 +103,7 @@ def _noun_runs(run: list[str]) -> list[list[str]]:
     """Split a run of content words at verbs; proper nouns/numbers (capitalised mid-sentence) are never treated as verbs."""
     out, cur = [], []
     for w in run:
-        if _is_verbal(w) and not (w[:1].isupper() and len(cur) > 0):
+        if CONTRACTION.search(w) or (_is_verbal(w) and not (w[:1].isupper() and len(cur) > 0)):
             if cur:
                 out.append(cur)
             cur = []
@@ -310,6 +324,10 @@ def verify(c: Candidate, transcript: str, policy: dict, speaker: str | None = No
         reject.append("topic is a single common word - too vague to be a fair summary")
     # Session 13 structural checks: complete statements, noun-phrase topics, questions that name a subject.
     toks_plain = _toks(plain)
+    if PROFANE.search(plain):
+        reject.append("contains profanity or a slur; the generator never puts that in a headline")
+    if any(a.lower() == b.lower() for a, b in zip(toks_plain, toks_plain[1:])):
+        reject.append("repeats the same word twice in a row, so it is a speech stumble rather than a subject")
     if c.method == "claim":
         if SUBORDINATOR_START.match(plain):
             reject.append("starts as a dependent clause (since/although/when...); it is not a complete statement")
@@ -317,8 +335,19 @@ def verify(c: Candidate, transcript: str, policy: dict, speaker: str | None = No
             reject.append("ends on a verb that still needs its object, so the sentence is left hanging")
     if c.method == "question" and len(_content(plain)) < 2:
         reject.append("the question names no subject, so it means nothing without the surrounding clip")
+    if policy.get("attribute_only") and re.match(r"^(?:i|i'm|i've|i'll|i'd|my|me|we|we're|we've|our|let me|let's)\b", plain, re.I):
+        reject.append("a first-person line would read as the creator's own admission or claim in a headline")
+    if c.method == "question" and sum(1 for t in _content(plain) if t.lower() not in GENERIC) < 2:
+        reject.append("the question is built from conversational filler, not a subject")
+    if c.method == "question" and re.search(r"\b(?:it|that|this|them|these|those|he|she|they)\b", plain, re.I) \
+            and not any(t[:1].isupper() and i > 0 for i, t in enumerate(toks_plain)) and not any(t.isdigit() for t in toks_plain):
+        reject.append("the question points at something only the surrounding clip explains (it/that/this) and names nothing")
     if c.method in ("topic", "attributed_topic", "neutral_topic"):
         body = re.sub(r"^\s*on\s+", "", plain.replace(speaker or "", "", 1).strip(), flags=re.I)
+        if any(CONTRACTION.search(t) for t in _toks(body)):
+            reject.append("the topic label contains a contraction, so it ran across a sentence boundary")
+        if any(t.lower() in GENERIC for t in _toks(body)):
+            reject.append("the topic label contains conversational filler, so it is not a real subject")
         if any(_is_verbal(t) for t in _toks(body)):
             reject.append("the topic label contains a verb, so it is a sentence fragment rather than a subject")
         src = _best_sentence(body, tx)
