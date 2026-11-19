@@ -28,6 +28,10 @@ from ..pipeline import Pipeline
 from ..publishing import (STATES, InstagramClient, NotConfigured, PublishError, TikTokClient, TokenStore,
                           editorial_gate)
 from ..publishing.service import PublishService
+from ..publishing.facebook import FacebookClient
+from ..publishing.youtube import YouTubeClient
+from .. import connections as cx
+from ..publishing import delivery
 
 log = logging.getLogger("clipengine.web")
 HERE = Path(__file__).resolve().parent
@@ -62,6 +66,9 @@ class App:
             self.instagram = InstagramClient(settings.meta_app_id, settings.meta_app_secret,
                                              settings.meta_redirect_uri, self.tokens, settings.meta_graph_version)
         self.publisher = PublishService(settings, self.db, self.queue, self.tiktok, self.instagram)
+        self.facebook = FacebookClient(settings.meta_app_id, settings.meta_app_secret, settings.meta_redirect_uri,
+                                       self.tokens, settings.meta_graph_version)
+        self.youtube = YouTubeClient(settings.google_client_id, settings.google_client_secret, self.tokens)
         self.queue.register("download_model", self._download_model)
         self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
@@ -1134,6 +1141,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         if not st or st["platform"] != platform or time.time() - st["ts"] > 900:
             return RedirectResponse("/settings?err=Invalid or expired OAuth state; try connecting again.",
                                     status_code=303)
+        if platform in ("facebook", "youtube"):
+            return _connections_callback(platform, code, st)
         try:
             if platform == "tiktok":
                 core.tiktok.exchange_code(code, st.get("verifier"))
@@ -1147,6 +1156,108 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             return _settings_redirect(err=f"Could not complete sign-in: {e}")
         core.db.execute("DELETE FROM meta WHERE key = ?", (f"oauth_error.{platform}",))
         return _settings_redirect(msg=f"{platform} connected")
+
+    # ---- Session 13: per-destination connections (verify identity; publishing stays OFF) ---------------------------
+    def _conn_redirect(**q):
+        return RedirectResponse("/connections?" + urlencode(q), status_code=303)
+
+    def _youtube_redirect_uri() -> str:
+        return f"http://127.0.0.1:{settings.port}/oauth/youtube/callback"
+
+    def _connections_callback(platform: str, code: str, st: dict):
+        try:
+            if platform == "facebook":
+                core.facebook.exchange_code(code)
+                res = core.facebook.adopt_pages(core.db)
+                ok = sum(1 for r in res if r["state"] == "VERIFIED")
+                return _conn_redirect(msg=f"Facebook login accepted. {ok} of {len(res)} destinations verified by exact id; "
+                                          "any others were NOT connected (see the matrix).")
+            brand = st.get("brand")
+            core.youtube.oauth(brand).exchange(code, st["redirect"], st["verifier"])
+            acct = core.db.one("SELECT * FROM social_accounts WHERE platform='youtube' AND brand=?", (brand,))
+            res = core.youtube.verify(core.db, acct["id"])
+            if res["state"] == "VERIFIED":
+                return _conn_redirect(msg=f"YouTube ({brand}) connected and verified. Publishing is still OFF.")
+            return _conn_redirect(err=f"YouTube ({brand}) was NOT connected: {res['reason']} Authorise again and pick the "
+                                      "correct channel on Google's channel chooser.")
+        except (PublishError, NotConfigured, PermanentError) as e:
+            return _conn_redirect(err=str(e))
+        except Exception as e:  # noqa: BLE001
+            return _conn_redirect(err=f"Could not complete sign-in: {type(e).__name__}: {e}")
+
+    @app.get("/connections", response_class=HTMLResponse)
+    def connections_page(request: Request, msg: str = "", err: str = ""):
+        rows = cx.build_matrix(core.db, settings, core.tokens)
+        return page(request, "connections.html", rows=rows, keys=cx.STATE_KEYS, msg=msg, err=err,
+                    fb_user=core.facebook.user_connected(), fb_cfg=core.facebook.configured,
+                    fb_missing=core.facebook.missing_config(), yt_cfg=core.youtube.configured,
+                    ig_public=settings.instagram_public_publish)
+
+    @app.get("/connections/facebook/connect")
+    def connections_facebook_connect():
+        try:
+            url, state = core.facebook.authorize_url()
+        except NotConfigured as e:
+            return _conn_redirect(err=str(e))
+        core.oauth_put(state["state"], {"platform": "facebook", **state})
+        return RedirectResponse(url, status_code=303)
+
+    @app.get("/connections/youtube/connect/{brand}")
+    def connections_youtube_connect(brand: str):
+        if not core.db.one("SELECT 1 FROM social_accounts WHERE platform='youtube' AND brand=? "
+                           "AND handle NOT LIKE 'PENDING-%'", (brand,)):
+            raise HTTPException(404)
+        try:
+            url, state, verifier = core.youtube.authorize_url(brand, _youtube_redirect_uri())
+        except NotConfigured as e:
+            return _conn_redirect(err=str(e))
+        core.oauth_put(state, {"platform": "youtube", "state": state, "brand": brand, "verifier": verifier,
+                               "redirect": _youtube_redirect_uri()})
+        return RedirectResponse(url, status_code=303)
+
+    @app.post("/connections/verify/{account_id}")
+    def connections_verify(account_id: int):
+        acct = core.db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
+        if not acct:
+            raise HTTPException(404)
+        try:
+            if acct["platform"] == "youtube":
+                res = core.youtube.verify(core.db, account_id)
+                return _conn_redirect(msg=f"{acct['brand']} YouTube: {res['state']}. {res['reason']}")
+            if acct["platform"] in ("facebook", "instagram"):
+                res = [r for r in core.facebook.adopt_pages(core.db)
+                       if r["brand"] == acct["brand"] and r["platform"] == acct["platform"]]
+                return _conn_redirect(msg=f"{acct['brand']} {acct['platform']}: {res[0]['state'] if res else 'not checked'}.")
+        except (PublishError, NotConfigured, PermanentError) as e:
+            return _conn_redirect(err=str(e))
+        return _conn_redirect(err="Verification for this platform is handled elsewhere.")
+
+    @app.post("/connections/publishing/{account_id}")
+    def connections_publishing(account_id: int, enable: str = Form(""), confirm: str = Form("")):
+        acct = core.db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
+        if not acct:
+            raise HTTPException(404)
+        if enable == "on":
+            if not acct["identity_verified_at"]:
+                return _conn_redirect(err="Verify this destination's identity first.")
+            if confirm != "ENABLE":
+                return _conn_redirect(err="Type ENABLE to switch delivery on for this one destination.")
+            core.db.update("social_accounts", account_id, publishing_enabled=1)
+            return _conn_redirect(msg=f"Delivery switched ON for {acct['brand']} {acct['platform']} "
+                                      "(drafts/private only, per clip, on your command).")
+        core.db.update("social_accounts", account_id, publishing_enabled=0)
+        return _conn_redirect(msg=f"Delivery switched OFF for {acct['brand']} {acct['platform']}.")
+
+    @app.post("/connections/deliver/{clip_id}/{account_id}")
+    def connections_deliver(clip_id: int, account_id: int, confirm: str = Form("")):
+        if confirm != "DELIVER":
+            return _conn_redirect(err="Type DELIVER to confirm this one delivery.")
+        try:
+            res = delivery.deliver_draft(core.db, {"youtube": core.youtube, "facebook": core.facebook}, clip_id,
+                                         account_id, owner_command=True)
+        except (PublishError, NotConfigured, PermanentError) as e:
+            return _conn_redirect(err=str(e))
+        return _conn_redirect(msg=res["detail"])
 
     @app.post("/clips/{cid}/publish/{platform}")
     def publish(request: Request, cid: int, platform: str, confirm: str = Form(""), again: str = Form("")):

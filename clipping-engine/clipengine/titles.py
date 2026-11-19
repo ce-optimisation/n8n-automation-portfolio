@@ -53,6 +53,12 @@ class TitleStyle:
     max_lines: int = 4
     side_margin: int = 56
     uppercase: bool = True
+    # Session 13 (America First Monitor only): one meaningful yellow phrase, smaller, higher, softer shadow.
+    variant: str = "classic"
+    centre_frac: float | None = None
+    emphasis_scale: float | None = None
+    shadow_factor: float = 1.0
+    single_phrase: bool = False
 
     @property
     def reference_size(self) -> int:
@@ -81,10 +87,20 @@ def set_brand_enabled(db, brand_key: str, enabled: bool) -> None:
     db.set_kv("title_brands", json.dumps(sorted(cur)))
 
 
+AFM_BRAND = "america_first_monitor"
+# Owner-approved 19 Nov 2026 (ChatGPT proposal, Session 12 mockups): 0.60 scale (0.56 only if fitting needs it - the existing
+# shrink loop already does that), centre at 18% of frame height, ONE yellow phrase at the same size as the rest, shadow at 35%.
+AFM_V2 = {"scale": 0.60, "centre_frac": 0.18, "emphasis_scale": 1.0, "shadow_factor": 0.35, "single_phrase": True,
+          "variant": "afm_v2"}
+
+
 def style_for(db, brand_key: str | None) -> TitleStyle:
     st = load_style(db)
     if not st.enabled and brand_key and brand_key in set(json.loads(db.get_kv("title_brands") or "[]")):
         st.enabled = True
+    if brand_key == AFM_BRAND and (db.get_kv("title_afm_v2") if db is not None else None) != "0":
+        for k, v in AFM_V2.items():          # other brands are never touched: they keep the classic look byte-for-byte
+            setattr(st, k, v)
     return st
 
 
@@ -149,11 +165,12 @@ def layout(words, style: TitleStyle, width: int, height: int, fg_h: float) -> li
     gap_ratio = (cal["line_pitch_px_1080"] - (cal["cap_height_px_1080"]["lead"] + cal["cap_height_px_1080"]["emphasis"]) / 2) \
         / cal["cap_height_px_1080"]["lead"]
     base = cal["lead_ass_size_1080"] * k
+    emph_scale = style.emphasis_scale if style.emphasis_scale is not None else cal["emphasis_scale"]
     shrink = 1.0
     while True:
         lines = []
         for seg, emph in _segments(words):
-            size = base * shrink * (cal["emphasis_scale"] if emph else 1.0)
+            size = base * shrink * (emph_scale if emph else 1.0)
             for ln in _wrap(seg, size, usable, style.font):
                 lines.append({"words": ln, "size": size, "emph": emph})
         caps = [ratio * l["size"] for l in lines]
@@ -164,9 +181,10 @@ def layout(words, style: TitleStyle, width: int, height: int, fg_h: float) -> li
         if (fits_w and len(lines) <= style.max_lines and block <= room) or shrink < 0.25:
             break
         shrink -= 0.02
-    centre = cal["title_centre_y_frac"] * height
+    centre = (style.centre_frac if style.centre_frac is not None else cal["title_centre_y_frac"]) * height
+    pad_b = 60 if style.single_phrase else 24          # AFM v2: the block stays >= 60 px clear of the picture
     if band_h >= 160:
-        centre = min(max(centre, 24 + block / 2), band_h - 24 - block / 2)
+        centre = min(max(centre, 24 + block / 2), band_h - pad_b - block / 2)
     else:                                   # a (near) full-frame source leaves no band: sit in the top safe area
         centre = max(centre * 0.55, block / 2 + 90)
     y = centre - block / 2
@@ -185,6 +203,7 @@ def _line_text(line, style: TitleStyle, ring_layer: bool, cal: dict) -> str:
     black_ring = cal["accent_black_ring_px_1080"] * k
     perim = cal["accent_perimeter_px_1080"] * k
     plain = max(2.0, 0.045 * line["size"])
+    sf = style.shadow_factor
     out = []
     for i, (word, mode, glued) in enumerate(line["words"]):
         w = captions._esc(word)
@@ -196,9 +215,9 @@ def _line_text(line, style: TitleStyle, ring_layer: bool, cal: dict) -> str:
                 out.append(f"{sep}{{\\1a&HFF&\\3a&HFF&\\bord0\\shad0}}{w}")
         elif mode:
             fill = yellow if mode == 2 else "&H00FFFFFF&"
-            out.append(f"{sep}{{\\1a&H00&\\1c{fill}\\3a&H00&\\3c&H00000000&\\bord{black_ring:.1f}\\shad{0.04 * line['size']:.1f}\\4c&H00000000&}}{w}")
+            out.append(f"{sep}{{\\1a&H00&\\1c{fill}\\3a&H00&\\3c&H00000000&\\bord{black_ring:.1f}\\shad{0.04 * line['size'] * sf:.1f}\\4c&H00000000&}}{w}")
         else:
-            out.append(f"{sep}{{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord{plain:.1f}\\shad{0.03 * line['size']:.1f}\\4c&H00000000&}}{w}")
+            out.append(f"{sep}{{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord{plain:.1f}\\shad{0.03 * line['size'] * sf:.1f}\\4c&H00000000&}}{w}")
     return "".join(out)
 
 
@@ -227,7 +246,32 @@ _MAX_TITLE = 72
 _EMOJI = re.compile("[\U00010000-\U0010ffff\u2600-\u27bf]")
 
 
-def format_title(text: str, auto_emphasis: bool = True) -> str:
+def pick_phrase(tokens: list[str]) -> tuple[int, int] | None:
+    """[start, end) of the ONE meaningful phrase to colour: 2-4 words (a lone proper noun/number is allowed), never
+    starting or ending on a function word, preferring proper nouns, numbers and content words, a phrase at the end of the
+    title, and leaving a leading attribution/subject plain. Deterministic; never changes any word."""
+    from .hooks import STOP
+    core = [re.sub(r"^[^\w$]+|[^\w%]+$", "", t) for t in tokens]
+    n, best, best_score = len(tokens), None, -1e9
+    def stop(i):
+        return core[i].lower() in STOP or not core[i]
+    def proper(i):
+        return bool(core[i]) and (any(ch.isdigit() for ch in core[i]) or (i > 0 and core[i][:1].isupper()))
+    for a in range(n):
+        for b in range(a + 1, min(n, a + 4) + 1):
+            if stop(a) or stop(b - 1) or any(core[i].endswith(('?', '!')) for i in range(a, b - 1)):
+                continue
+            ln = b - a
+            if ln == 1 and not proper(a):
+                continue
+            sc = 2.0 * sum(proper(i) for i in range(a, b)) + sum(not stop(i) for i in range(a, b)) - 1.0 * max(0, ln - 2)
+            sc += 0.8 * (b == n) - (2.0 if a == 0 and ln < n else 0.0) - (0.5 if ln == 1 else 0.0)
+            if sc >= best_score:
+                best, best_score = (a, b), sc
+    return best
+
+
+def format_title(text: str, auto_emphasis: bool = True, single_phrase: bool = False) -> str:
     """Tidy an owner/clip title: collapse whitespace, drop emoji and stray markup, cut at a word boundary
     (never mid-word, never adding words), and - unless the text already marks emphasis - accent the LAST two words
     (the second-last white with a yellow perimeter, the last yellow), as in the approved concept.
@@ -245,6 +289,16 @@ def format_title(text: str, auto_emphasis: bool = True) -> str:
     if marked or not auto_emphasis:
         return t
     toks = t.split(" ")
+    if single_phrase:
+        span = pick_phrase(toks)
+        if span is None:
+            return t
+        a, b = span
+        last = toks[b - 1]
+        core = last.rstrip("?!.,;:")
+        toks[b - 1] = core + "**" + last[len(core):]
+        toks[a] = "**" + toks[a]
+        return " ".join(toks)
     if len(toks) < 3:
         return t
     last = toks[-1]

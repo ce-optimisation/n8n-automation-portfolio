@@ -137,7 +137,11 @@ class InstagramClient:
             token = long["access_token"]
             pages = self._req("GET", f"{self.graph}/me/accounts", params={
                 "fields": "name,instagram_business_account{id,username}", "access_token": token}).get("data", [])
-            ig = next((p["instagram_business_account"] for p in pages if p.get("instagram_business_account")), None)
+            linked = [p["instagram_business_account"] for p in pages if p.get("instagram_business_account")]
+            if len(linked) > 1:
+                raise PublishError("This login manages several Instagram accounts; the legacy single-account connector refuses to "
+                                   "guess which brand is meant. Use the Connections page, which verifies each brand separately.")
+            ig = linked[0] if linked else None
             if not ig:
                 raise PublishError("No Instagram professional account is linked to the Facebook Pages you authorised. "
                                    "Link the account to a Page (Instagram app → Settings → Account type and tools / "

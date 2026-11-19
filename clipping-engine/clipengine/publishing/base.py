@@ -30,12 +30,14 @@ STATES = {
     "retrying": "Retrying",
     "awaiting_connection": "Awaiting platform connection",
     "delivered_inbox": "Delivered to TikTok inbox (confirmed)",
+    "delivered_draft": "Facebook Reel DRAFT created (not published)",
+    "delivered_private": "YouTube PRIVATE upload (not public)",
     "published": "Published (confirmed)",
     "failed": "Failed",
     "cancelled": "Cancelled",
 }
 ACTIVE_STATES = {"queued", "uploading", "processing", "retrying"}
-CONFIRMED_STATES = {"delivered_inbox", "published"}
+CONFIRMED_STATES = {"delivered_inbox", "published", "delivered_draft", "delivered_private"}
 
 RIGHTS_OK = {"owned", "licensed", "public_domain", "fair_dealing_reviewed"}
 

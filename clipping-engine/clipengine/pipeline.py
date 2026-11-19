@@ -467,7 +467,7 @@ class Pipeline:
         from . import captions, titles
         creator = self.creator_for(rec)
         tstyle = titles.style_for(self.db, creator["brand_key"] if creator else None)
-        ttext = titles.format_title(clip["title"]) if (clip["title"] and tstyle.enabled) else None
+        ttext = titles.format_title(clip["title"], single_phrase=tstyle.single_phrase) if (clip["title"] and tstyle.enabled) else None
         res = render.render_clip(self.settings, Path(rec["file_path"]), out_dir, clip["start"], clip["end"],
                                  words, rec["width"], rec["height"], label,
                                  style=captions.style_for(self.db, creator["brand_key"] if creator else None),

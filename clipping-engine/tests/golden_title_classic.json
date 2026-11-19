@@ -1,0 +1,110 @@
+[
+ {
+  "title": "Fuentes on Amazon AWS",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 607.5,
+  "formatted": "Fuentes on *Amazon* **AWS**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,436)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FUENTES {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}ON\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,556)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AMAZON {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AWS\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,556)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AMAZON {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AWS"
+ },
+ {
+  "title": "Fuentes on Amazon AWS",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 1080.0,
+  "formatted": "Fuentes on *Amazon* **AWS**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,217)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FUENTES {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}ON\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AMAZON {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AWS\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AMAZON {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AWS"
+ },
+ {
+  "title": "Fuentes on Amazon AWS",
+  "w": 720,
+  "h": 1280,
+  "fg_h": 405.0,
+  "formatted": "Fuentes on *Amazon* **AWS**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,234)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FUENTES {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}ON\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,354)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AMAZON {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AWS\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,354)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AMAZON {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AWS"
+ },
+ {
+  "title": "Over 20,000 flights were affected",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 607.5,
+  "formatted": "Over 20,000 flights *were* **affected**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,436)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}OVER {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}20,000 {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FLIGHTS\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,556)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}WERE {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AFFECTED\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,556)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}WERE {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AFFECTED"
+ },
+ {
+  "title": "Over 20,000 flights were affected",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 1080.0,
+  "formatted": "Over 20,000 flights *were* **affected**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,217)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}OVER {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}20,000 {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FLIGHTS\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}WERE {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AFFECTED\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}WERE {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AFFECTED"
+ },
+ {
+  "title": "Over 20,000 flights were affected",
+  "w": 720,
+  "h": 1280,
+  "fg_h": 405.0,
+  "formatted": "Over 20,000 flights *were* **affected**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,144)\\fs147}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.6\\shad4.4\\4c&H00000000&}OVER {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.6\\shad4.4\\4c&H00000000&}20,000\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,248)\\fs147}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.6\\shad4.4\\4c&H00000000&}FLIGHTS\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,359)\\fs177}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}WERE {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AFFECTED\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,359)\\fs177}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.1\\4c&H00000000&}WERE {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.1\\4c&H00000000&}AFFECTED"
+ },
+ {
+  "title": "Why did the grid fail in twelve states at once?",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 607.5,
+  "formatted": "Why did the grid fail in twelve states *at* **once**?",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,339)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}WHY {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}DID {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}THE {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}GRID {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FAIL {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}IN\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,453)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}TWELVE {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}STATES\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,573)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AT {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}ONCE{\\1a&HFF&\\3a&HFF&\\bord0\\shad0}?\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,573)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AT {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}ONCE{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord8.7\\shad5.8\\4c&H00000000&}?"
+ },
+ {
+  "title": "Why did the grid fail in twelve states at once?",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 1080.0,
+  "formatted": "Why did the grid fail in twelve states *at* **once**?",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,103)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}WHY {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}DID {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}THE {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}GRID {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}FAIL {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}IN\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,217)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}TWELVE {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}STATES\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AT {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}ONCE{\\1a&HFF&\\3a&HFF&\\bord0\\shad0}?\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}AT {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}ONCE{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord8.7\\shad5.8\\4c&H00000000&}?"
+ },
+ {
+  "title": "Why did the grid fail in twelve states at once?",
+  "w": 720,
+  "h": 1280,
+  "fg_h": 405.0,
+  "formatted": "Why did the grid fail in twelve states *at* **once**?",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,55)\\fs140}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}WHY {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}DID {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}THE {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}GRID\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,156)\\fs140}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}FAIL {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}IN {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}TWELVE\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,256)\\fs140}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord6.3\\shad4.2\\4c&H00000000&}STATES\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,361)\\fs170}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}AT {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}ONCE{\\1a&HFF&\\3a&HFF&\\bord0\\shad0}?\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,361)\\fs170}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad6.8\\4c&H00000000&}AT {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad6.8\\4c&H00000000&}ONCE{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.6\\shad5.1\\4c&H00000000&}?"
+ },
+ {
+  "title": "Speed to lead beat headcount every time",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 607.5,
+  "formatted": "Speed to lead beat headcount *every* **time**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,339)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}SPEED {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}TO {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}LEAD {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}BEAT\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,453)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}HEADCOUNT\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,573)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}EVERY {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}TIME\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,573)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}EVERY {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}TIME"
+ },
+ {
+  "title": "Speed to lead beat headcount every time",
+  "w": 1080,
+  "h": 1920,
+  "fg_h": 1080.0,
+  "formatted": "Speed to lead beat headcount *every* **time**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,103)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}SPEED {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}TO {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}LEAD {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}BEAT\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,217)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}HEADCOUNT\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}EVERY {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}TIME\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(540,337)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}EVERY {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}TIME"
+ },
+ {
+  "title": "Speed to lead beat headcount every time",
+  "w": 720,
+  "h": 1280,
+  "fg_h": 405.0,
+  "formatted": "Speed to lead beat headcount *every* **time**",
+  "style": "Style: Title,Anton,160,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1",
+  "events": "Dialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,120)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}SPEED {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}TO {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}LEAD\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,234)\\fs160}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}BEAT {\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.2\\shad4.8\\4c&H00000000&}HEADCOUNT\nDialogue: 2,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,354)\\fs193}{\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}EVERY {\\1a&H00&\\3a&H00&\\3c&H0004FBFD&\\bord11.0\\shad0}TIME\nDialogue: 3,0:00:00.00,0:00:18.00,Title,,0,0,0,,{\\an5\\pos(360,354)\\fs193}{\\1a&H00&\\1c&H00FFFFFF&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}EVERY {\\1a&H00&\\1c&H0004FBFD&\\3a&H00&\\3c&H00000000&\\bord7.4\\shad7.7\\4c&H00000000&}TIME"
+ }
+]

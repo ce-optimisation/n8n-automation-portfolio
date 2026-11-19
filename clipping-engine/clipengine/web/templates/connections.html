@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.cx-card{border-top:1px solid #8883;padding:.7rem 0}.cx-card:first-of-type{border-top:0}
+.cx-states{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}.cx-states .badge{font-size:.72rem}
+.cx-ok{background:#1b7f3a;color:#fff}.cx-warn{background:#a15c00;color:#fff}.cx-bad{background:#b3261e;color:#fff}
+.cx-act{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}.cx-act form{margin:0;display:flex;gap:.3rem;align-items:center}
+.cx-act button,.cx-act .btn{min-height:44px;padding:0 .9rem}.cx-act input{min-height:44px;font-size:16px;width:7rem}
+.cx-note{font-size:.82rem;line-height:1.4}
+</style>
+<h1>Publishing connections</h1>
+{% if msg %}<section class="card" role="status">{{ msg }}</section>{% endif %}
+{% if err %}<section class="card" role="alert" style="border-color:#b3261e">{{ err }}</section>{% endif %}
+<section class="card muted">A destination is <b>VERIFIED</b> only when the platform's own API reports the exact account id recorded for it. One shared
+administrator login never lets one brand reach another brand's account. <b>Delivery is OFF</b> for every destination until you switch it on for that
+one account, and even then nothing is published: only the closest supported draft or private upload is made, one clip at a time, when you type
+<code>DELIVER</code>. Instagram has no draft API, so it uses the local export package only
+{% if ig_public %}<b>(INSTAGRAM_PUBLIC_PUBLISH is ON: Instagram sending would be PUBLIC)</b>{% endif %}.</section>
+<section class="card"><h2>Connect</h2>
+<ul class="list">
+<li><b>Facebook Pages + linked Instagram</b> (one login, six Pages):
+  {% if not fb_cfg %}<span class="badge cx-bad">needs {{ fb_missing|join(', ') }} in .env</span>
+  {% else %}{% if fb_user %}<span class="badge cx-ok">login authorised</span> {% endif %}<a class="btn" href="/connections/facebook/connect">{{ 'Re-authorise' if fb_user else 'Connect Facebook' }}</a>{% endif %}</li>
+<li><b>YouTube</b> (authorise each channel separately below):
+  {% if yt_cfg %}<span class="badge cx-ok">Google OAuth client present</span>{% else %}<span class="badge cx-bad">no Google OAuth client</span>{% endif %}</li>
+<li><b>TikTok</b> (Afterlive only): uses the existing TikTok connection on the Settings page.</li>
+</ul></section>
+{% set ns = namespace(b='') %}
+<section class="card">
+{% for r in rows %}
+{% if r.brand != ns.b %}{% set ns.b = r.brand %}<h2 style="margin:.9rem 0 .2rem">{{ r.brand|replace('_',' ')|title }}</h2>{% endif %}
+<div class="cx-card">
+  <b>{{ r.platform|capitalize }}</b> @{{ r.handle }}{% if r.expected_id %} <small>· expected id {{ r.expected_id }}</small>{% endif %}
+  <div class="cx-states">
+  {% for k in keys %}{% set s = r.states[k] %}
+    <span class="badge {{ 'cx-ok' if s[0] in ('VERIFIED','ON') else ('cx-bad' if s[0] in ('BLOCKED','UNSUPPORTED') else ('cx-warn' if s[0] in ('PARTIAL','READY FOR OWNER') else '')) }}"
+          title="{{ s[1] }}">{{ k|replace('_',' ') }}: {{ s[0] }}</span>
+  {% endfor %}
+  </div>
+  <div class="cx-note">{{ r.states['draft_supported'][1] }}</div>
+  {% if not r.handle.startswith('PENDING-') %}
+  <div class="cx-act">
+    {% if r.platform == 'youtube' %}<a class="btn" href="/connections/youtube/connect/{{ r.brand }}">Authorise this channel</a>{% endif %}
+    <form method="post" action="/connections/verify/{{ r.id }}"><button class="btn ghost">Verify identity</button></form>
+    {% if r.states['publishing_enabled'][0] == 'OFF' %}
+    <form method="post" action="/connections/publishing/{{ r.id }}"><input type="hidden" name="enable" value="on">
+      <input name="confirm" placeholder="type ENABLE" autocomplete="off"><button class="btn ghost">Allow drafts</button></form>
+    {% else %}
+    <form method="post" action="/connections/publishing/{{ r.id }}"><button class="btn ghost">Switch delivery OFF</button></form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+</section>
+{% endblock %}
