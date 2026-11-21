@@ -18,6 +18,7 @@ left on device", leaving both files behind indefinitely. The rules now are:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from . import media
 
+log = logging.getLogger("clipengine.livestore")
 HEADROOM = 512_000_000            # extra bytes kept free for the join and container overhead
 MIN_AGE_FOR_DISCARD = 600         # a file touched in the last 10 minutes is treated as possibly still being written
 DISCARD_NAMES = ("seg_", "recording.", "segments.", "join.")   # file-name prefixes a capture folder may contain
@@ -84,14 +86,44 @@ def segment_cap(settings) -> int:
 
 # ---- admission and rotation -----------------------------------------------------------------------------
 
-def admit(settings, active: int, free: int | None = None) -> tuple[bool, str]:
-    """May ANOTHER capture start? Every active capture (and the new one) needs room for its next segment plus join headroom."""
+def pending_join_bytes(db) -> int:
+    """Disk a still-unjoined earlier capture needs before it can finish (Session 15). Joining appends segment by segment,
+    so the real need is about the largest unjoined segment (on 20 Nov 2026 a 4.4 GB segment needed 4.4 GB free). A new
+    capture must not start while that room is not there: it would only make the stuck one harder to recover."""
+    need = 0
+    try:
+        for it in db.query("SELECT work_dir FROM source_items WHERE state IN ('awaiting_space','finalizing')"):
+            wd = Path(it["work_dir"] or "")
+            if wd.is_dir():
+                sizes = [f.stat().st_size for f in wd.glob("seg_*.ts")]
+                need = max(need, max(sizes, default=0))
+    except Exception:  # noqa: BLE001 - admission must not crash the monitor; fall back to the other checks
+        return 0
+    return need
+
+
+def disk_level(settings, free: int | None = None) -> tuple[str, str]:
+    """'ok' | 'warning' | 'critical' plus a plain sentence, for the dashboard and alerts (warning at DISK_WARN_GB, default 5)."""
+    free = _free(settings) if free is None else free
+    warn = getattr(settings, "disk_warn_gb", 5.0) * 1e9
+    crit = settings.disk_reserve_gb * 1e9 + segment_cap(settings) + HEADROOM
+    if free < crit:
+        return "critical", f"Only {free / 1e9:.1f} GB free: running captures will be stopped to keep what was recorded."
+    if free < warn:
+        return "warning", f"{free / 1e9:.1f} GB free (warning below {warn / 1e9:g} GB): free space before starting long recordings."
+    return "ok", f"{free / 1e9:.1f} GB free"
+
+
+def admit(settings, active: int, free: int | None = None, pending_join: int = 0) -> tuple[bool, str]:
+    """May ANOTHER capture start? Every active capture (and the new one) needs room for its next segment plus join headroom,
+    plus whatever an earlier unjoined capture still needs (`pending_join`, see pending_join_bytes)."""
     free = _free(settings) if free is None else free
     reserve = settings.disk_reserve_gb * 1e9
-    need = (active + 1) * (segment_cap(settings) + HEADROOM)
+    need = (active + 1) * (segment_cap(settings) + HEADROOM) + pending_join
     if free - reserve < need:
+        extra = f", plus {pending_join / 1e9:.1f} GB to finish joining an earlier recording" if pending_join else ""
         return False, (f"not enough free disk for {active + 1} live capture(s): about {need / 1e9:.1f} GB needed (next segment + join "
-                       f"headroom each) plus a {settings.disk_reserve_gb:g} GB reserve, {free / 1e9:.1f} GB free")
+                       f"headroom each{extra}) plus a {settings.disk_reserve_gb:g} GB reserve, {free / 1e9:.1f} GB free")
     used = dir_bytes(live_root(settings)) if live_root(settings).exists() else 0
     cap = settings.live_buffer_gb * 1e9
     if used + segment_cap(settings) > cap:
@@ -145,6 +177,13 @@ def join_segments_ts(segs: list[Path], trims: dict[str, float], out: Path, setti
             continue
         if not seg.is_file():
             continue
+        if state.get("current") and out.exists() and out.stat().st_size > state.get("size_before", 0):
+            # Session 16: an append was interrupted (process ended mid-write on 20 Nov). Undo it BEFORE anything else: the
+            # partial bytes are not recorded as done, the segment itself is intact, and without this the space check below
+            # fails forever (the partial copy holds the space) or, with room, the segment would be appended twice.
+            with open(out, "r+b") as fh:
+                fh.truncate(int(state["size_before"]))
+            log.warning("join: rolled back an interrupted append of %s to %d bytes", state["current"], state["size_before"])
         free = _free(settings) if settings is not None else shutil.disk_usage(out.parent).free
         need = seg.stat().st_size + HEADROOM
         if settings is not None:

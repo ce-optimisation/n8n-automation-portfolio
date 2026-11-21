@@ -211,7 +211,9 @@ class PackageService:
         c = self.youtube_http or httpx.Client(timeout=300)
         path = Path(clip["video_path"])
         size = path.stat().st_size
-        body = {"snippet": {"title": (pkg["title"] or "Clip")[:100], "description": pkg["description"] or "",
+        if not (pkg["title"] or "").strip():
+            raise PublishError("This package has no title; add one before uploading to YouTube.")
+        body = {"snippet": {"title": pkg["title"].strip()[:100], "description": pkg["description"] or "",
                             "tags": [t.lstrip("#") for t in (pkg["hashtags"] or "").split()][:15], "categoryId": "22"},
                 "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False}}
         h = {"Authorization": f"Bearer {oauth.access_token()}", "X-Upload-Content-Length": str(size),

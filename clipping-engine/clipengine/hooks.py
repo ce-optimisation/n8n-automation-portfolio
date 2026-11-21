@@ -354,9 +354,80 @@ def verify(c: Candidate, transcript: str, policy: dict, speaker: str | None = No
         if src and (NEGATION.search(src) or HEDGE.search(src)):
             c.warnings.append("the passage this label comes from is negated or hedged; the label names the subject only - "
                               "check it does not imply the opposite")
+    reject += strict_problems(c, plain, tx)
     c.warnings = [f"REJECT: {r}" for r in reject] + [w for w in c.warnings if not w.startswith("REJECT")]
     c.accepted = not reject
     return c
+
+
+# ---- Session 14 strict gate: "good title or no title" ----------------------------------------------
+# Audit of 27 live titles found ~11% usable. Every rule below comes from a real failure in that audit; when in doubt the
+# generator now returns NO title rather than a fragment.
+AD_READ = re.compile(r"\b(?:sponsor\w*|promo\w*|discount|use (?:the )?code|our code|coupon|% off|black friday|sale|"
+                     r"check (?:them|it|this|that) out|go check|grab your|link (?:in|below)|subscribe|use my link|"
+                     r"brought to you|affiliate|dot com|https?|www)\b|\.(?:com|app|io|tv|net|org)\b|\d+%\s*off", re.I)
+DANGLING_TAIL = set("then now here there essentially though anyway like you it them him her us me too also yet still "
+                    "again basically really kind sort bit lot some of".split())
+FIRST_PERSON = re.compile(r"^(?:i|i'm|i've|i'll|i'd|my|me|we|we're|we've|we'll|let's|let me|you|you're|your)\b", re.I)
+GERUND = re.compile(r"^[A-Za-z]{4,}ing$")
+DEICTIC = re.compile(r"\b(?:top|bottom)\s+(?:left|right)\b|\b(?:this|that) (?:one|thing|guy|photo|picture|video|screen)\b|"
+                     r"\bover here\b|\bon (?:the )?screen\b|\bright there\b|\blook at (?:this|that)\b|"
+                     r"\b(?:of|on|in) (?:these|those)\b", re.I)
+
+
+def strict_problems(c: Candidate, plain: str, tx: str) -> list[str]:
+    """Extra rejection reasons for claims, questions and topic labels. Empty list = passes the strict gate."""
+    out: list[str] = []
+    toks = _toks(plain)
+    if not toks:
+        return out
+    if AD_READ.search(plain) or AD_READ.search(c.support or "") or AD_READ.search(tx):
+        out.append("this clip contains an advert or sponsor read; no automatic title")
+    if re.search(r"damn|hell\b|crap", plain, re.I):
+        out.append("contains mild profanity")
+    if c.method == "claim":
+        if plain[:1].islower():
+            out.append("starts mid-sentence (lower-case), so it is a fragment")
+        tail_words = c.tail.split()
+        if tail_words and tail_words[0].lower().strip(",") not in {"and", "but", "so", "which", "because", "that", "while"} \
+                and (c.support or "").find(plain + ",") < 0:
+            out.append("only the front of a longer sentence; a title must be a complete statement")
+        if toks[-1].lower() in DANGLING_TAIL:
+            out.append("ends on a word that needs more after it")
+        if FIRST_PERSON.match(plain):
+            out.append("first/second-person speech is not a headline without its context")
+        if len(toks) < 4:
+            out.append("too short to be a complete statement")
+        if not any(_is_verbal(t) or t.lower() in {"is", "are", "was", "were", "has", "have", "had", "did", "does", "do"}
+                   for t in toks[1:]):
+            out.append("no verb, so it is not a statement")
+        if "," in plain and plain.rstrip().endswith(","):
+            out.append("ends on a comma")
+        if DEICTIC.search(plain):
+            out.append("points at something on screen or in the room (top right, this one...) that a headline cannot show")
+        if re.search(r",\s+(?:the|he|she|they|it|i|we|you|there)\b", plain, re.I):
+            out.append("two clauses run together with a comma: not one clear statement")
+        sup = _best_sentence(plain, tx)
+        if sup and re.search(r"\b(?:what if|imagine|suppose|hypothetical|scenario|let's say|for example|say that)\b", tx, re.I):
+            out.append("the clip discusses a hypothetical or example; a bare statement could be read as fact")
+    if c.method == "question":
+        if FIRST_PERSON.match(plain) or re.search(r"\b(?:i|we|you)\b", plain, re.I):
+            out.append("a first/second-person question needs the surrounding conversation")
+        if not any(t[:1].isupper() and i > 0 for i, t in enumerate(toks)):
+            out.append("a question that names no person, place or organisation is too generic to be a headline")
+    if c.method in ("topic", "neutral_topic"):
+        out.append("a bare topic label is not a headline (Session 15: good title or no title)")
+    if c.method in ("topic", "attributed_topic", "neutral_topic"):
+        body = re.sub(r"^\s*\w[\w' .-]*? on\s+", "", plain, count=1) if c.method == "attributed_topic" else plain
+        if any(GERUND.match(t) for t in _toks(body)):
+            out.append("the label contains an -ing word, so it is probably a verb fragment")
+        src = _best_sentence(body, tx)
+        if src and (NEGATION.search(src) or HEDGE.search(src)):
+            out.append("the passage this label comes from is negated or hedged; a bare label could imply the opposite")
+        btoks = _toks(body)
+        if len(btoks) < 2 or not any(t[:1].isupper() for t in btoks):
+            out.append("a label needs at least two words including a name, so it names a real subject")
+    return out
 
 
 # ---- scoring and selection ------------------------------------------------------------------------

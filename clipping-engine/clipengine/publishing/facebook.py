@@ -20,9 +20,10 @@ import httpx
 from .. import connections as cx
 from .base import NotConfigured, PublishError
 
-# Pages-only. In Meta's newer app system instagram_basic is NOT accepted as a plain scope ("Invalid Scopes", even with the
-# Instagram use case added); it only comes through a Facebook Login for Business configuration (config_id).
+# Instagram permissions must first be enabled in the Meta app. Only the Instagram
+# connection entry point requests them; the Pages-only entry point remains available.
 LOGIN_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
+INSTAGRAM_SCOPES = LOGIN_SCOPES + ",instagram_basic,instagram_content_publish"
 USER_KEY = "facebook:user"
 
 
@@ -45,11 +46,12 @@ class FacebookClient:
         return [k for k, v in (("META_APP_ID", self.app_id), ("META_APP_SECRET", self.app_secret),
                                ("META_REDIRECT_URI", self.redirect_uri)) if not v]
 
-    def authorize_url(self) -> tuple[str, dict]:
+    def authorize_url(self, include_instagram: bool = False) -> tuple[str, dict]:
         if not self.configured:
             raise NotConfigured("Facebook is not configured: set " + ", ".join(self.missing_config()) + " in .env")
         state = secrets.token_urlsafe(24)
-        q = {"client_id": self.app_id, "redirect_uri": self.redirect_uri, "state": state, "scope": LOGIN_SCOPES,
+        q = {"client_id": self.app_id, "redirect_uri": self.redirect_uri, "state": state,
+             "scope": INSTAGRAM_SCOPES if include_instagram else LOGIN_SCOPES,
              "response_type": "code"}
         return f"https://www.facebook.com/{self.version}/dialog/oauth?" + urllib.parse.urlencode(q), {"state": state}
 
@@ -68,7 +70,11 @@ class FacebookClient:
         long = self._json(self.http.get(f"{self.graph}/oauth/access_token", params={
             "grant_type": "fb_exchange_token", "client_id": self.app_id, "client_secret": self.app_secret,
             "fb_exchange_token": short["access_token"]}))
-        self.store.set(USER_KEY, {"access_token": long["access_token"], "scope": LOGIN_SCOPES})
+        permissions = self._json(self.http.get(f"{self.graph}/me/permissions", params={
+            "access_token": long["access_token"]}))
+        granted = sorted({p["permission"] for p in permissions.get("data", [])
+                          if p.get("status") == "granted" and p.get("permission")})
+        self.store.set(USER_KEY, {"access_token": long["access_token"], "scope": ",".join(granted)})
 
     def user_connected(self) -> bool:
         return bool(self.store.get(USER_KEY))
@@ -88,6 +94,7 @@ class FacebookClient:
         """For each brand's Facebook and Instagram destination: exact-id match, then store that brand's Page token under
         ``facebook:<brand>`` / ``instagram:<brand>``. Returns one result dict per destination; nothing is stored on a mismatch."""
         pages = self.managed_pages()
+        granted_scopes = (self.store.get(USER_KEY) or {}).get("scope", "")
         by_id = {str(p["id"]): p for p in pages}
         out = []
         for acct in db.query("SELECT * FROM social_accounts WHERE platform IN ('facebook','instagram') AND "
@@ -98,7 +105,7 @@ class FacebookClient:
                 page = by_id.get(str(acct["platform_id"]))
                 if res["state"] == "VERIFIED" and page and page.get("access_token"):
                     self.store.set(f"facebook:{acct['brand']}", {"access_token": page["access_token"], "page_id": page["id"],
-                                                                 "scope": LOGIN_SCOPES})
+                                                                 "scope": granted_scopes})
             else:                                   # instagram: must be the account linked to THIS brand's Page
                 fb = db.one("SELECT * FROM social_accounts WHERE platform='facebook' AND brand=?", (acct["brand"],))
                 page = by_id.get(str(fb["platform_id"])) if fb and fb["platform_id"] else None
@@ -107,7 +114,7 @@ class FacebookClient:
                 res = cx.verify_identity(db, acct["id"], observed)
                 if res["state"] == "VERIFIED" and page and page.get("access_token"):
                     self.store.set(f"instagram:{acct['brand']}", {"access_token": page["access_token"], "ig_user_id": ig["id"],
-                                                                  "username": ig.get("username"), "scope": LOGIN_SCOPES})
+                                                                  "username": ig.get("username"), "scope": granted_scopes})
             out.append({"brand": acct["brand"], "platform": acct["platform"], "handle": acct["handle"], **res})
         return out
 

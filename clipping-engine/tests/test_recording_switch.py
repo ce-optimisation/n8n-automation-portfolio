@@ -76,6 +76,35 @@ def test_off_stops_discovery_routing_downloads(settings):
     assert sup.route_pending() == 0
 
 
+def test_off_holds_already_queued_automatic_downloads_without_using_attempts(env):
+    """Session 16: jobs queued BEFORE the switch went off (found 20 Nov: jobs 95, 125, 148) must not download while OFF."""
+    from clipengine import ingest
+    s, db, q, mon, src = env
+    q.register("download_url", lambda ctx: ingest.handle_download_url(s, db, q, ctx))
+    auto = q.enqueue("download_url", max_attempts=6, payload={"url": "http://127.0.0.1/a.mp4", "source_item_id": 1})
+    disc = q.enqueue("download_url", max_attempts=6, payload={"url": "http://127.0.0.1/b.mp4", "discovered_item_id": 7})
+    db.update("jobs", auto, attempts=5)                               # one attempt left, as on the live engine
+    recording_switch.set_enabled(db, False)
+    assert q.run_one() and q.run_one()
+    for jid, used in ((auto, 5), (disc, 0)):
+        j = db.one("SELECT * FROM jobs WHERE id=?", (jid,))
+        assert j["status"] == "queued" and j["attempts"] == used and j["run_after"] > 0 and "Recording is switched OFF" in j["message"]
+    assert not q.run_one()                                             # both wait; nothing else runs
+
+
+def test_off_does_not_hold_manual_imports(settings):
+    from clipengine import ingest
+    from clipengine.jobs import JobContext
+    db = Database(settings.db_path)
+    recording_switch.set_enabled(db, False)
+    q = JobQueue(db)
+    jid = q.enqueue("download_url", payload={"url": "ftp://not-allowed.invalid/x"})
+    job = db.one("SELECT * FROM jobs WHERE id=?", (jid,))
+    with pytest.raises(Exception) as e:
+        ingest.handle_download_url(settings, db, q, JobContext(q, job))
+    assert "Deferred" not in type(e.value).__name__                    # it went on to the normal URL checks
+
+
 def test_button_toggles_the_switch_and_shows_the_state(settings):
     app = create_app(settings, start_worker=False)
     with TestClient(app) as c:
@@ -93,3 +122,18 @@ def test_button_toggles_the_switch_and_shows_the_state(settings):
         r = c.post("/recording/toggle", data={"enable": "1"}, headers={"referer": "http://testserver//evil.example"},
                    follow_redirects=False)
         assert r.headers["location"] == "/"                    # a protocol-relative path never redirects off-site
+
+
+def test_off_skips_source_polling_but_guards_still_run(env, monkeypatch):
+    """Session 16: abandoned timed-out lookups piled up while Recording was OFF and slowed the dashboard to minutes."""
+    s, db, q, mon, src = env
+    polled, supervised = [], []
+    monkeypatch.setattr(mon, "_poll_with_timeout", lambda sid: polled.append(sid))
+    monkeypatch.setattr(mon, "supervise", lambda: supervised.append(1))
+    monkeypatch.setattr(mon, "_retry_awaiting_space", lambda: None)
+    recording_switch.set_enabled(db, False)
+    mon.tick()
+    assert polled == [] and supervised == [1]
+    recording_switch.set_enabled(db, True)
+    mon.tick()
+    assert polled == [src["id"]] and supervised == [1, 1]

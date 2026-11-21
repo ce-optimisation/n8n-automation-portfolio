@@ -169,6 +169,9 @@ def test_heartbeat_records_when_the_engine_was_not_running(settings):
 def test_dashboard_states_problems_plainly(settings, monkeypatch):
     from clipengine import ingest as ing
     monkeypatch.setattr(ing, "resolve_host", lambda h: ["93.184.216.34"])
+    from clipengine import maintenance as _mt          # Session 16: do not depend on the test machine's real free disk
+    _real = _mt.storage_report
+    monkeypatch.setattr(_mt, "storage_report", lambda s: {**_real(s), "disk_free_gb": 100.0, "warning": False})
     app = create_app(settings, start_worker=False)
     core, c = app.state.core, TestClient(app)
     assert "nothing needs your attention" in c.get("/").text

@@ -33,7 +33,7 @@ DRAFT_WORKFLOW = {
                              "draft is editable and publishable in Meta Business Suite is not documented: verify with one "
                              "authorised test."),
     "instagram": (UNSUPPORTED, "The API has no drafts: media_publish is PUBLIC. Use the local staging/export package and post "
-                               "in the Instagram app. Automatic publishing stays disabled (INSTAGRAM_PUBLIC_PUBLISH off)."),
+                               "in the Instagram app."),
     "tiktok": (NOT_TESTED, "Content Posting API inbox upload (scope video.upload) delivers to the creator's TikTok inbox to "
                            "finish in the app; max 5 pending shares per 24 h. Developer-app audit status is unconfirmed."),
 }
@@ -220,6 +220,9 @@ def build_matrix(db, settings, store=None) -> list[dict]:
         need = REQUIRED_SCOPES[plat]
         app = _dev_app(settings, plat)
         draft = DRAFT_WORKFLOW[plat]
+        if plat == "instagram":
+            switch = "on" if getattr(settings, "instagram_public_publish", False) else "off"
+            draft = (UNSUPPORTED, f"Instagram has no draft API. The engine public publishing switch is {switch}.")
         pkg = db.one("SELECT COUNT(*) n FROM publication_packages WHERE platform=? AND handoff_state IS NOT NULL "
                      "AND handoff_method='api'", (plat,))
         states = {

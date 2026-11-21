@@ -87,6 +87,35 @@ def check(settings) -> list[str]:
     return problems
 
 
+_INSTANCE_LOCK = None     # kept open for the life of the process; the OS releases it when the process ends (even if killed)
+
+
+def acquire_instance_lock(data_dir) -> bool:
+    """Exclusive, non-blocking lock on <data>/engine.lock. False if another live engine holds it."""
+    global _INSTANCE_LOCK
+    from pathlib import Path
+    p = Path(data_dir) / "engine.lock"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(p, "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return False
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()).encode())
+    fh.flush()
+    _INSTANCE_LOCK = fh
+    return True
+
+
 def port_free(host: str, port: int) -> bool:
     """True unless something is already listening on the port."""
     target = "127.0.0.1" if host in ("0.0.0.0", "localhost") else host
@@ -303,6 +332,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Port {busy} is used by another program; using port {settings.port} instead. "
               f"(TikTok/Instagram sign-in redirect addresses use port {busy}; set CLIPENGINE_PORT to a free port "
               "and update them if you rely on publishing.)")
+    if not acquire_instance_lock(settings.data_dir):
+        # Session 16: on 20 Nov a second engine started its monitor and workers before its web port failed to bind,
+        # so two supervisors shared one queue. The lock is taken BEFORE any worker or monitor starts.
+        print("Another Clipping Engine is already running on this data folder; not starting a second one.")
+        return 0
     url = settings.base_url()
     import uvicorn
     from .web.app import create_app

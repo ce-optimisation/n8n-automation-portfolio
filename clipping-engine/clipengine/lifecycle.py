@@ -151,33 +151,99 @@ class Lifecycle:
         return {"deleted": True, "reason": "all gates passed", "gates": gates}
 
     def retention(self, now: float | None = None) -> dict:
-        """Final-clip retention: rejected → after REJECTED_CLIP_HOURS; published → after PUBLISHED_CLIP_DAYS;
-        unreviewed and approved-unpublished → kept; owner 'keep' → never expires. Local files and the
-        engine's own cloud copies are removed; the database record, transcript and provenance stay."""
+        """Retry eligible rejected files locally. LocalCleanup owns published retention."""
         now = now or time.time()
         done = {"rejected": 0, "published": 0}
         rej = self.db.query("SELECT * FROM clips WHERE status='rejected' AND retain=0 AND files_deleted_at IS NULL "
                             "AND reviewed_at IS NOT NULL AND reviewed_at < ?",
                             (now - self.settings.rejected_clip_hours * 3600,))
-        pub = self.db.query("SELECT * FROM clips WHERE published_at IS NOT NULL AND retain=0 AND files_deleted_at IS NULL "
-                            "AND published_at < ?", (now - self.settings.published_clip_days * 86400,))
-        for kind, rows in (("rejected", rej), ("published", pub)):
-            for c in rows:
-                self._delete_clip_files(c)
-                done[kind] += 1
+        for clip in rej:
+            result = self.discard_rejected(clip["id"])
+            done["rejected"] += int(result["deleted"])
         return done
 
-    def _delete_clip_files(self, c) -> None:
+    def discard_rejected(self, clip_id: int) -> dict:
+        """Reject & delete (Session 15/16). Deletes the LOCAL files of one rejected clip now: every render revision folder of
+        that clip (video, title-free master, thumbnail, captions, temp files). Never touches: the source recording, other clips,
+        Google Drive copies (no automatic cloud deletion), the database row, transcript or review decision.
+
+        Refused (nothing deleted, reason returned and audited) when the clip: is not rejected; is marked keep; was ever published
+        or has a publish attempt / publication package past 'prepared'; has a queued or running job; or is already deleted."""
         import shutil
-        if c["video_path"]:
-            d = Path(c["video_path"]).parent
-            if self.settings.clips_dir.resolve() in d.resolve().parents:
-                shutil.rmtree(d, ignore_errors=True)
-        self.cloud.delete_clip_objects(c["id"])        # protected: a no-op for kept/published clips (see cloud)
-        kept_master = c["status"] != "rejected" and self.cloud.clip_verified(c["id"])
-        self.db.update("clips", c["id"], video_path=None, thumb_path=None, srt_path=None, ass_path=None,
-                       files_deleted_at=time.time(),
-                       **({"local_deleted_at": time.time(), "cleanup_state": "LOCAL_DELETED"} if kept_master else {}))
+        with self.db.tx() as conn:
+            c = conn.execute("SELECT * FROM clips WHERE id=?", (clip_id,)).fetchone()
+            if not c or c["status"] != "rejected":
+                return {"deleted": False, "reason": "not a rejected clip"}
+            if c["files_deleted_at"]:
+                return {"deleted": False, "reason": "already deleted"}
+            reason = self._reject_delete_blocker(c)
+            freed = 0
+            folders = 0
+            if not reason:
+                try:
+                    for folder in self._own_clip_dirs(c):
+                        sizes = {f: f.stat().st_size for f in folder.rglob("*") if f.is_file() and not f.is_symlink()}
+                        try:
+                            shutil.rmtree(folder)
+                        finally:
+                            freed += sum(size for f, size in sizes.items() if not f.exists())
+                        folders += 1
+                except (OSError, ValueError) as exc:
+                    reason = str(exc)
+            if reason:
+                kind = "held"
+                detail = f"Reject cleanup held: {reason}; {freed} bytes removed"
+            else:
+                conn.execute("UPDATE clips SET video_path=NULL, thumb_path=NULL, srt_path=NULL, ass_path=NULL, "
+                             "files_deleted_at=? WHERE id=?", (time.time(), clip_id))
+                kind = "deleted"
+                detail = f"Removed {folders} folders, {freed} bytes; cloud copies untouched"
+            conn.execute("INSERT INTO cleanup_events(clip_id,ts,kind,detail) VALUES(?,?,?,?)",
+                         (clip_id,time.time(),kind,detail[:500]))
+        return {"deleted": not reason, "reason": reason, "bytes": freed, "folders": folders}
+
+    def _reject_delete_blocker(self, c) -> str:
+        if c["retain"] or c["keep_local"] or c["cleanup_hold"]:
+            return "marked keep"
+        if c["published_at"]:
+            return "clip was published"
+        cid = c["id"]
+        if self.db.one("SELECT COUNT(*) n FROM jobs WHERE clip_id=? AND status IN ('queued','running')", (cid,))["n"]:
+            return "a job for this clip is queued or running"
+        if self.db.one("SELECT COUNT(*) n FROM publish_attempts WHERE clip_id=?", (cid,))["n"]:
+            return "clip has publish attempts"
+        if self.db.one("SELECT COUNT(*) n FROM publication_packages WHERE clip_id=? AND "
+                       "(upload_state != 'not_started' OR status NOT IN ('prepared','failed'))", (cid,))["n"]:
+            return "clip has an upload in progress or done"
+        return ""
+
+    def _own_clip_dirs(self, c) -> list:
+        """Only this clip's own revision folders, only inside the engine's clips folder, never a folder another clip points at."""
+        root = self.settings.clips_dir.resolve()
+        base = self.settings.clips_dir / f"rec{c['recording_id']:05d}"
+        if base.resolve().parent != root:
+            raise ValueError("recording folder is outside managed storage")
+        protected = set()
+        for row in self.db.query("SELECT video_path,thumb_path,srt_path,ass_path FROM clips WHERE id != ?", (c["id"],)):
+            protected.update(Path(value).resolve() for value in row if value)
+        protected.update(Path(row["file_path"]).resolve() for row in self.db.query(
+            "SELECT file_path FROM recordings WHERE file_path IS NOT NULL") if row["file_path"])
+        out = []
+        prefix = f"clip{c['id']:05d}_r"
+        for folder in sorted(base.glob(prefix + "*")):
+            if not folder.name[len(prefix):].isdigit() or not folder.is_dir():
+                continue
+            resolved = folder.resolve()
+            if resolved != folder.absolute() or any(resolved == p or resolved in p.parents for p in protected):
+                raise ValueError("revision folder is linked or contains shared media")
+            out.append(folder)
+        return out
+
+    def _audit(self, clip_id: int, kind: str, detail: str) -> None:
+        try:
+            self.db.insert("cleanup_events", clip_id=clip_id, ts=time.time(), kind=kind, detail=detail[:500])
+        except Exception as e:  # noqa: BLE001  (audit must never break the review action)
+            log.warning("cleanup audit for clip %s failed: %s", clip_id, e)
 
     def run(self) -> dict:
         out = {"raw_deleted": 0, "held": 0}

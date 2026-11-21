@@ -54,6 +54,7 @@ def probe(path: Path) -> dict:
         width, height = height, width
     return {
         "duration": duration, "width": width, "height": height, "fps": round(fps, 3),
+        "sample_aspect_ratio": (v or {}).get("sample_aspect_ratio"),
         "has_video": v is not None, "has_audio": a is not None,
         "video_codec": (v or {}).get("codec_name"), "audio_codec": (a or {}).get("codec_name"),
         "format_name": fmt.get("format_name"), "tags": fmt.get("tags", {}),

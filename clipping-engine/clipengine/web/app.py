@@ -72,8 +72,14 @@ class App:
         self.youtube = YouTubeClient(settings.youtube_oauth_client_id or settings.google_client_id,
                                      settings.youtube_oauth_client_secret or settings.google_client_secret, self.tokens)
         self.queue.register("download_model", self._download_model)
+        from ..publishing.instagram_reels import InstagramReelsPublisher
+        self.instagram_reels = InstagramReelsPublisher(
+            lambda brand: (self.tokens.get(f"instagram:{brand}") or {}).get("access_token"),
+            version=settings.meta_graph_version, public_enabled=bool(settings.instagram_public_publish),
+            user_token=lambda: (self.tokens.get("facebook:user") or {}).get("access_token"))
         self.queue.register(autodeliver.KIND, lambda ctx: autodeliver.handle(
-            settings, self.db, {"youtube": self.youtube, "facebook": self.facebook}, ctx))
+            settings, self.db, {"youtube": self.youtube, "facebook": self.facebook,
+                                "instagram": self.instagram_reels}, ctx))
         self.phone_stop = __import__("threading").Event()
         self.maintenance = maintenance.Maintenance(settings, self.db, queue=self.queue)
         self.inbox = inbox.InboxWatcher(settings, self.db, self.pipeline)
@@ -106,6 +112,9 @@ class App:
         self.maintenance.extra.append(self.lifecycle.run)
         self.cleanup = cleanup.LocalCleanup(settings, self.db, self.queue, self.cloud)
         self.maintenance.extra.append(self.cleanup.run)
+        from .. import account_analytics
+        self.maintenance.extra.append(lambda: account_analytics.collect(
+            self.db, self.youtube, self.tokens, self.settings.meta_graph_version))
         self.notifier = notify.Notifier(settings, self.db, self.queue, self.tokens)
         self.queue.failure_listeners.append(
             lambda job: notify.on_job_failed(self.settings, self.db, self.queue, job))
@@ -216,12 +225,20 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         q = {k: v for k, v in (("skip", skip), ("msg", msg)) if v}
         return RedirectResponse("/m" + ("?" + _ue(q) if q else ""), status_code=303)
 
+    def _has_clean(c) -> bool:
+        from ..render import has_clean_master
+        try:
+            return has_clean_master(core.pipeline.clip_dir(c))
+        except Exception:      # noqa: BLE001 - a display helper must never break the review page
+            return False
+
     @app.get("/m", response_class=HTMLResponse)
     def mobile_review(request: Request, skip: str = "", msg: str = ""):
         skipped = {int(x) for x in skip.split(",") if x.strip().isdigit()}
         rest = [c for c in phone.phone_queue(core.db) if c["id"] not in skipped]
         c = rest[0] if rest else None
-        ctx = {"c": c, "left": len(rest), "skip": skip, "msg": msg[:200], "dests": [], "manual": [], "creator": "", "brand": ""}
+        ctx = {"c": c, "left": len(rest), "skip": skip, "msg": msg[:200], "dests": [], "manual": [], "creator": "", "brand": "",
+               "counts": phone.queue_counts(core.db)}
         if c:
             if not c["review_opened_at"]:
                 core.db.update("clips", c["id"], review_opened_at=time.time())
@@ -232,15 +249,46 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             ctx.update(dests=dests_, modes={a["id"]: delivery.mode_for(core.db, a["id"]) for a in dests_},
                        manual=autodeliver.manual_platforms(core.db, c),
                        creator=cr["name"] if cr else "", brand=b["name"] if b else "", rec=rec,
-                       duration=round((c["end"] or 0) - (c["start"] or 0)))
+                       duration=round((c["end"] or 0) - (c["start"] or 0)),
+                       can_title=_has_clean(c))
+            ctx["any_public"] = any(ctx["modes"].get(a["id"]) == "public" for a in dests_)
+            try:
+                alts = json.loads(c["title_json"] or "{}").get("alternatives", []) if c["title_json"] else []
+            except ValueError:
+                alts = []
+            ctx["alts"] = [a for a in alts if a and a != c["title"]][:3]
+        try:
+            from .. import livestore
+            lvl, txt = livestore.disk_level(settings)
+            ctx["disk"] = txt if lvl != "ok" else ""
+        except Exception:      # noqa: BLE001 - a banner must never break the review page
+            ctx["disk"] = ""
         return templates.TemplateResponse(request, "mobile.html", ctx)
+
+    @app.post("/m/{cid}/description")
+    def mobile_description(cid: int, text: str = Form(""), skip: str = Form("")):
+        """Edit the description that will be sent with the clip (only while it is still waiting for review)."""
+        c = _clip(cid)
+        if c["status"] != "ready":
+            return _mobile_redirect(skip, "That clip was already decided.")
+        core.db.update("clips", cid, description=text.strip()[:2000])
+        return _mobile_redirect(skip, "Description saved.")
+
+    @app.get("/m/results", response_class=HTMLResponse)
+    def mobile_results(request: Request):
+        """What happened to recently approved clips, per destination (published, private, failed, waiting)."""
+        rows = []
+        for c in core.db.query("SELECT * FROM clips WHERE status IN ('approved','published') ORDER BY reviewed_at DESC LIMIT 15"):
+            atts = core.db.query("SELECT platform, status, detail FROM publish_attempts WHERE clip_id=? ORDER BY id", (c["id"],))
+            jobs = core.db.query("SELECT status, message FROM jobs WHERE kind='deliver_clip' AND clip_id=?", (c["id"],))
+            rows.append({"c": c, "attempts": atts, "jobs": jobs})
+        return templates.TemplateResponse(request, "mobile_results.html", {"rows": rows})
 
     @app.post("/m/{cid}/approve")
     def mobile_approve(cid: int, skip: str = Form("")):
         c = _clip(cid)
-        if c["status"] != "ready":
+        if not record_approval(c):
             return _mobile_redirect(skip, "That clip was already decided.")
-        core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_seconds=_review_seconds(c))
         res = autodeliver.prepare_and_enqueue(core.db, core.queue, cid)
         if res["queued"]:
             txt = "Approved. Sending to " + ", ".join(
@@ -249,12 +297,66 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             txt = "Approved (not uploaded: " + (res["reason"] or "no destination") + ")"
         return _mobile_redirect(skip, txt)
 
-    @app.post("/m/{cid}/reject")
-    def mobile_reject(cid: int, skip: str = Form("")):
+    def record_approval(c, note: str = "") -> bool:
+        with core.db.tx() as conn:
+            current = conn.execute("SELECT * FROM clips WHERE id=?", (c["id"],)).fetchone()
+            if (current["status"] != c["status"] or current["status"] not in ("ready", "approved")
+                    or not current["video_path"] or not Path(current["video_path"]).is_file()):
+                return False
+            conn.execute("UPDATE clips SET status='approved', reviewed_at=?, review_note=?, review_seconds=? WHERE id=?",
+                         (time.time(), note or current["review_note"], _review_seconds(current), current["id"]))
+            return True
+
+    def reject_reviewable(cid: int, note: str = ""):
         c = _clip(cid)
-        if c["status"] == "ready":
-            core.db.update("clips", cid, status="rejected", reviewed_at=time.time(), review_seconds=_review_seconds(c))
-        return _mobile_redirect(skip, "Rejected.")
+        with core.db.tx() as conn:
+            changed = conn.execute(
+                "UPDATE clips SET status='rejected', reviewed_at=?, review_note=?, review_seconds=? "
+                "WHERE id=? AND status IN ('ready','failed')",
+                (time.time(), note or c["review_note"], _review_seconds(c), cid),
+            ).rowcount
+        if not changed and _clip(cid)["status"] != "rejected":
+            return False, "Not rejected. This clip is no longer awaiting review. Its files were kept."
+        result = core.lifecycle.discard_rejected(cid)
+        if result.get("deleted") and result.get("bytes"):
+            return True, f"Rejected and deleted ({result['bytes']:,} bytes freed)."
+        if result.get("deleted") or result.get("reason") == "already deleted":
+            return True, "Rejected. No local video files remained to remove."
+        if result.get("bytes"):
+            return True, f"Rejected. {result['bytes']:,} bytes freed. Remaining files kept ({result['reason']})."
+        return True, f"Rejected. Local files kept ({result['reason']})."
+
+    @app.post("/m/{cid}/reject")
+    def mobile_reject(request: Request, cid: int, skip: str = Form("")):
+        _, message = reject_reviewable(cid)
+        if request.headers.get("HX-Request") == "true":
+            return mobile_review(request, skip, message)
+        return _mobile_redirect(skip, message)
+
+    @app.post("/m/{cid}/title/remove")
+    def mobile_title_remove(cid: int, skip: str = Form("")):
+        """Take the on-screen title off without re-rendering the clip (instant; locks the removal)."""
+        c = _clip(cid)
+        if c["status"] != "ready":
+            return _mobile_redirect(skip, "That clip was already decided.")
+        try:
+            core.pipeline.remove_clip_title(cid)
+        except (FileNotFoundError, PermanentError) as e:
+            return _mobile_redirect(skip, f"Could not remove the title: {e}")
+        return _mobile_redirect(skip, "Title removed. The video is back to no title.")
+
+    @app.post("/m/{cid}/title")
+    def mobile_title_set(cid: int, text: str = Form(""), skip: str = Form("")):
+        """Write your own title; it is drawn onto the clean video in the background (the clip is not re-rendered)."""
+        c = _clip(cid)
+        if c["status"] != "ready":
+            return _mobile_redirect(skip, "That clip was already decided.")
+        try:
+            r = core.pipeline.request_title(cid, text)
+        except (FileNotFoundError, PermanentError) as e:
+            return _mobile_redirect(skip, f"Could not change the title: {e}")
+        return _mobile_redirect(skip, "Title saved. It will be on the video in about a minute; refresh to see it."
+                                if r.get("job") else "Title removed.")
 
     @app.get("/phone", response_class=HTMLResponse)
     def phone_page(request: Request, msg: str = "", err: str = ""):
@@ -589,19 +691,19 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.post("/clips/{cid}/approve")
     def approve(request: Request, cid: int, note: str = Form("")):
         c = _clip(cid)
-        if c["status"] not in ("ready", "rejected", "approved"):
-            return _back(request, cid, err="Only rendered clips can be approved.")
-        core.db.update("clips", cid, status="approved", reviewed_at=time.time(), review_note=note or c["review_note"],
-                       review_seconds=_review_seconds(c))
+        if not record_approval(c, note):
+            return _back(request, cid, err="The clip changed or the rendered file is unavailable. Refresh the review queue.")
         autodeliver.prepare_and_enqueue(core.db, core.queue, cid)       # owner's approval = the command; gates re-checked there
         return _back(request, cid)
 
     @app.post("/clips/{cid}/reject")
     def reject(request: Request, cid: int, note: str = Form("")):
-        c = _clip(cid)
-        core.db.update("clips", cid, status="rejected", reviewed_at=time.time(), review_note=note or c["review_note"],
-                       review_seconds=_review_seconds(c))
-        return _back(request, cid)
+        decided, message = reject_reviewable(cid, note)
+        if request.headers.get("HX-Request") == "true":
+            if not decided:
+                return HTMLResponse(html_escape(message), headers={"HX-Reswap": "beforeend"})
+            return HTMLResponse(f'<p role="status">{html_escape(message)}</p>')
+        return _back(request, cid, msg=message)
 
     def _review_seconds(c):
         """Seconds between first opening the clip and the decision (capped at 30 min per clip)."""
@@ -664,8 +766,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return f"{ingest.safe_filename(rec['title'], 40)}_clip{cid}_{int(c['start'])}s.{ext}"
 
     @app.get("/clips/{cid}/video")
-    def clip_video(cid: int):
-        return FileResponse(_clip_file(cid, "video_path"), media_type="video/mp4")
+    def clip_video(request: Request, cid: int):
+        from .review_media import review_video
+        return review_video(_clip_file(cid, "video_path"), request)
 
     @app.get("/clips/{cid}/thumb")
     def clip_thumb(cid: int):
@@ -1075,7 +1178,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.post("/jobs/{jid}/retry")
     def job_retry(request: Request, jid: int):
         job = core.db.one("SELECT * FROM jobs WHERE id = ?", (jid,))
-        if job and core.queue.retry(jid) and job["clip_id"]:
+        if job and core.queue.retry(jid) and job["clip_id"] and job["kind"] == "render_clip":
+            # Session 16: only a render retry re-renders. Retrying a delivery must leave the approved clip as it is.
             core.db.update("clips", job["clip_id"], status="pending_render", error=None)
         if job and job["recording_id"] and job["kind"] == "process_recording":
             core.db.update("recordings", job["recording_id"], status="queued", error=None)
@@ -1209,6 +1313,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
 
     @app.get("/connect/{platform}")
     def connect(platform: str):
+        if platform == "instagram" and core.instagram.mode == "facebook":
+            # One Meta login, with exact-id isolation for all six brand destinations.
+            return RedirectResponse("/connections/facebook/connect?instagram=true", status_code=303)
         client = {"tiktok": core.tiktok, "instagram": core.instagram}.get(platform)
         if not client:
             raise HTTPException(404)
@@ -1225,19 +1332,30 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             core.tokens.delete(platform)
         return RedirectResponse("/settings?msg=Disconnected", status_code=303)
 
+    def oauth_result(request: Request, result):
+        # A 200 document ends the provider's cross-site redirect chain. The owner's
+        # explicit same-site link can then send the existing Strict cookie. Never
+        # mint a dashboard session from OAuth state or relax the password gate.
+        target = result.headers.get("location", "/connections")
+        parsed = urlparse(target)
+        if parsed.scheme or parsed.netloc or parsed.path not in ("/connections", "/settings"):
+            target = "/connections"
+        return templates.TemplateResponse(request, "oauth_result.html", {"target": target, "counts": None})
+
     @app.get("/oauth/{platform}/callback")
-    def oauth_callback(platform: str, code: str = "", state: str = "", error: str = "",
+    def oauth_callback(request: Request, platform: str, code: str = "", state: str = "", error: str = "",
                        error_description: str = ""):
         st = core.oauth_pop(state) if state else None
+        if not st or st["platform"] != platform or time.time() - st["ts"] > 900:
+            return oauth_result(request, _settings_redirect(err="Invalid or expired OAuth state; try connecting again."))
         if error:
             msg = f"Authorisation declined or refused by {platform}: {error_description or error}"
             core.db.set_kv(f"oauth_error.{platform}", msg)
-            return _settings_redirect(err=msg)
-        if not st or st["platform"] != platform or time.time() - st["ts"] > 900:
-            return RedirectResponse("/settings?err=Invalid or expired OAuth state; try connecting again.",
-                                    status_code=303)
+            return oauth_result(request, _settings_redirect(err=msg))
+        if not code:
+            return oauth_result(request, _settings_redirect(err="No authorization code received; try connecting again."))
         if platform in ("facebook", "youtube"):
-            return _connections_callback(platform, code, st)
+            return oauth_result(request, _connections_callback(platform, code, st))
         try:
             if platform == "tiktok":
                 core.tiktok.exchange_code(code, st.get("verifier"))
@@ -1245,12 +1363,12 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                 core.instagram.exchange_code(code)
         except (PublishError, NotConfigured, PermanentError) as e:
             core.db.set_kv(f"oauth_error.{platform}", str(e))
-            return _settings_redirect(err=str(e))
-        except Exception as e:  # noqa: BLE001 - network problems etc. are shown, not crashed on
+            return oauth_result(request, _settings_redirect(err=str(e)))
+        except Exception as e:
             core.db.set_kv(f"oauth_error.{platform}", f"{type(e).__name__}: {e}")
-            return _settings_redirect(err=f"Could not complete sign-in: {e}")
+            return oauth_result(request, _settings_redirect(err=f"Could not complete sign-in: {e}"))
         core.db.execute("DELETE FROM meta WHERE key = ?", (f"oauth_error.{platform}",))
-        return _settings_redirect(msg=f"{platform} connected")
+        return oauth_result(request, _settings_redirect(msg=f"{platform} connected"))
 
     # ---- Session 13: per-destination connections (verify identity; publishing stays OFF) ---------------------------
     def _conn_redirect(**q):
@@ -1272,7 +1390,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             acct = core.db.one("SELECT * FROM social_accounts WHERE platform='youtube' AND brand=?", (brand,))
             res = core.youtube.verify(core.db, acct["id"])
             if res["state"] == "VERIFIED":
-                return _conn_redirect(msg=f"YouTube ({brand}) connected and verified. Publishing is still OFF.")
+                return _conn_redirect(msg=f"YouTube ({brand}) connected and verified. Delivery settings were not changed.")
             return _conn_redirect(err=f"YouTube ({brand}) was NOT connected: {res['reason']} Authorise again and pick the "
                                       "correct channel on Google's channel chooser.")
         except (PublishError, NotConfigured, PermanentError) as e:
@@ -1290,9 +1408,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                     ig_public=settings.instagram_public_publish)
 
     @app.get("/connections/facebook/connect")
-    def connections_facebook_connect():
+    def connections_facebook_connect(instagram: bool = False):
         try:
-            url, state = core.facebook.authorize_url()
+            url, state = core.facebook.authorize_url(include_instagram=instagram)
         except NotConfigured as e:
             return _conn_redirect(err=str(e))
         core.oauth_put(state["state"], {"platform": "facebook", **state})
@@ -1350,8 +1468,11 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         acct = core.db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
         if not acct:
             raise HTTPException(404)
-        if acct["platform"] not in ("facebook", "youtube"):
-            return _conn_redirect(err="Public mode applies to Facebook and YouTube destinations only.")
+        if acct["platform"] == "instagram":
+            if mode == "public" and not settings.instagram_public_publish:
+                return _conn_redirect(err="Instagram public mode needs INSTAGRAM_PUBLIC_PUBLISH switched on first.")
+        elif acct["platform"] not in ("facebook", "youtube"):
+            return _conn_redirect(err="Public mode applies to Facebook, YouTube and Instagram destinations only.")
         if mode == "public":
             if not acct["publishing_enabled"]:
                 return _conn_redirect(err="Switch delivery on for this destination first.")

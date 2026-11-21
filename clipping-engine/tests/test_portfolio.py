@@ -538,7 +538,12 @@ def test_title_renders_into_a_real_clip_without_changing_the_video_frame(setting
                                 title="The *TRUTH* about **it**", title_style=titles.TitleStyle(enabled=True))
     assert plain["title"] is False and titled["title"] is True
     assert (titled["probe"]["width"], titled["probe"]["height"]) == (1080, 1920) == (plain["probe"]["width"], plain["probe"]["height"])
-    assert "Style: Title,Anton,160" in (tmp_path / "b" / "captions.ass").read_text(encoding="utf-8")
+    # Session 14/15: with the title-free master on (default) the title is drawn in a second step from title.ass and captions.ass stays
+    # title-free; with it off the title is in captions.ass as before. Either way the title style is present in the render inputs.
+    ass = tmp_path / "b" / ("title.ass" if render.has_clean_master(tmp_path / "b") else "captions.ass")
+    assert "Style: Title,Anton,160" in ass.read_text(encoding="utf-8")
+    if render.has_clean_master(tmp_path / "b"):
+        assert "Style: Title" not in (tmp_path / "b" / "captions.ass").read_text(encoding="utf-8")
 
 
 def test_short_videos_are_skipped_when_a_minimum_is_set_and_long_ones_still_queue(settings, db):

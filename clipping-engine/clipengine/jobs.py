@@ -33,6 +33,15 @@ class PermanentError(Exception):
     """An error that retrying will not fix; reported to the owner as-is."""
 
 
+class Deferred(Exception):
+    """Not an error: the job may not run yet (e.g. the owner switched Recording OFF). It goes back to the queue after
+    `retry_after` seconds WITHOUT using up one of its attempts (Session 16)."""
+
+    def __init__(self, *args, retry_after: float = 1800):
+        super().__init__(*args)
+        self.retry_after = retry_after
+
+
 class JobContext:
     def __init__(self, queue: "JobQueue", job: sqlite3.Row):
         self.queue = queue
@@ -241,6 +250,11 @@ class JobQueue:
                 self.db.update("jobs", job["id"], status="done", progress=1.0, finished_at=time.time(),
                                message="Completed", error=None)
                 ctx.log("Completed")
+        except Deferred as exc:
+            self.db.execute("UPDATE jobs SET status='queued', attempts=MAX(0, attempts-1), run_after=?, message=?, "
+                            "updated_at=? WHERE id=?", (time.time() + exc.retry_after, f"Waiting: {exc}"[:300],
+                                                        time.time(), job["id"]))
+            ctx.log(f"Deferred for {exc.retry_after:.0f}s (no attempt used): {exc}")
         except Exception as exc:  # noqa: BLE001 - every failure must be recorded
             tb = traceback.format_exc()
             transient = isinstance(exc, TransientError)

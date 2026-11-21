@@ -54,6 +54,8 @@ def run_once(settings: Settings, db: Database, queue=None) -> dict:
     running = db.one("SELECT COUNT(*) n FROM jobs WHERE status='running'")["n"]
     if not running:
         for f in settings.work_dir.glob("*"):
+            if f.name.casefold() == "live":
+                continue  # Preserved captures and interrupted joins live here.
             try:
                 if now - f.stat().st_mtime > 86400:
                     shutil.rmtree(f, ignore_errors=True) if f.is_dir() else f.unlink(missing_ok=True)
@@ -67,6 +69,8 @@ def run_once(settings: Settings, db: Database, queue=None) -> dict:
             for pat in ("*.part", "*.ytdl", "*.tmp", "*.tmp.wav"):
                 for f in root.rglob(pat):
                     try:
+                        if (settings.work_dir / "live") in f.parents:
+                            continue
                         if f.is_file() and now - f.stat().st_mtime > 3 * 86400:
                             f.unlink(missing_ok=True)
                             actions["partial_downloads_removed"] = actions.get("partial_downloads_removed", 0) + 1
@@ -77,9 +81,9 @@ def run_once(settings: Settings, db: Database, queue=None) -> dict:
     if days > 0:
         for c in db.query("SELECT id, video_path FROM clips WHERE status='rejected' AND video_path IS NOT NULL"
                           " AND reviewed_at < ?", (now - days * 86400,)):
-            shutil.rmtree(Path(c["video_path"]).parent, ignore_errors=True)
-            db.update("clips", c["id"], video_path=None, thumb_path=None, srt_path=None, ass_path=None)
-            actions["rejected_renders_removed"] += 1
+            from .lifecycle import Lifecycle
+            result = Lifecycle(settings, db, queue, None).discard_rejected(c["id"])
+            actions["rejected_renders_removed"] += int(result["deleted"])
     # 3. Originals: only under an explicit retention policy, and only when fully processed.
     odays = settings.delete_originals_after_days
     if odays > 0:

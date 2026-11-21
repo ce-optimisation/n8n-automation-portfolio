@@ -50,16 +50,36 @@ def send(settings, title: str, message: str, click: str | None = None, *, client
 
 
 def phone_queue(db) -> list:
-    """Clips the owner can approve with one tap, oldest first."""
-    out = []
+    """Clips the owner can approve with one tap, in a BALANCED order (Session 15): the brands take turns, so one busy brand
+    (Afterlive makes about 70% of the clips) cannot bury the others. Brands go in order of how long their oldest clip has
+    waited; within a brand the highest-scoring clip comes first, then the oldest."""
+    by_brand: dict[str, list] = {}
     for c in db.query("SELECT * FROM clips WHERE status='ready' AND safety_status='clear' AND video_path IS NOT NULL "
                       "ORDER BY id"):
         if not c["video_path"] or not Path(c["video_path"]).is_file():
             continue
-        if not clip_brand(db, c) or not derive_rights(db, c):
+        brand = clip_brand(db, c)
+        if not brand or not derive_rights(db, c):
             continue
-        out.append(c)
+        by_brand.setdefault(brand, []).append(c)
+    for clips in by_brand.values():
+        clips.sort(key=lambda c: (-(c["score"] if c["score"] is not None else 0.0), c["id"]))
+    order = sorted(by_brand, key=lambda b: min(c["id"] for c in by_brand[b]))
+    out = []
+    for i in range(max((len(v) for v in by_brand.values()), default=0)):
+        for b in order:
+            if i < len(by_brand[b]):
+                out.append(by_brand[b][i])
     return out
+
+
+def queue_counts(db) -> list[tuple[str, int]]:
+    """(brand name, waiting clips) for the header of the review page, biggest first."""
+    counts: dict[str, int] = {}
+    for c in phone_queue(db):
+        counts[clip_brand(db, c)] = counts.get(clip_brand(db, c), 0) + 1
+    names = {r["key"]: r["name"] for r in db.query("SELECT key, name FROM brands")}
+    return sorted(((names.get(k, k), n) for k, n in counts.items()), key=lambda x: -x[1])
 
 
 def in_quiet_hours(settings, now: float | None = None) -> bool:

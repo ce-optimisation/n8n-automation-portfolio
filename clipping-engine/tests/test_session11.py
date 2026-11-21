@@ -93,6 +93,50 @@ def test_join_out_of_space_rolls_back_and_resumes_without_loss(settings, sample_
 
 
 @needs_ffmpeg
+def test_interrupted_append_is_rolled_back_before_space_check_and_never_duplicated(settings, sample_video, tmp_path, monkeypatch):
+    """Session 16, as on 20 Nov 12:32: the process ended while appending the last segment. The partial bytes held the
+    space (space check failed forever) and the old code would have re-appended the segment on top of them."""
+    import json
+    segs = _segments(sample_video, tmp_path)
+    out = tmp_path / "recording.ts"
+    livestore.join_segments_ts(segs[:2], {}, out, settings)               # two segments joined cleanly
+    good = out.stat().st_size
+    mf = out.with_suffix(".join.json")
+    st = json.loads(mf.read_text())
+    st.update(current=segs[2].name, size_before=good)
+    mf.write_text(json.dumps(st))
+    with open(out, "ab") as fh:                                             # half of segment 3 written, then the process died
+        fh.write(segs[2].read_bytes()[: segs[2].stat().st_size // 2])
+    monkeypatch.setattr(livestore, "_free", lambda s: 10)                   # restart with no space
+    with pytest.raises(livestore.InsufficientSpace):
+        livestore.join_segments_ts([segs[2]], {}, out, settings)
+    assert out.stat().st_size == good and segs[2].exists()                  # partial copy released, segment intact
+    monkeypatch.undo()
+    livestore.join_segments_ts([segs[2]], {}, out, settings)                # restart with space: exactly once
+    assert not segs[2].exists()
+    assert 5.0 < media.probe(out)["duration"] < 6.6
+
+
+def test_monitor_start_does_not_block_on_recovery(settings, monkeypatch):
+    """Session 16: a long join during recovery must not delay the web server."""
+    import threading
+    import time as _t
+    from clipengine import monitor
+    from clipengine.db import Database
+    from clipengine.jobs import JobQueue
+    db = Database(settings.db_path)
+    mon = monitor.SourceMonitor(settings, db, JobQueue(db), interval=60)
+    gate = threading.Event()
+    monkeypatch.setattr(mon, "recover", lambda: gate.wait(5))
+    monkeypatch.setattr(mon, "_start_guard_thread", lambda: None)
+    t0 = _t.time()
+    mon.start()
+    assert _t.time() - t0 < 1.0
+    gate.set()
+    mon._stop.set()
+
+
+@needs_ffmpeg
 def test_crash_between_append_and_delete_does_not_duplicate(settings, sample_video, tmp_path):
     segs = _segments(sample_video, tmp_path, n=2)
     out = tmp_path / "recording.ts"

@@ -392,6 +392,25 @@ def _live_flag(e: dict):
     return None
 
 
+def _call_with_timeout(fn, seconds: float, *args):
+    """Run fn(*args) in a daemon thread and give up (TimeoutError) after `seconds`. The abandoned thread ends on its own."""
+    box: dict = {}
+
+    def run():
+        try:
+            box["r"] = fn(*args)
+        except BaseException as e:  # noqa: BLE001
+            box["e"] = e
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(f"no answer within {seconds:.0f} s")
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
+
+
 def probe_entry(settings: Settings, url: str) -> dict:
     """Look up ONE listed video page (yt-dlp, no download) to learn its title and live status.
 
@@ -549,6 +568,7 @@ class SourceMonitor:
         self.settings, self.db, self.queue, self.interval, self.sleep = settings, db, queue, interval, sleep
         self.procs: dict = {}                # item id -> proctree.RecorderProcess (Popen-compatible, stops the whole tree)
         self._stop = threading.Event()
+        self._guard_lock = threading.RLock()          # serialises supervise() and the independent guard thread
         self._t: threading.Thread | None = None
         self.lister = list_channel           # replaceable in tests (MOCK)
         self.prober = probe_entry            # replaceable in tests (MOCK)
@@ -560,9 +580,13 @@ class SourceMonitor:
 
     # -- lifecycle
     def start(self) -> None:
-        self.recover()
-
         def loop():
+            # Session 16: recover() may join many GB of a stopped capture; on 20 Nov it ran on the startup thread and the
+            # dashboard did not open for 5+ minutes. It now runs first on the monitor thread, so the web server starts at once.
+            try:
+                self.recover()
+            except Exception:  # noqa: BLE001 - never let the monitor die
+                log.exception("monitor recovery failed")
             while not self._stop.wait(self.interval):
                 try:
                     self.tick()
@@ -570,6 +594,7 @@ class SourceMonitor:
                     log.exception("monitor tick failed")
         self._t = threading.Thread(target=loop, name="clipengine-monitor", daemon=True)
         self._t.start()
+        self._start_guard_thread()
 
     def stop(self) -> None:
         """Stop polling; terminate recorders but leave items in 'recording' so a restart resumes."""
@@ -595,13 +620,88 @@ class SourceMonitor:
             else:
                 self._finalize(it["id"])
 
+    PROBE_TIMEOUT = 30.0             # wall-clock limit for ONE video-page lookup during a channel poll
+    POLL_TIMEOUT = 300.0            # a source poll that takes longer than this is abandoned so it cannot starve the guards
+    GUARD_INTERVAL = 15.0
+    MAX_STUCK_POLLS = 4              # hung poll threads tolerated before further polls are skipped for a while
+
     def tick(self) -> None:
         now = time.time()
-        if self.settings.monitor_enabled:
+        # Session 16: while Recording is OFF a poll stores nothing (new items are deliberately not recorded or queued, and are
+        # picked up when it is turned back on), but YouTube lookups that time out keep running in abandoned threads; on 20 Nov
+        # they piled up (53 threads) and slowed every dashboard page to minutes. So: no source polling while Recording is OFF.
+        # The disk guard, capture supervision and the join retry below still run.
+        if self.settings.monitor_enabled and recording_switch.is_enabled(self.db):
             for src in self.db.query("SELECT * FROM sources WHERE enabled = 1 AND COALESCE(next_check, 0) <= ?", (now,)):
-                self.poll(src["id"])
+                self._poll_with_timeout(src["id"])
         self.supervise()
         self._retry_awaiting_space()
+
+    def _poll_with_timeout(self, sid: int) -> None:
+        """Session 15: on 20 Nov 2026 one poll hung for 10+ hours; the monitor thread never reached supervise(), so the
+        disk guard and segment rotation never ran and a capture grew to 5 GB on a nearly full disk."""
+        self._stuck = [t for t in getattr(self, "_stuck", []) if t.is_alive()]
+        if len(self._stuck) >= self.MAX_STUCK_POLLS:           # circuit breaker: do not pile up more hung polls
+            log.warning("source %s: %d earlier polls are still hung; skipping this poll", sid, len(self._stuck))
+            self.db.update("sources", sid, next_check=time.time() + 1800)
+            return
+        box: dict = {}
+
+        def run():
+            try:
+                box["r"] = self.poll(sid)
+            except Exception as e:  # noqa: BLE001
+                box["e"] = e
+        t = threading.Thread(target=run, name=f"clipengine-poll-{sid}", daemon=True)
+        t.start()
+        t.join(self.POLL_TIMEOUT)
+        if t.is_alive():
+            self._stuck.append(t)
+            log.warning("source %s: poll still running after %.0f s; moving on (the guards keep running)", sid, self.POLL_TIMEOUT)
+            try:
+                self.db.update("sources", sid, next_check=time.time() + 1800, status="error",
+                               status_detail=f"poll timed out after {self.POLL_TIMEOUT:.0f} s")
+            except Exception:  # noqa: BLE001
+                pass
+        elif "e" in box:
+            log.warning("source %s: poll failed: %s", sid, box["e"])
+
+    def guard_once(self) -> None:
+        """Recorder safety checks that must never depend on source polling: stop a capture (keeping what was captured)
+        when there is no longer room to join it, or when it has run too long."""
+        from . import livestore
+        with self._guard_lock:
+            for iid, p in list(self.procs.items()):
+                it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+                if not it or p.poll() is not None:
+                    continue
+                elapsed = time.time() - (it["started_at"] or time.time())
+                why = None
+                if livestore.must_stop(self.settings, len(self.procs)):
+                    why = "Disk space is running low: stopping the recording now and keeping what was captured " \
+                          "(there must stay room to join it)"
+                elif elapsed > self.settings.max_recording_hours * 3600:
+                    why = "Maximum recording length reached; stopping"
+                if not why:
+                    continue
+                self._log_item(iid, why, "WARNING")
+                try:
+                    p.terminate()
+                    p.wait(timeout=15)
+                except Exception:  # noqa: BLE001
+                    p.kill()
+                    p.wait(timeout=15)
+                self.procs.pop(iid, None)
+                self._finalize(iid)
+
+    def _start_guard_thread(self) -> None:
+        def loop():
+            while not self._stop.wait(self.GUARD_INTERVAL):
+                try:
+                    self.guard_once()
+                except Exception:  # noqa: BLE001 - the guard must never die
+                    log.exception("recorder guard failed")
+        threading.Thread(target=loop, name="clipengine-recorder-guard", daemon=True).start()
 
     def _retry_awaiting_space(self) -> None:
         """Captures that could not be joined for lack of disk are retried when space returns (nothing is lost meanwhile)."""
@@ -708,7 +808,19 @@ class SourceMonitor:
                     out.append(dict(e, live=False))
                 continue
             probed += 1
-            info = self.prober(self.settings, e["url"])
+            try:
+                info = _call_with_timeout(self.prober, self.PROBE_TIMEOUT, self.settings, e["url"])
+            except TimeoutError:
+                # Session 15: a single yt-dlp video lookup stalled for 60 s+ on 20 Nov 2026 and, summed over a channel,
+                # held the whole monitor thread for 10+ hours. Skip it; it is looked at again on the next check.
+                log.warning("source %s: video lookup timed out after %.0f s; will retry on the next check", src["id"],
+                            self.PROBE_TIMEOUT)
+                timeouts = getattr(self, "_probe_timeouts", 0) + 1
+                self._probe_timeouts = timeouts
+                if timeouts % 2 == 0:
+                    break                 # two stalls in a row on this source: stop probing for this check
+                continue
+            self._probe_timeouts = 0
             status = info.get("live_status")
             if status == "is_upcoming":
                 continue
@@ -838,7 +950,8 @@ class SourceMonitor:
             ok, msg = storage.live_preflight(self.settings, 0.5)   # record what fits at full quality
             if ok:
                 from . import livestore
-                ok, msg = livestore.admit(self.settings, len(self.procs))   # bounded buffer across ALL captures
+                ok, msg = livestore.admit(self.settings, len(self.procs),            # bounded buffer across ALL captures
+                                          pending_join=livestore.pending_join_bytes(self.db))
             if not ok:
                 # Not stored as an item, so the next check tries again once space has been freed.
                 self.db.update("sources", src["id"], status_detail=f"Live stream detected but NOT recorded: {msg}")
@@ -957,6 +1070,10 @@ class SourceMonitor:
         return bool(self.procs) or bool(self._unsure)
 
     def supervise(self) -> None:
+        with self._guard_lock:
+            self._supervise_locked()
+
+    def _supervise_locked(self) -> None:
         for iid, (since, last) in list(self._unsure.items()):
             if iid in self.procs:                 # a check (or poll) already restarted the recorder
                 self._unsure.pop(iid, None)

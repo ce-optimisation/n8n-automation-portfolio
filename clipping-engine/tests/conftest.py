@@ -57,3 +57,14 @@ def stub_settings(settings, stub_transcript, monkeypatch):
     monkeypatch.setenv("CLIPENGINE_STUB_TRANSCRIPT", str(stub_transcript))
     settings.transcriber_backend = "stub"
     return settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_credential_store(monkeypatch):
+    # Tests must never read or overwrite the owner's Windows credential store.
+    from clipengine.publishing import TokenStore
+    original = TokenStore.__init__
+    def init(self, *args, **kwargs):
+        kwargs["use_keyring"] = False
+        original(self, *args, **kwargs)
+    monkeypatch.setattr(TokenStore, "__init__", init)

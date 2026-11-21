@@ -102,7 +102,8 @@ def checks(settings: Settings) -> list[dict]:
             "Long recordings need space (about 1–2 GB per hour of video; a 3-hour live show needs roughly 5 GB). "
             "Free some space: Windows Settings → System → Storage → Temporary files, and empty the Recycle Bin.")
         if "onedrive" in str(settings.data_dir).lower():
-            lvl, fix = WARN, "The data folder is inside OneDrive, which would upload every recording. Move the engine to a local folder such as %LOCALAPPDATA%\\ClippingEngine (the installer does this)."
+            lvl = FAIL if lvl == FAIL else WARN
+            fix = (fix + " The data folder is inside OneDrive, which would upload every recording. Move the engine to a local folder such as %LOCALAPPDATA%\\ClippingEngine (the installer does this).").strip()
         add("data", "Data folder", lvl, detail, fix)
     except OSError as e:
         add("data", "Data folder", FAIL, f"{settings.data_dir} is not writable: {e}", "Choose another folder with CLIPENGINE_DATA_DIR in .env.")

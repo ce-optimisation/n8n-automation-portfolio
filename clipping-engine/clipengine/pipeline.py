@@ -102,6 +102,7 @@ class Pipeline:
         queue.register("process_recording:failed", self._recording_failed)
         queue.register("render_clip", self.render_clip)
         queue.register("render_clip:failed", self._render_failed)
+        queue.register("retitle_clip", self.retitle_clip)      # Session 14: light job (not in HEAVY_KINDS)
         self.on_clip_rendered: list = []      # callbacks(clip_id): cloud upload
         self.on_recording_done: list = []     # callbacks(recording_id): lifecycle check
         self.on_recording_started: list = []  # callbacks(recording_id): engine-ownership flag
@@ -424,6 +425,57 @@ class Pipeline:
             "low_conf_words": json.dumps(low), "confidence": round(conf, 3),
             "description": describe(rec, start, end, text, flags, low, summary),
         }
+
+    # ---- Session 14: change or remove a title WITHOUT re-rendering the clip -------------------------------
+    def _title_context(self, clip):
+        rec = self.db.recording(clip["recording_id"])
+        creator = self.creator_for(rec)
+        from . import titles
+        return rec, titles.style_for(self.db, creator["brand_key"] if creator else None)
+
+    def remove_clip_title(self, clip_id: int) -> dict:
+        """Instant: clip.mp4 becomes the title-free master again. The owner's removal is locked in (never regenerated)."""
+        clip = self.db.clip(clip_id)
+        if not clip:
+            raise PermanentError("Clip no longer exists")
+        out_dir = self.clip_dir(clip)
+        render.remove_title(out_dir)
+        self.db.update("clips", clip_id, title=None, title_source="owner", title_status="removed", title_locked=1)
+        for callback in self.on_clip_rendered:
+            callback(clip_id)
+        return {"ok": True, "title": None}
+
+    def request_title(self, clip_id: int, text: str) -> dict:
+        """Owner-written title: queue a short job that draws it onto the title-free master (no re-render of the clip)."""
+        text = " ".join((text or "").split())[:90]
+        if not text:
+            return self.remove_clip_title(clip_id)
+        clip = self.db.clip(clip_id)
+        if not clip:
+            raise PermanentError("Clip no longer exists")
+        if not render.has_clean_master(self.clip_dir(clip)):
+            raise PermanentError("This clip has no title-free master (rendered before this feature); it needs a re-render")
+        self.db.update("clips", clip_id, title=text, title_source="owner", title_status="approved", title_locked=1)
+        jid = self.queue.enqueue("retitle_clip", recording_id=clip["recording_id"], clip_id=clip_id,
+                                 dedupe_key=f"retitle:{clip_id}:{abs(hash(text))}", payload={"title": text})
+        return {"ok": True, "job": jid, "title": text}
+
+    def retitle_clip(self, ctx: JobContext) -> None:
+        clip = self.db.clip(ctx.job["clip_id"])
+        if not clip:
+            raise PermanentError("Clip no longer exists")
+        text = (ctx.payload.get("title") or "").strip()
+        if text != (clip["title"] or "").strip():
+            ctx.log("Title changed again since this job was queued; skipping")
+            return
+        rec, tstyle = self._title_context(clip)
+        from . import titles
+        render.apply_title(self.settings, self.clip_dir(clip), titles.format_title(text, single_phrase=tstyle.single_phrase),
+                           tstyle, rec["width"], rec["height"], clip["end"] - clip["start"],
+                           on_progress=lambda f: ctx.progress(f, "Adding title"))
+        self.db.update("clips", clip["id"], rendered_at=time.time())
+        for callback in self.on_clip_rendered:
+            callback(clip["id"])
 
     def enqueue_render(self, clip_id: int) -> int:
         clip = self.db.clip(clip_id)

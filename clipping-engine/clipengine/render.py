@@ -129,14 +129,73 @@ def filter_graph(settings: Settings, ass_name: str | None = "captions.ass", font
     W, H = settings.out_width, settings.out_height
     bw, bh = W // 4, H // 4
     burn = f",ass={ass_name}" + (f":fontsdir={fontsdir}" if fontsdir else "") if ass_name else ""
+    # Session 15: the frame lines and title outline are constant, but the blurred backdrop behind them swings in brightness,
+    # so they LOOK like they pulse. BACKDROP_DIM < 1 scales the backdrop's luma (1.0 = the approved look, unchanged).
+    dim = float(getattr(settings, "backdrop_dim", 1.0) or 1.0)
+    dim_f = f",lutyuv=y=val*{dim:.3f}" if 0.05 <= dim < 0.999 else ""
     return (
         f"[0:v]split=2[bgsrc][fgsrc];"
         f"[bgsrc]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
-        f"boxblur=luma_radius=12:luma_power=2,eq=brightness=-0.10:saturation=0.85,scale={W}:{H},setsar=1[bg];"
+        f"boxblur=luma_radius=12:luma_power=2,eq=brightness=-0.10:saturation=0.85{dim_f},scale={W}:{H},setsar=1[bg];"
         f"[fgsrc]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[fg];"
         f"[bg][fg]overlay=(W-w)/2:(H-h)/2{lines},format=yuv420p{burn}[v];"
         f"[0:a]highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"
     )
+
+
+CLEAN_NAME = "clip_clean.mp4"
+
+
+def _link_or_copy(src: Path, dst: Path) -> None:
+    """Make `dst` a separate directory entry for the same bytes (hard link, else copy); replaces any existing dst."""
+    import os
+    import shutil
+    tmp = dst.with_name(dst.name + ".swap")
+    tmp.unlink(missing_ok=True)
+    try:
+        os.link(src, tmp)
+    except OSError:
+        shutil.copy2(src, tmp)
+    tmp.replace(dst)
+
+
+def has_clean_master(out_dir: Path) -> bool:
+    return (Path(out_dir) / CLEAN_NAME).is_file()
+
+
+def remove_title(out_dir: Path) -> Path:
+    """Make clip.mp4 the title-free master again. Instant (no encoding). Raises FileNotFoundError when there is no master."""
+    out_dir = Path(out_dir)
+    clean = out_dir / CLEAN_NAME
+    if not clean.is_file():
+        raise FileNotFoundError("no title-free master for this clip (it was rendered before this feature); it needs a re-render")
+    _link_or_copy(clean, out_dir / "clip.mp4")
+    return out_dir / "clip.mp4"
+
+
+def apply_title(settings: Settings, out_dir: Path, title: str, title_style, src_w: int, src_h: int,
+                duration: float | None = None, on_progress=None) -> Path:
+    """Draw `title` (emphasis markup allowed) onto the title-free master and write clip.mp4. The master is never modified."""
+    from . import captions, titles
+    out_dir = Path(out_dir)
+    clean = out_dir / CLEAN_NAME
+    if not clean.is_file():
+        raise FileNotFoundError("no title-free master for this clip; it needs a re-render")
+    if not title or title_style is None or not title_style.enabled:
+        return remove_title(out_dir)
+    dur = duration or media.probe(clean)["duration"]
+    tev = titles.build_events(title, title_style, dur, settings.out_width, settings.out_height,
+                              layout(settings, src_w, src_h)["fg_h"])
+    (out_dir / "title.ass").write_text(captions.build_ass([], captions.PRESETS["anton"], settings.out_width,
+                                                          settings.out_height, None, tev), encoding="utf-8")
+    tmp_out = out_dir / "clip.tmp.mp4"
+    media.run_ffmpeg([
+        "-i", CLEAN_NAME, "-vf", f"ass=title.ass:fontsdir={captions.fontsdir_for(out_dir)}",
+        "-c:v", "libx264", "-preset", settings.x264_preset, "-crf", str(max(14, settings.video_crf - 3)),
+        "-profile:v", "high", "-r", "30", "-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", tmp_out.name,
+    ], duration=dur, on_progress=on_progress, cwd=out_dir)
+    tmp_out.replace(out_dir / "clip.mp4")
+    return out_dir / "clip.mp4"
 
 
 def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end: float,
@@ -149,11 +208,12 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     srt, ass = out_dir / "captions.srt", out_dir / "captions.ass"
     write_srt(phrases, srt)
     title_on = bool(title and title_style is not None and title_style.enabled)
+    keep = bool(getattr(settings, "keep_title_free_master", False))     # Session 14: title is a separate step on top of a clean master
     groups = (captions.build_word_groups(words, start, end, style, settings.out_width)
               if style.mode == "active_word" else None)
-    write_ass(phrases, ass, settings, src_w, src_h, label, style, title, title_style, end - start, groups)
+    write_ass(phrases, ass, settings, src_w, src_h, label, style, None if keep else title, title_style, end - start, groups)
     tmp_out = out_dir / "clip.tmp.mp4"
-    final = out_dir / "clip.mp4"
+    final = out_dir / (CLEAN_NAME if keep else "clip.mp4")
     src_info = media.probe(Path(src))
     if start >= src_info["duration"] - 0.5:
         raise media.PermanentError(f"Clip starts at {start:.1f}s but the recording is only "
@@ -162,7 +222,7 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
     dur = end - start
     media.run_ffmpeg([
         "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(Path(src).resolve()),
-        "-filter_complex", filter_graph(settings, ass.name if (style.enabled or title_on) else None,
+        "-filter_complex", filter_graph(settings, ass.name if (style.enabled or (title_on and not keep)) else None,
                                         captions.fontsdir_for(out_dir),
                                         framelines.drawboxes(line_style, settings.out_width, settings.out_height, src_w, src_h)),
         "-map", "[v]", "-map", "[a]",
@@ -171,6 +231,12 @@ def render_clip(settings: Settings, src: Path, out_dir: Path, start: float, end:
         "-movflags", "+faststart", "-f", "mp4", tmp_out.name,
     ], duration=dur, on_progress=on_progress, cwd=out_dir)
     tmp_out.replace(final)
+    if keep:
+        clean, final = final, out_dir / "clip.mp4"
+        if title_on:
+            apply_title(settings, out_dir, title, title_style, src_w, src_h, dur)
+        else:
+            _link_or_copy(clean, final)
     thumb = out_dir / "thumb.jpg"
     media.run_ffmpeg(["-ss", f"{min(dur / 2, max(0.0, dur - 0.5)):.2f}", "-i", final.name, "-frames:v", "1",
                       "-vf", "scale=540:-2", "-q:v", "3", thumb.name], cwd=out_dir)

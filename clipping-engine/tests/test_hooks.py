@@ -89,8 +89,9 @@ def test_no_usable_passage_asks_for_a_manual_title_instead_of_inventing_one():
 
 
 def test_topic_fallback_is_neutral():
+    # Session 15: a bare topic label is no longer accepted as a headline; the safe fallback is NO title.
     r = hooks.generate("It lasts nine hours. Pixel battery. The Pixel battery again.", "spec_edit")
-    assert r["status"] in ("neutral", "proposed") and r["title"]
+    assert r["status"] == "manual_needed" and r["title"] is None
 
 
 def test_owner_titles_are_never_regenerated():
@@ -248,8 +249,9 @@ def test_topic_labels_are_noun_phrases_without_verbs():
 
 def test_topic_from_a_negated_sentence_is_flagged_for_the_reviewer():
     r = hooks.generate(AWS, "america_first_monitor", "Fuentes")
-    cand = next(c for c in r["candidates"] if c["accepted"] and "Amazon AWS" in c["text"])
-    assert any("negated or hedged" in w for w in cand["warnings"]), cand
+    # Session 14: a bare label from a negated sentence could imply the opposite, so it is now REJECTED, not just flagged.
+    assert not any(c["accepted"] and "Amazon AWS" in c["text"] for c in r["candidates"])
+    assert r["title"] is None or "Amazon AWS" not in r["title"]
 
 
 def test_dangling_clauses_and_subjectless_questions_are_rejected():

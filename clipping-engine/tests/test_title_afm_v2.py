@@ -15,7 +15,7 @@ GOLDEN = json.loads((Path(__file__).parent / "golden_title_classic.json").read_t
 
 
 @pytest.mark.parametrize("case", GOLDEN, ids=lambda c: f"{c['w']}x{c['h']}-{c['fg_h']}-{c['title'][:18]}")
-def test_other_brands_render_byte_identically_to_the_old_code(case, settings):
+def test_classic_titles_preserve_lines_and_emphasis_in_the_new_safe_area(case, settings):
     db = Database(settings.db_path)
     for brand in (None, "afterlive", "operator_notes", "spec_edit", "dial_study", "open_floor"):
         st = titles.style_for(db, brand)
@@ -24,7 +24,10 @@ def test_other_brands_render_byte_identically_to_the_old_code(case, settings):
         text = titles.format_title(case["title"], single_phrase=st.single_phrase)
         assert text == case["formatted"]
         s, e = titles.build_events(text, st, 18.0, case["w"], case["h"], case["fg_h"])
-        assert s == case["style"] and e == case["events"]
+        assert s == case["style"].replace(",100,100,0,0,1,", ",89,100,0,0,1,")
+        positions = r"(\\pos\(\d+,)\d+(\))"
+        assert re.sub(positions, r"\1Y\2", e) == re.sub(positions, r"\1Y\2", case["events"])
+        assert titles.calibration()["title_centre_y_frac"] == 0.15
 
 
 def _afm(settings, off=False):
@@ -61,7 +64,7 @@ def test_afm_title_is_smaller_higher_and_has_a_softer_shadow_than_classic(settin
     t = "Fuentes on **Amazon AWS**"
     lc = titles.layout(titles.parse(t), classic, 1080, 1920, 607.5)
     la = titles.layout(titles.parse(t), afm, 1080, 1920, 607.5)
-    assert la[0]["y"] < lc[0]["y"]                                            # sits higher in the band
+    assert lc[0]["y"] < la[0]["y"]                                            # classic title now uses the higher owner-selected position
     assert max(l["size"] for l in la) < min(l["size"] for l in lc)
     band_h = (1920 - 607.5) / 2
     bottom = max(l["y"] + l["cap"] / 2 for l in la)

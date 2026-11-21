@@ -441,9 +441,10 @@ def test_clip_retention_rules(life):
     db.update("clips", fresh, reviewed_at=time.time() - 3600)
     db.update("clips", pub, published_at=time.time() - 8 * 86400)
     out = lc.retention()
-    assert out == {"rejected": 1, "published": 1}
+    assert out == {"rejected": 1, "published": 0}
     gone = {r["id"] for r in db.query("SELECT id FROM clips WHERE files_deleted_at IS NOT NULL")}
-    assert gone == {rej, pub}
+    assert gone == {rej}
+    assert Path(db.clip(pub)["video_path"]).is_file()
     assert Path(db.clip(appr)["video_path"]).exists() and Path(db.clip(keep)["video_path"]).exists()
 
 

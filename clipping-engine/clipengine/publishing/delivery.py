@@ -49,16 +49,32 @@ def clip_brand(db, clip) -> str | None:
     return row["key"] if row else None
 
 
+def publish_title(db, clip) -> str | None:
+    """Title for the platform listing. The owner's/accepted clip title, else the SOURCE video's own title (accurate by
+    construction), else None: a clip is never published under a made-up generic name like "Clip" (Session 15)."""
+    t = " ".join((clip["title"] or "").split())
+    if t:
+        return t[:100]
+    rec = db.one("SELECT title FROM recordings WHERE id=?", (clip["recording_id"],))
+    src = " ".join(((rec["title"] if rec else "") or "").split())
+    return src[:100] or None
+
+
 def deliver_draft(db, clients: dict, clip_id: int, account_id: int, *, owner_command: bool = False) -> dict:
     clip = db.clip(clip_id)
     acct = db.one("SELECT * FROM social_accounts WHERE id=?", (account_id,))
     if not clip or not acct:
         raise PublishError("Unknown clip or destination.")
     problems = list(editorial_gate(clip))
+    if acct["platform"] == "youtube" and not publish_title(db, clip):
+        problems.append("This clip has no title and its source has none either: write a title before sending it to YouTube.")
     problems += cx.routing_problems(db, clip_brand(db, clip), account_id, explicit_owner_command=owner_command)
     if acct["platform"] == "instagram":
-        problems.append("Instagram has no draft API (media_publish is public): use the local staging/export package.")
-    if acct["platform"] not in ("youtube", "facebook"):
+        ig = clients.get("instagram")
+        if not (ig is not None and getattr(ig, "public_enabled", False) and mode_for(db, account_id) == "public"):
+            problems.append("Instagram has no draft step (publishing is public and immediate): it needs INSTAGRAM_PUBLIC_PUBLISH "
+                            "on AND this destination set to public mode.")
+    if acct["platform"] not in ("youtube", "facebook", "instagram"):
         problems.append(f"{acct['platform']} delivery is handled by the existing publishing service, not here.")
     if problems:
         raise PublishError(" ".join(problems))
@@ -73,23 +89,26 @@ def deliver_draft(db, clients: dict, clip_id: int, account_id: int, *, owner_com
     try:
         video = Path(clip["video_path"])
         if acct["platform"] == "youtube":
-            res = clients["youtube"].upload(db, account_id, video, clip["title"] or "Clip", clip["description"] or "", public=public)
+            res = clients["youtube"].upload(db, account_id, video, publish_title(db, clip), clip["description"] or "", public=public)
             remote = res["video_id"]
             if res.get("privacy") == "public":
                 status, detail = "published", "Uploaded to YouTube as PUBLIC."
             elif public:
                 status = "delivered_private"
-                detail = ("PUBLIC was requested but YouTube kept the video PRIVATE (API projects that have not passed Google's "
-                          "audit are locked to private). Publish it in YouTube Studio, or apply for the API audit.")
+                detail = "YouTube returned PRIVATE after PUBLIC was requested. Check visibility in YouTube Studio."
             else:
                 status, detail = "delivered_private", "Uploaded to YouTube as PRIVATE (not public). Review and publish manually in YouTube Studio."
+        elif acct["platform"] == "instagram":
+            res = clients["instagram"].publish_reel(acct["brand"], acct["platform_id"], video, clip["description"] or "")
+            remote = res["video_id"]
+            status = "published"
+            detail = "Instagram accepted and PUBLISHED the Reel (public)." + (f" {res['permalink']}" if res.get("permalink") else "")
         else:
             res = clients["facebook"].create_reel(db, account_id, video, clip["description"] or "", publish=public)
             remote = res["video_id"]
             if public:
                 status = "published" if res.get("success", True) else "processing"
-                detail = ("Facebook accepted the Reel for PUBLISHING on the Page (it may take a few minutes to appear; while the "
-                          "Meta app is in development mode it may be visible only to people with a role on the app).")
+                detail = "Facebook accepted the Reel for publishing. Check the Page for its public visibility."
             else:
                 status, detail = "delivered_draft", "Created as a Facebook Reel DRAFT (not published). Finish it on the Page yourself."
     except Exception as e:                                              # noqa: BLE001

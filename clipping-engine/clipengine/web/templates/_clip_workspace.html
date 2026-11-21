@@ -38,7 +38,7 @@
       <form method="post" action="/clips/{{ c.id }}/cleanup/{{ 'auto_default' if c.cleanup_auto == 1 else 'auto_on' }}"><button class="btn ghost">{{ 'Follow global switch' if c.cleanup_auto == 1 else 'Allow automatic cleanup' }}</button></form>
       {% if c.cleanup_hold %}<form method="post" action="/clips/{{ c.id }}/cleanup/release"><button class="btn ghost">Release hold</button></form>
       {% else %}<form method="post" action="/clips/{{ c.id }}/cleanup/cancel"><button class="btn ghost">Cancel pending cleanup</button></form>{% endif %}
-      <form method="post" action="/clips/{{ c.id }}/cleanup/delete" onsubmit="return confirm('Remove the local video? The Google Drive copy stays and you can restore it.')"><button class="btn bad">Delete local copy now{% if cleanup.bytes %} (frees {{ '%.1f'|format(cleanup.bytes / 1e6) }} MB){% endif %}</button></form>
+      {% if c.status in ("approved", "published") %}<form method="post" action="/clips/{{ c.id }}/cleanup/delete" onsubmit="return confirm('Remove the local video? The Google Drive copy stays and you can restore it.')"><button class="btn bad">Delete local copy now{% if cleanup.bytes %} (frees {{ '%.1f'|format(cleanup.bytes / 1e6) }} MB){% endif %}</button></form>{% endif %}
     {% endif %}
   </div>
   {% if raw_gone %}<p class="muted"><small>The original recording was removed after verified processing, so this clip cannot be re-cut from the source (adjusting start/end needs the original).</small></p>{% endif %}

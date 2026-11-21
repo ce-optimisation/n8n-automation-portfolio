@@ -313,7 +313,8 @@ class CloudService:
         for kind, path in files.items():
             row = self.db.one("SELECT * FROM cloud_objects WHERE provider=? AND owner_kind='clip' AND owner_id=? AND kind=?",
                               (self.provider.name, clip_id, kind))
-            if row and row["local_path"] != str(path) and row["state"] in ("verified", "uploaded"):
+            if row and (row["local_path"] != str(path) or
+                        (row["state"] in ("verified", "uploaded") and md5_file(path) != row["local_md5"])):
                 # a re-render replaced the file: upload the new version
                 self.db.update("cloud_objects", row["id"], local_path=str(path), state="pending", session_uri=None,
                                local_md5=None, size=None)
@@ -328,6 +329,9 @@ class CloudService:
     def _files(self, clip) -> dict:
         d = Path(clip["video_path"]).parent
         out = {"video": Path(clip["video_path"])}
+        from .render import CLEAN_NAME
+        if (d / CLEAN_NAME).is_file():
+            out["clean_master"] = d / CLEAN_NAME
         if clip["thumb_path"] and Path(clip["thumb_path"]).is_file():
             out["thumb"] = Path(clip["thumb_path"])
         if (d / "transcript.txt").is_file():

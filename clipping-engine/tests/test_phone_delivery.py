@@ -299,7 +299,7 @@ def test_public_youtube_upload_forced_private_by_google_is_reported_honestly(set
     db.update("clips", cid, status="approved", rights_status="licensed")
     autodeliver.handle(settings, db, {"youtube": fake}, Ctx({"clip_id": cid, "account_id": yt["id"]}))
     row = db.one("SELECT status, detail FROM publish_attempts WHERE clip_id=?", (cid,))
-    assert row["status"] == "delivered_private" and "kept the video PRIVATE" in row["detail"] and "audit" in row["detail"]
+    assert row["status"] == "delivered_private" and "returned PRIVATE" in row["detail"] and "YouTube Studio" in row["detail"]
     fake2 = Fake()
     cid2 = mk_clip(settings, db)
     db.update("clips", cid2, status="approved", rights_status="licensed")
@@ -323,4 +323,142 @@ def test_going_public_needs_the_switch_on_and_typed_publish_and_can_be_undone(se
         assert delivery.mode_for(db, yt["id"]) == "draft"
         ig = db.one("SELECT * FROM social_accounts WHERE platform='instagram' AND brand='afterlive'")
         r = cl.post(f"/connections/mode/{ig['id']}", data={"mode": "public", "confirm": "PUBLISH"}, follow_redirects=False)
-        assert "Facebook+and+YouTube" in r.headers["location"] and delivery.mode_for(db, ig["id"]) == "draft"
+        # Session 16: refused while INSTAGRAM_PUBLIC_PUBLISH is off (allowed once it is on: test_connections_web)
+        assert "INSTAGRAM_PUBLIC_PUBLISH" in r.headers["location"] and delivery.mode_for(db, ig["id"]) == "draft"
+
+
+# ---- Session 15: balanced queue, title routes, retitle job -----------------------------------------------------------
+
+def _mk_brand_clip(settings, db, brand, score=0.9, n=[1000]):
+    n[0] += 1
+    cr = db.insert("creators", name=f"Host {n[0]}", brand_key=brand, permission_json=PERMIT)
+    rid = db.insert("recordings", title="R", source_type="upload", status="ready", creator_id=cr)
+    f = settings.clips_dir / f"b{n[0]}.mp4"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"x" * 64)
+    return db.insert("clips", recording_id=rid, idx=1, start=0, end=20, status="ready", rights_status="unreviewed",
+                     safety_status="clear", video_path=str(f), description="d", title="T", score=score)
+
+
+def test_queue_is_balanced_so_one_busy_brand_cannot_bury_the_others(settings, db):
+    a = [_mk_brand_clip(settings, db, "afterlive") for _ in range(4)]
+    o = [_mk_brand_clip(settings, db, "operator_notes") for _ in range(2)]
+    order = [c["id"] for c in phone.phone_queue(db)]
+    assert order == [a[0], o[0], a[1], o[1], a[2], a[3]]
+    assert phone.queue_counts(db)[0][1] == 4
+
+
+def test_best_scoring_clip_of_a_brand_comes_first(settings, db):
+    low = _mk_brand_clip(settings, db, "afterlive", score=0.2)
+    high = _mk_brand_clip(settings, db, "afterlive", score=0.95)
+    assert [c["id"] for c in phone.phone_queue(db)] == [high, low]
+
+
+def _with_master(settings, db, cid):
+    from clipengine.pipeline import Pipeline
+    p = Pipeline(settings, db, JobQueue(db))
+    d = p.clip_dir(db.clip(cid))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "clip_clean.mp4").write_bytes(b"CLEAN" * 10)
+    (d / "clip.mp4").write_bytes(b"TITLED" * 10)
+    return p, d
+
+
+def test_remove_title_route_restores_the_clean_video_and_locks_the_choice(settings, db):
+    cid = mk_clip(settings, db)
+    p, d = _with_master(settings, db, cid)
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        assert "Remove title" in cl.get("/m").text
+        r = cl.post(f"/m/{cid}/title/remove", data={"skip": ""}, follow_redirects=False)
+        assert r.status_code == 303
+    assert (d / "clip.mp4").read_bytes() == (d / "clip_clean.mp4").read_bytes()
+    row = db.clip(cid)
+    assert row["title"] is None and row["title_locked"] == 1 and row["title_status"] == "removed"
+
+
+def test_old_clips_without_a_master_say_so_instead_of_pretending(settings, db):
+    cid = mk_clip(settings, db)
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        assert "without a re-render" in cl.get("/m").text and "Remove title" not in cl.get("/m").text
+        r = cl.post(f"/m/{cid}/title/remove", data={}, follow_redirects=False)
+        assert r.status_code == 303 and "Could not" in r.headers["location"].replace("+", " ").replace("%20", " ")
+    assert db.clip(cid)["title"].startswith("SECRET TITLE")                      # untouched
+
+
+def test_own_title_queues_a_light_job_and_locks_it(settings, db):
+    cid = mk_clip(settings, db)
+    _with_master(settings, db, cid)
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        cl.post(f"/m/{cid}/title", data={"text": "  My   own title ", "skip": ""}, follow_redirects=False)
+    row = db.clip(cid)
+    assert row["title"] == "My own title" and row["title_source"] == "owner" and row["title_locked"] == 1
+    assert db.one("SELECT COUNT(*) n FROM jobs WHERE kind='retitle_clip'")["n"] == 1
+
+
+def test_retitle_job_draws_the_title_on_the_master_and_skips_stale_requests(settings, db, monkeypatch):
+    from clipengine import render
+    cid = mk_clip(settings, db)
+    p, d = _with_master(settings, db, cid)
+    db.update("clips", cid, title="Latest title")
+    seen = []
+    monkeypatch.setattr(render, "apply_title", lambda s, out, t, st, w, h, dur=None, on_progress=None: seen.append(t))
+
+    class C(Ctx):
+        job = {"clip_id": cid}
+
+        def progress(self, *a, **k):
+            pass
+    p.retitle_clip(C({"title": "Old title"}))
+    assert seen == []                                                          # a newer title replaced it: nothing drawn
+    p.retitle_clip(C({"title": "Latest title"}))
+    assert len(seen) == 1
+
+
+def test_description_is_editable_and_saved(settings, db):
+    cid = mk_clip(settings, db)
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        assert "Save description" in cl.get("/m").text
+        cl.post(f"/m/{cid}/description", data={"text": "  New words for the post  "}, follow_redirects=False)
+    assert db.clip(cid)["description"] == "New words for the post"
+
+
+def test_title_alternatives_are_offered_only_when_a_master_exists(settings, db):
+    import json as _json
+    cid = mk_clip(settings, db)
+    db.update("clips", cid, title_json=_json.dumps({"alternatives": ["Alt one", "Alt two"]}))
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        assert "Use: Alt one" not in cl.get("/m").text                        # old clip: no clean master
+        _with_master(settings, db, cid)
+        html = cl.get("/m").text
+        assert "Use: Alt one" in html and "Use: Alt two" in html
+
+
+def test_approve_button_says_publish_only_when_a_destination_is_public(settings, db):
+    mk_clip(settings, db)
+    acct = enable(db, "youtube")
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        assert "Approve &amp; send" in cl.get("/m").text and "Approve &amp; Publish" not in cl.get("/m").text
+        from clipengine.publishing import delivery as _d
+        _d.set_mode(db, acct["id"], "public")
+        assert "Approve &amp; Publish" in cl.get("/m").text and "PUBLIC video" in cl.get("/m").text
+
+
+def test_results_page_lists_each_destination_outcome(settings, db):
+    cid = mk_clip(settings, db)
+    db.update("clips", cid, status="approved", reviewed_at=time.time())
+    db.insert("publish_attempts", clip_id=cid, platform="youtube", status="delivered_private", detail="kept private", stage="done")
+    db.insert("publish_attempts", clip_id=cid, platform="facebook", status="published", detail="live", stage="done")
+    with TestClient(create_app(settings, start_worker=False)) as cl:
+        html = cl.get("/m/results").text
+        assert "published publicly" in html and "private (not public)" in html and f"clip {cid}" in html
+
+
+def test_retrying_a_failed_delivery_keeps_the_clip_approved(settings, db):
+    """Session 16: the Retry button set ANY clip job's clip to pending_render, which would re-render an approved clip."""
+    cid = mk_clip(settings, db, status="approved")
+    jid = db.insert("jobs", kind="deliver_clip", clip_id=cid, status="failed", payload_json='{"clip_id": %d, "account_id": 1}' % cid)
+    app = create_app(settings, start_worker=False)
+    with TestClient(app) as cl:
+        cl.post(f"/jobs/{jid}/retry", headers={"referer": "http://testserver/jobs"}, follow_redirects=False)
+    assert db.clip(cid)["status"] == "approved"
+    assert db.one("SELECT status FROM jobs WHERE id=?", (jid,))["status"] == "queued"

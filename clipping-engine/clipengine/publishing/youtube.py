@@ -78,13 +78,22 @@ class YouTubeClient:
         video = Path(video)
         if not video.is_file():
             raise PublishError("Video file not found.")
+        from ..media import probe
+        info = probe(video)
+        if (not info["has_video"] or not info["width"] or not info["height"]
+                or info["width"] > info["height"] or not 0 < info["duration"] <= 180
+                or info["sample_aspect_ratio"] not in (None, "N/A", "1:1")):
+            raise PublishError("YouTube Shorts requires a square or vertical render up to 180 seconds. "
+                               "Use a square-pixel export of the approved composition.")
         oa = self.oauth(acct["brand"])
         token = oa.access_token()
         live = cx.youtube_identity(self.http, token)                       # re-check immediately before uploading
         if str(acct["verified_platform_id"]) not in {str(o["id"]) for o in live}:
             raise PublishError("The authorised channel is not this brand's verified channel; upload refused.")
         want = "public" if public else "private"
-        meta = {"snippet": {"title": (title or "Clip")[:100], "description": (description or "")[:5000]},
+        if not (title or "").strip():
+            raise PublishError("A YouTube upload needs a real title; refusing to publish under a generic name.")
+        meta = {"snippet": {"title": title.strip()[:100], "description": (description or "")[:5000]},
                 "status": {"privacyStatus": want, "selfDeclaredMadeForKids": False}}      # always set explicitly: omitted = PUBLIC
         assert meta["status"]["privacyStatus"] == want
         size = video.stat().st_size

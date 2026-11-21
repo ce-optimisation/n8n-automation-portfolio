@@ -44,16 +44,24 @@ def destinations_for(db, clip) -> list:
     brand = clip_brand(db, clip)
     if not brand:
         return []
-    return [a for a in db.query("SELECT * FROM social_accounts WHERE brand=? AND platform IN ('facebook','youtube') "
-                                "AND publishing_enabled=1 AND identity_verified_at IS NOT NULL", (brand,))
-            if a["verified_platform_id"] and str(a["verified_platform_id"]) == str(a["platform_id"])]
+    from .delivery import mode_for
+    out = []
+    for a in db.query("SELECT * FROM social_accounts WHERE brand=? AND platform IN ('facebook','youtube','instagram') "
+                      "AND publishing_enabled=1 AND identity_verified_at IS NOT NULL", (brand,)):
+        if not (a["verified_platform_id"] and str(a["verified_platform_id"]) == str(a["platform_id"])):
+            continue
+        if a["platform"] == "instagram" and mode_for(db, a["id"]) != "public":
+            continue                    # Instagram has no draft step: it is only ever a deliberately PUBLIC destination
+        out.append(a)
+    return out
 
 
 def manual_platforms(db, clip) -> list[str]:
-    """Platforms the owner must still post by hand (no draft API)."""
+    """Platforms the owner must still post by hand (not automated for this brand)."""
     brand = clip_brand(db, clip)
     rows = db.query("SELECT platform FROM social_accounts WHERE brand=? AND platform IN ('instagram','tiktok')", (brand,)) if brand else []
-    return sorted({r["platform"] for r in rows})
+    automated = {a["platform"] for a in destinations_for(db, clip)}
+    return sorted({r["platform"] for r in rows} - automated)
 
 
 def prepare_and_enqueue(db, queue, clip_id: int) -> dict:

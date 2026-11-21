@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Results</title>
+<style>
+  :root { --bg:#111; --card:#1b1b1b; --fg:#f2f2f2; --muted:#9a9a9a; --good:#1f9d55; --bad:#c0392b; --warn:#c98a00; --line:#2c2c2c; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f4f4f4; --card:#fff; --fg:#161616; --muted:#666; --line:#ddd; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; padding:0 14px 40px; }
+  header { display:flex; justify-content:space-between; padding:12px 0; }
+  header a { color:var(--muted); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:12px 0; }
+  .muted { color:var(--muted); font-size:.88rem; }
+  .ok { color:var(--good); } .bad { color:var(--bad); } .wait { color:var(--warn); }
+  ul { margin:6px 0 0; padding-left:18px; }
+</style>
+</head>
+<body>
+<header><span><b>Results</b></span><a href="/m">Back to review</a></header>
+{% for r in rows %}
+  <div class="card">
+    <b>{{ r.c.title or "Untitled clip" }}</b> <span class="muted">clip {{ r.c.id }}</span>
+    <ul>
+      {% for a in r.attempts %}
+        <li>{{ a.platform|capitalize }}:
+          {% if a.status == 'published' %}<span class="ok">published publicly</span>
+          {% elif a.status in ('delivered_draft','delivered_private') %}<span class="wait">{{ "draft" if a.status == 'delivered_draft' else "private" }} (not public)</span>
+          {% elif a.status in ('processing','uploading') %}<span class="wait">in progress</span>
+          {% else %}<span class="bad">{{ a.status }}</span>{% endif %}
+          <span class="muted">{{ a.detail }}</span></li>
+      {% endfor %}
+      {% for j in r.jobs if j.status in ('queued','running','retry_wait') %}<li><span class="wait">waiting: {{ j.status }}</span></li>{% endfor %}
+      {% for j in r.jobs if j.status == 'failed' %}<li><span class="bad">failed</span> <span class="muted">{{ j.message }}</span></li>{% endfor %}
+      {% if not r.attempts and not r.jobs %}<li class="muted">Approved; nothing was sent (no destination switched on).</li>{% endif %}
+    </ul>
+  </div>
+{% else %}
+  <div class="card"><span class="muted">No approved clips yet.</span></div>
+{% endfor %}
+</body>
+</html>

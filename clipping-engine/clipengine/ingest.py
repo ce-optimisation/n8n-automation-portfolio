@@ -626,6 +626,13 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
 def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext) -> None:
     """Job handler: retrieve a permitted URL (direct file or extractor), then queue analysis."""
     url = ctx.payload["url"]
+    if ctx.payload.get("discovered_item_id") or ctx.payload.get("source_item_id"):
+        from . import recording_switch
+        from .jobs import Deferred
+        if not recording_switch.is_enabled(db):
+            # Session 16: a download found automatically (monitor/discovery/backfill) that was queued before Recording was
+            # switched OFF must not start while it is OFF. Manual imports are not affected. No attempt is used up.
+            raise Deferred("Recording is switched OFF; this automatically found video waits until it is turned back on")
     decision = classify_url(url, settings, db)
     if decision.code == "unresolvable":
         # No internet for a moment is not a reason to give up on the video: retry later.

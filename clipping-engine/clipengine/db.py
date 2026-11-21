@@ -351,6 +351,18 @@ CREATE TABLE IF NOT EXISTS cloud_objects (
     UNIQUE(provider, owner_kind, owner_id, kind)
 );
 
+CREATE TABLE IF NOT EXISTS post_snapshots (
+    id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES social_accounts(id),
+    attempt_id INTEGER NOT NULL REFERENCES publish_attempts(id), collected_at REAL NOT NULL,
+    views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER, error TEXT
+);
+CREATE INDEX IF NOT EXISTS post_snapshot_time ON post_snapshots(attempt_id,collected_at DESC);
+CREATE TABLE IF NOT EXISTS account_snapshots (
+    id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES social_accounts(id),
+    collected_at REAL NOT NULL, audience INTEGER, views INTEGER, error TEXT
+);
+CREATE INDEX IF NOT EXISTS account_snapshot_time ON account_snapshots(account_id, collected_at DESC);
+
 CREATE TABLE IF NOT EXISTS metrics (
     id INTEGER PRIMARY KEY,
     package_id INTEGER, clip_id INTEGER, account_id INTEGER, creator_id INTEGER,

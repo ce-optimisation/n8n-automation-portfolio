@@ -15,14 +15,15 @@
 administrator login never lets one brand reach another brand's account. <b>Delivery is OFF</b> for every destination until you switch it on for that
 one account. Each switched-on destination starts in <b>drafts / private</b> mode (Facebook Reel draft, YouTube private); you can switch one destination to
 <b>PUBLIC</b> mode (type <code>PUBLISH</code>), after which clips you approve are published there. Platforms can still hold a public upload back
-(YouTube keeps uploads private until its API audit; Facebook posts from an app in development mode may be visible only to app roles) and every result
-says what really happened. Instagram has no draft API, so it uses the local export package only
-{% if ig_public %}<b>(INSTAGRAM_PUBLIC_PUBLISH is ON: Instagram sending would be PUBLIC)</b>{% endif %}.</section>
+(Facebook posts from an app in development mode may be visible only to app roles; YouTube lifted its private-only rule for unaudited
+projects on 2 Nov 2026) and every result says what really happened. Instagram has no draft step: an Instagram destination sends only in
+PUBLIC mode, which needs INSTAGRAM_PUBLIC_PUBLISH on
+{% if ig_public %}<b>(it is ON: switch each Instagram destination on, then type PUBLISH)</b>{% else %}(it is OFF){% endif %}.</section>
 <section class="card"><h2>Connect</h2>
 <ul class="list">
 <li><b>Facebook Pages + linked Instagram</b> (one login, six Pages):
   {% if not fb_cfg %}<span class="badge cx-bad">needs {{ fb_missing|join(', ') }} in .env</span>
-  {% else %}{% if fb_user %}<span class="badge cx-ok">login authorised</span> {% endif %}<a class="btn" href="/connections/facebook/connect">{{ 'Re-authorise' if fb_user else 'Connect Facebook' }}</a>{% endif %}</li>
+  {% else %}{% if fb_user %}<span class="badge cx-ok">login authorised</span> {% endif %}<a class="btn" href="/connections/facebook/connect">{{ 'Re-authorise' if fb_user else 'Connect Facebook' }}</a> <a class="btn" href="/connections/facebook/connect?instagram=true">Connect Instagram profiles</a>{% endif %}</li>
 <li><b>YouTube</b> (authorise each channel separately below):
   {% if yt_cfg %}<span class="badge cx-ok">Google OAuth client present</span>{% else %}<span class="badge cx-bad">no Google OAuth client</span>{% endif %}</li>
 <li><b>TikTok</b> (Afterlive only): uses the existing TikTok connection on the Settings page.</li>
@@ -49,7 +50,7 @@ says what really happened. Instagram has no draft API, so it uses the local expo
       <input name="confirm" placeholder="type ENABLE" autocomplete="off"><button class="btn ghost">Allow drafts</button></form>
     {% else %}
     <form method="post" action="/connections/publishing/{{ r.id }}"><button class="btn ghost">Switch delivery OFF</button></form>
-    {% if r.platform in ('facebook', 'youtube') %}
+    {% if r.platform in ('facebook', 'youtube') or (r.platform == 'instagram' and ig_public) %}
       {% if modes[r.id] == 'public' %}
       <span class="badge cx-warn">mode: PUBLIC</span>
       <form method="post" action="/connections/mode/{{ r.id }}"><input type="hidden" name="mode" value="draft"><button class="btn ghost">Back to drafts</button></form>

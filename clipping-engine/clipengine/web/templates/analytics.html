@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Results</h1>
+<h1>Analytics</h1>
+<form method="get" class="row"><label>Brand <select name="brand"><option value="">All brands</option>{% for b in brands %}<option value="{{ b.key }}" {% if brand == b.key %}selected{% endif %}>{{ b.name }}</option>{% endfor %}</select></label>
+<label>Platform <select name="platform"><option value="">All platforms</option>{% for item in ['youtube','facebook','instagram','tiktok'] %}<option {% if platform == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label><button>Filter</button></form>
+<table class="jobs"><thead><tr><th>Brand / account</th><th>Connection</th><th>Subscribers or followers</th><th>Channel views</th><th>Audience change (7 / 30 days)</th><th>Views change (7 / 30 days)</th><th>Checked (UTC)</th></tr></thead>
+<tbody>{% for row in accounts %}<tr><td>{{ row.brand }} · {{ row.platform }} · {{ row.handle }}</td><td>{{ row.status }}</td><td>{{ row.audience if row.audience is not none else 'Unavailable' }}</td><td>{{ row.views if row.views is not none else 'Unavailable' }}</td>{% for metric in ['audience','views'] %}<td>{% for days in [7,30] %}{{ trends[row.id][days,metric] if trends[row.id][days,metric] is not none else 'Unavailable' }}{% if not loop.last %} / {% endif %}{% endfor %}</td>{% endfor %}<td>{{ row.refreshed or 'Awaiting collection' }} {{ row.error or '' }}</td></tr>{% endfor %}</tbody></table>
+<h2>Published post performance</h2>
+<table class="jobs"><thead><tr><th>Brand and platform</th><th>Clip</th><th>Post ID</th><th>Views</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Checked (UTC)</th></tr></thead><tbody>
+{% for post in posts %}<tr><td>{{ post.brand }} · {{ post.platform }}</td><td><a href="/clips/{{ post.clip_id }}">#{{ post.clip_id }}</a></td><td>{{ post.remote_id }}</td>{% for metric in ['views','likes','comments','shares'] %}<td>{{ post[metric] if post[metric] is not none else 'Unavailable' }}</td>{% endfor %}<td>{{ post.refreshed }} {{ post.error or '' }}</td></tr>{% else %}<tr><td colspan="8">No post statistics collected for this selection.</td></tr>{% endfor %}</tbody></table>
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
 <section class="card"><p>Realised net (revenue + sponsor − cost): <b>{{ '%.2f'|format(realised) }}</b> · owner review time {{ '%.1f'|format(review_h) }} h
 · realised per review hour: <b>{{ '%.2f'|format(per_hour) if per_hour is not none else 'not enough data' }}</b> · failed jobs (30 days): {{ failures }}</p>

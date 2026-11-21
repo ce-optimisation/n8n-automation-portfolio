@@ -69,6 +69,11 @@ def test_one_login_adopts_each_brand_only_on_exact_page_and_instagram_id(db, sto
         u = str(r.url)
         if "oauth/access_token" in u:
             return httpx.Response(200, json={"access_token": "USERTOKEN"})
+        if "me/permissions" in u:
+            return httpx.Response(200, json={"data": [
+                {"permission": p, "status": "granted"} for p in
+                ("pages_show_list", "pages_read_engagement", "pages_manage_posts", "instagram_basic")
+            ] + [{"permission": "instagram_content_publish", "status": "declined"}]})
         if "me/accounts" in u:
             return httpx.Response(200, json={"data": pages})
         return httpx.Response(404)
@@ -80,6 +85,8 @@ def test_one_login_adopts_each_brand_only_on_exact_page_and_instagram_id(db, sto
     assert res[("afterlive", "instagram")] == "MISMATCH"                          # linked IG is not Afterlive's recorded id
     assert store.get("facebook:afterlive")["page_id"] == _acct(db, "facebook", "afterlive")["platform_id"]
     assert store.get("instagram:afterlive") is None and store.get("instagram:america_first_monitor")
+    scope = store.get("instagram:america_first_monitor")["scope"]
+    assert "instagram_basic" in scope and "instagram_content_publish" not in scope
     assert store.get("facebook:operator_notes") is None                          # not managed by this login: nothing stored
     assert "STRANGER" not in json.dumps([store.get(f"facebook:{b}") for b in ("afterlive", "america_first_monitor")])
     assert _acct(db, "facebook", "operator_notes")["identity_verified_at"] is None
@@ -140,7 +147,13 @@ def test_youtube_verify_keeps_only_the_expected_channels_token(db, store):
     assert _acct(db, "youtube", "america_first_monitor")["identity_verified_at"] is None
 
 
-def test_youtube_upload_is_always_private_and_rechecks_the_channel(db, store, tmp_path):
+@pytest.fixture
+def valid_short(monkeypatch):
+    monkeypatch.setattr("clipengine.media.probe", lambda _: {
+        "has_video": True, "width": 1080, "height": 1920, "duration": 60, "sample_aspect_ratio": "1:1"})
+
+
+def test_youtube_upload_is_always_private_and_rechecks_the_channel(db, store, tmp_path, valid_short):
     a = _acct(db, "youtube", "afterlive")
     cx.verify_identity(db, a["id"], [{"id": a["platform_id"]}])
     _yt_token(store, "afterlive")
@@ -236,7 +249,7 @@ def test_delivery_refuses_instagram_and_unapproved_clips(db, clip_env):
     ig = _acct(db, "instagram", "afterlive")
     cx.verify_identity(db, ig["id"], [{"id": ig["platform_id"]}])
     db.update("social_accounts", ig["id"], publishing_enabled=1)
-    with pytest.raises(PublishError, match="no draft API"):
+    with pytest.raises(PublishError, match="no draft step"):         # Session 15 wording; behaviour unchanged (still refused)
         deliver_draft(db, {"youtube": _Fake(), "facebook": _Fake()}, clip_env, ig["id"], owner_command=True)
     fb = _acct(db, "facebook", "afterlive")
     cx.verify_identity(db, fb["id"], [{"id": fb["platform_id"]}])
@@ -249,7 +262,7 @@ def test_delivery_refuses_instagram_and_unapproved_clips(db, clip_env):
         deliver_draft(db, {"youtube": _Fake(), "facebook": _Fake()}, clip_env, fb["id"], owner_command=True)
 
 
-def test_public_mode_requests_public_and_reports_what_youtube_actually_did(db, store, tmp_path):
+def test_public_mode_requests_public_and_reports_what_youtube_actually_did(db, store, tmp_path, valid_short):
     a = _acct(db, "youtube", "afterlive")
     cx.verify_identity(db, a["id"], [{"id": a["platform_id"]}])
     _yt_token(store, "afterlive")
@@ -298,3 +311,11 @@ def test_facebook_public_mode_finishes_with_published_state(db, store, tmp_path)
     assert _fb(store, handler).create_reel(db, fb["id"], v, "hi", publish=True)["state"] == "PUBLISHED"
     assert _fb(store, handler).create_reel(db, fb["id"], v, "hi", publish=False)["state"] == "DRAFT"
     assert "video_state=PUBLISHED" in seen[0] and "video_state=DRAFT" in seen[1]
+
+
+def test_instagram_entry_point_requests_only_approved_extra_scopes(store):
+    from urllib.parse import urlparse, parse_qs
+    url, _ = _fb(store, lambda r: httpx.Response(404)).authorize_url(include_instagram=True)
+    scopes = set(parse_qs(urlparse(url).query)["scope"][0].split(","))
+    assert {"instagram_basic", "instagram_content_publish"} <= scopes
+    assert not {"instagram_manage_messages", "instagram_manage_comments"} & scopes

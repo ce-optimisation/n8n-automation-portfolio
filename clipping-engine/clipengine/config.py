@@ -223,6 +223,8 @@ class Settings:
     public_media_base_url: str = ""         # https base reachable by Meta, required for instagram mode
     # Session 13: the Instagram API cannot create drafts; media_publish is PUBLIC. Off unless the owner opts in.
     instagram_public_publish: bool = False
+    keep_title_free_master: bool = True     # Session 14: keep clip_clean.mp4 (no title) so a title can be removed/changed without re-rendering
+    backdrop_dim: float = 1.0               # Session 15: scale of the blurred backdrop's brightness (1.0 = approved look, unchanged)
     title_semantic: bool = False            # Session 13: local semantic reranking of VERIFIED title candidates (off by default)
 
     # Email notifications (nothing is ever sent until the owner approves recipient + template in Settings)
@@ -270,6 +272,7 @@ class Settings:
     max_concurrent_jobs: int = 1            # heavy jobs run one at a time (only 1 is supported)
     defer_heavy_while_recording: bool = True  # hold transcription/rendering while a live recording runs
     disk_reserve_gb: float = 1.0
+    disk_warn_gb: float = 5.0               # Session 15: dashboard/alert warning level for free space (does not stop anything)
     record_gb_per_hour: float = 1.5         # planning estimate for live capture
     live_expected_hours: float = 4.5        # plan live resolution so a broadcast this long fits on disk
     live_min_height: int = 1080             # owner requirement (16 Nov 2026): never record or download below 1080p
@@ -384,6 +387,8 @@ def get_settings(**overrides) -> Settings:
         instagram_redirect_uri=os.environ.get("INSTAGRAM_REDIRECT_URI", ""),
         public_media_base_url=os.environ.get("PUBLIC_MEDIA_BASE_URL", "").rstrip("/"),
         instagram_public_publish=_bool("INSTAGRAM_PUBLIC_PUBLISH", False),
+        keep_title_free_master=_bool("KEEP_TITLE_FREE_MASTER", True),
+        backdrop_dim=_float("BACKDROP_DIM", 1.0),
         title_semantic=_bool("TITLE_SEMANTIC", False),
         transcriber_backend=os.environ.get("CLIPENGINE_TRANSCRIBER", "whisper"),
         notify_enabled=_bool("NOTIFY_ENABLED", True),
@@ -420,6 +425,7 @@ def get_settings(**overrides) -> Settings:
         max_concurrent_jobs=max(1, min(1, _int("MAX_CONCURRENT_JOBS", 1))),
         defer_heavy_while_recording=_bool("DEFER_HEAVY_WHILE_RECORDING", True),
         disk_reserve_gb=_float("DISK_RESERVE_GB", 1.0),
+        disk_warn_gb=_float("DISK_WARN_GB", 5.0),
         record_gb_per_hour=_float("RECORD_GB_PER_HOUR", 1.5),
         live_expected_hours=_float("LIVE_EXPECTED_HOURS", 4.5),
         live_min_height=_int("LIVE_MIN_HEIGHT", 1080),

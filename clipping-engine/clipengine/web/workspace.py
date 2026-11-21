@@ -668,7 +668,33 @@ def register(app, core, page, templates) -> None:
 
     # ---- analytics & commercial ---------------------------------------------------------------
     @app.get("/analytics", response_class=HTMLResponse)
-    def analytics(request: Request, msg: str = "", err: str = ""):
+    def analytics(request: Request, msg: str = "", err: str = "", brand: str = "", platform: str = ""):
+        accounts = db.query(
+            "SELECT a.*, s.audience, s.views, s.error, datetime(s.collected_at,'unixepoch') refreshed "
+            "FROM social_accounts a LEFT JOIN account_snapshots s ON s.id=(SELECT id FROM account_snapshots "
+            "WHERE account_id=a.id ORDER BY collected_at DESC LIMIT 1) "
+            "WHERE (?='' OR a.brand=?) AND (?='' OR a.platform=?) ORDER BY a.brand,a.platform",
+            (brand, brand, platform, platform))
+        posts = db.query(
+            "SELECT a.brand,a.platform,p.clip_id,p.remote_id,x.views,x.likes,x.comments,x.shares,x.error, "
+            "datetime(x.collected_at,'unixepoch') refreshed FROM post_snapshots x "
+            "JOIN social_accounts a ON a.id=x.account_id JOIN publish_attempts p ON p.id=x.attempt_id "
+            "WHERE x.id=(SELECT id FROM post_snapshots WHERE attempt_id=p.id ORDER BY collected_at DESC,id DESC LIMIT 1) "
+            "AND (?='' OR a.brand=?) AND (?='' OR a.platform=?) ORDER BY a.platform,x.views DESC,p.id DESC",
+            (brand,brand,platform,platform))
+        trends = {}
+        for row in accounts:
+            trend = {}
+            for days in (7,30):
+                baseline = db.one(
+                    "SELECT s.audience,s.views FROM account_snapshots s WHERE s.account_id=? AND "
+                    "s.collected_at BETWEEN strftime('%s',?) - (?+1)*86400 AND strftime('%s',?) - ?*86400 "
+                    "ORDER BY s.collected_at DESC LIMIT 1",
+                    (row["id"],row["refreshed"],days,row["refreshed"],days))
+                for metric in ("audience","views"):
+                    trend[days,metric] = (row[metric]-baseline[metric] if baseline and baseline[metric] is not None
+                                          and row[metric] is not None else None)
+            trends[row["id"]] = trend
         by_niche = db.query(
             "SELECT COALESCE(c.niche_key,'(none)') niche, COUNT(DISTINCT c.id) clips, "
             "SUM(c.status='approved') approved, SUM(c.published_at IS NOT NULL) published, "
@@ -682,7 +708,7 @@ def register(app, core, page, templates) -> None:
                           "ELSE 0 END),2) net FROM commercial_entries WHERE realised=1")["net"] or 0
         review_h = (db.one("SELECT SUM(review_seconds) s FROM clips")["s"] or 0) / 3600
         failures = db.one("SELECT COUNT(*) n FROM jobs WHERE status='failed' AND updated_at > ?", (time.time() - 30 * 86400,))["n"]
-        return page(request, "analytics.html", by_niche=by_niche, views=views, money=money, realised=realised,
+        return page(request, "analytics.html", posts=posts, trends=trends, accounts=accounts, brand=brand, platform=platform, brands=db.query("SELECT key,name FROM brands ORDER BY name"), by_niche=by_niche, views=views, money=money, realised=realised,
                     review_h=review_h, failures=failures, msg=msg, err=err,
                     per_hour=(realised / review_h) if review_h > 0.05 else None,
                     niches=db.query("SELECT key, name FROM niches ORDER BY name"),

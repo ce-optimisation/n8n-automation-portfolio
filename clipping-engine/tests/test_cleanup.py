@@ -492,7 +492,7 @@ def test_retention_cannot_delete_the_drive_master(settings):
     assert len(drive.files) == 0
 
 
-def test_published_clip_retention_keeps_drive_and_marks_it_restorable(settings):
+def test_age_alone_cannot_delete_published_clip_with_cleanup_off(settings):
     from clipengine import lifecycle
     db = Database(settings.db_path)
     drive = FakeDrive()
@@ -503,7 +503,7 @@ def test_published_clip_retention_keeps_drive_and_marks_it_restorable(settings):
     db.update("clips", cid, published_at=NOW - 30 * 86400)
     lc.retention(now=NOW)
     row = db.clip(cid)
-    assert row["local_deleted_at"] and row["cleanup_state"] == "LOCAL_DELETED" and len(drive.files) == 2 and not path.exists()
+    assert not row["local_deleted_at"] and path.exists() and len(drive.files) == 2
 
 
 def test_raw_recording_gate_accepts_cleaned_clips_with_verified_drive_copy(settings):

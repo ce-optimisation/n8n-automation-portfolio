@@ -29,7 +29,7 @@ CAL_FILE = Path(__file__).resolve().parent / "assets" / "title_calibration.json"
 # Measured from the approved concept on 17 Nov 2026 (used only if the calibration file is missing).
 _DEFAULT_CAL = {"lead_ass_size_1080": 199.4, "emphasis_scale": 1.209, "libass_cap_ratio": 0.495,
                 "libass_cap_centre_offset": 0.06, "line_pitch_px_1080": 152.6,
-                "cap_height_px_1080": {"lead": 98.7, "emphasis": 119.4}, "title_centre_y_frac": 0.2658,
+                "cap_height_px_1080": {"lead": 98.7, "emphasis": 119.4}, "title_centre_y_frac": 0.15,
                 "yellow_rgb": [253, 251, 4], "accent_perimeter_px_1080": 4.6, "accent_black_ring_px_1080": 9.2}
 
 
@@ -228,7 +228,8 @@ def build_events(title: str, style: TitleStyle, duration: float, width: int, hei
         return "", ""
     cal = calibration()
     lines = layout(words, style, width, height, fg_h)
-    st = (f"Style: Title,{style.font},{style.size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,"
+    horizontal_scale = 89 if style.variant == "classic" else 100
+    st = (f"Style: Title,{style.font},{style.size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,{horizontal_scale},100,0,0,1,"
           f"2,0,5,0,0,0,1")
     ev = []
     t0, t1 = captions._ts(0), captions._ts(duration)
