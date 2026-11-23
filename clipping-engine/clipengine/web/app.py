@@ -233,12 +233,13 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             return False
 
     @app.get("/m", response_class=HTMLResponse)
-    def mobile_review(request: Request, skip: str = "", msg: str = ""):
+    def mobile_review(request: Request, skip: str = "", msg: str = "", *, rejected_id: int | None = None):
         skipped = {int(x) for x in skip.split(",") if x.strip().isdigit()}
         rest = [c for c in phone.phone_queue(core.db) if c["id"] not in skipped]
         c = rest[0] if rest else None
         ctx = {"c": c, "left": len(rest), "skip": skip, "msg": msg[:200], "dests": [], "manual": [], "creator": "", "brand": "",
-               "counts": phone.queue_counts(core.db)}
+               "counts": phone.queue_counts(core.db), "rejected_id": rejected_id,
+               "rejection_reasons": rejection_reasons}
         if c:
             if not c["review_opened_at"]:
                 core.db.update("clips", c["id"], review_opened_at=time.time())
@@ -328,10 +329,41 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
 
     @app.post("/m/{cid}/reject")
     def mobile_reject(request: Request, cid: int, skip: str = Form("")):
-        _, message = reject_reviewable(cid)
+        decided, message = reject_reviewable(cid)
         if request.headers.get("HX-Request") == "true":
-            return mobile_review(request, skip, message)
+            return mobile_review(request, skip, message, rejected_id=cid if decided else None)
         return _mobile_redirect(skip, message)
+
+    rejection_reasons = {
+        "weak_opening": "Weak opening",
+        "missing_context": "Missing context",
+        "duplicate_topic": "Duplicate topic",
+        "overlapping_captions": "Overlapping captions",
+        "other": "Other",
+    }
+
+    @app.post("/clips/{cid}/rejection-feedback", response_class=HTMLResponse)
+    def rejection_feedback(cid: int, reason: str = Form(...)):
+        if reason not in rejection_reasons:
+            raise HTTPException(422, "Choose a rejection reason.")
+        with core.db.tx() as conn:
+            row = conn.execute("SELECT status FROM clips WHERE id=?", (cid,)).fetchone()
+            if not row or row["status"] != "rejected":
+                raise HTTPException(409, "Feedback is only available for rejected clips.")
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                         (f"rejection.reason.{cid}", reason))
+        return HTMLResponse('<p role="status">Feedback saved.</p>')
+
+    @app.get("/rejection-feedback", response_class=HTMLResponse)
+    def rejection_report(request: Request):
+        from collections import Counter
+        counts = Counter()
+        for c in core.db.query("SELECT c.*, m.value AS rejection_reason FROM clips c LEFT JOIN meta m "
+                               "ON m.key='rejection.reason.' || c.id WHERE c.status='rejected'"):
+            brand = delivery.clip_brand(core.db, c) or "Unassigned"
+            reason = rejection_reasons.get(c["rejection_reason"], "No reason provided")
+            counts[brand, reason] += 1
+        return templates.TemplateResponse(request, "rejection_feedback.html", {"counts": sorted(counts.items())})
 
     @app.post("/m/{cid}/title/remove")
     def mobile_title_remove(cid: int, skip: str = Form("")):
@@ -702,7 +734,8 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         if request.headers.get("HX-Request") == "true":
             if not decided:
                 return HTMLResponse(html_escape(message), headers={"HX-Reswap": "beforeend"})
-            return HTMLResponse(f'<p role="status">{html_escape(message)}</p>')
+            return templates.TemplateResponse(request, "_rejection_feedback.html", {
+                "msg": message, "rejected_id": cid, "rejection_reasons": rejection_reasons})
         return _back(request, cid, msg=message)
 
     def _review_seconds(c):

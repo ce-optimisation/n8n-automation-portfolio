@@ -38,7 +38,8 @@
 </header>
 {% if disk %}<div class="flash" style="border-left-color:var(--bad)">Disk: {{ disk }}</div>{% endif %}
 {% if counts %}<p class="muted">Waiting: {% for name, n in counts %}{{ name }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
-{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+{% if rejected_id %}{% include "_rejection_feedback.html" %}
+{% elif msg %}<div class="flash">{{ msg }}</div>{% endif %}
 {% if c %}
   <video controls playsinline preload="metadata" poster="/clips/{{ c.id }}/thumb" src="/clips/{{ c.id }}/video"></video>
   <h1>{{ c.title or "Untitled clip" }}</h1>

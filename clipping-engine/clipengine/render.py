@@ -119,8 +119,9 @@ def write_ass(phrases: list[dict], path: Path, settings: Settings, src_w: int, s
     if title and title_style is not None and title_style.enabled:
         tev = titles.build_events(title, title_style, duration or (phrases[-1]["end"] + 5 if phrases else 60),
                                   settings.out_width, settings.out_height, fg_h)
-    path.write_text(captions.build_ass(phrases, style, settings.out_width, settings.out_height, label, tev,
-                                       groups=groups, fg_h=fg_h),
+    path.write_text(captions.build_ass(phrases if style.enabled else [], style, settings.out_width,
+                                       settings.out_height, label, tev,
+                                       groups=groups if style.enabled else None, fg_h=fg_h),
                     encoding="utf-8")
 
 

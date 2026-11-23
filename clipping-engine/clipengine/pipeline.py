@@ -524,9 +524,13 @@ class Pipeline:
         creator = self.creator_for(rec)
         tstyle = titles.style_for(self.db, creator["brand_key"] if creator else None)
         ttext = titles.format_title(clip["title"], single_phrase=tstyle.single_phrase) if (clip["title"] and tstyle.enabled) else None
+        caption_style = captions.style_for(self.db, creator["brand_key"] if creator else None)
+        source_settings = json.loads(rec["settings_json"] or "{}")
+        if source_settings.get("source_has_burned_in_captions") is True:
+            caption_style = replace(caption_style, enabled=False)
         res = render.render_clip(self.settings, Path(rec["file_path"]), out_dir, clip["start"], clip["end"],
                                  words, rec["width"], rec["height"], label,
-                                 style=captions.style_for(self.db, creator["brand_key"] if creator else None),
+                                 style=caption_style,
                                  title=ttext, title_style=tstyle,
                                  line_style=framelines.style_for(self.db, creator["brand_key"] if creator else None),
                                  on_progress=lambda f: ctx.progress(0.05 + 0.9 * f, "Rendering"))

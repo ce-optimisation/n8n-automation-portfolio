@@ -182,6 +182,8 @@ def layout(words, style: TitleStyle, width: int, height: int, fg_h: float) -> li
             break
         shrink -= 0.02
     centre = (style.centre_frac if style.centre_frac is not None else cal["title_centre_y_frac"]) * height
+    if style.centre_frac is None and band_h >= 160:
+        centre = band_h / 2 + height * (48 / 1920)
     pad_b = 60 if style.single_phrase else 24          # AFM v2: the block stays >= 60 px clear of the picture
     if band_h >= 160:
         centre = min(max(centre, 24 + block / 2), band_h - pad_b - block / 2)

@@ -1,0 +1,13 @@
+<div>
+  <p role="status">{{ msg }}</p>
+  <form hx-post="/clips/{{ rejected_id }}/rejection-feedback" hx-target="this" hx-swap="outerHTML">
+    <label>Why reject #{{ rejected_id }}? (optional)
+      <select name="reason" required>
+        <option value="">Choose a reason</option>
+        {% for code, label in rejection_reasons.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Save feedback</button>
+    <a href="/rejection-feedback">Feedback report</a>
+  </form>
+</div>

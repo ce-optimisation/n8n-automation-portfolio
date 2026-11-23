@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Rejection feedback</h1>
+<p>Counts include rejected clips whose local video was deleted.</p>
+<table class="jobs">
+  <thead><tr><th>Brand</th><th>Reason</th><th>Clips</th></tr></thead>
+  <tbody>
+  {% for (brand, reason), count in counts %}
+    <tr><td>{{ brand | replace('_', ' ') | title }}</td><td>{{ reason }}</td><td>{{ count }}</td></tr>
+  {% else %}
+    <tr><td colspan="3">No rejected clips yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
