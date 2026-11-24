@@ -727,6 +727,16 @@ def register(app, core, page, templates) -> None:
                 metric: post[metric] - prior[metric] if prior and prior[metric] is not None and post[metric] is not None else None
                 for metric in ("views", "likes", "comments", "shares")
             }
+        post_totals = {}
+        for channel in ("youtube", "facebook", "instagram", "tiktok"):
+            channel_posts = [post for post in posts if post["platform"] == channel]
+            if not channel_posts:
+                continue
+            totals = {}
+            for metric in ("views", "likes", "comments", "shares"):
+                available = [post[metric] for post in channel_posts if post[metric] is not None]
+                totals[metric] = (sum(available), len(available)) if available else (None, 0)
+            post_totals[channel] = (len(channel_posts), totals)
         audience = [r["audience"] for r in accounts if r["audience"] is not None]
         audience_by_kind = {
             "Subscribers": [r["audience"] for r in accounts if r["platform"] == "youtube" and r["audience"] is not None],
@@ -803,7 +813,7 @@ def register(app, core, page, templates) -> None:
                     reconnect_count=sum(r["error"] == "Reconnect account" for r in accounts),
                     audience_by_kind=audience_by_kind, delivery=delivery,
                     youtube_reports=youtube_reports, meta_reports=meta_reports, report_days=report_days,
-                    post_links=post_links, post_changes=post_changes,
+                    post_links=post_links, post_changes=post_changes, post_totals=post_totals,
                     brands=db.query("SELECT key,name FROM brands ORDER BY name"), by_niche=by_niche, views=views, money=money, realised=realised,
                     review_h=review_h, failures=failures, msg=msg, err=err,
                     per_hour=(realised / review_h) if review_h > 0.05 else None,
