@@ -54,7 +54,8 @@
     <li>Credentials → Create credentials → OAuth client ID → <b>Desktop app</b>. Put its ID and secret in <code>.env</code> as <code>CLIPENGINE_GOOGLE_CLIENT_ID</code> and <code>CLIPENGINE_GOOGLE_CLIENT_SECRET</code>, then restart the engine.</li>
     <li>Come back here and press <b>Connect Google Drive</b>. Redirect used: <code>{{ redirect }}</code></li></ol></details>
   {% elif not cloud.connected %}<p><a class="btn" href="/cloud/connect">Connect Google Drive</a></p>
-  {% else %}<form method="post" action="/cloud/disconnect"><button class="btn ghost">Disconnect (nothing in Drive is deleted)</button></form>{% endif %}
+  {% else %}<p><a class="btn{% if not cloud.reconnect_required %} ghost{% endif %}" href="/cloud/connect">Reconnect Google Drive</a></p>
+  <form method="post" action="/cloud/disconnect"><button class="btn ghost">Disconnect (nothing in Drive is deleted)</button></form>{% endif %}
 </section>
 <section class="card"><h2>Automatic clean-up</h2>
 <form method="post" action="/storage/retention" class="stack">

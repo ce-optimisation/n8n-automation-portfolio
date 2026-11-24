@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Form, HTTPException, Request, UploadFile, File
@@ -704,8 +705,8 @@ def register(app, core, page, templates) -> None:
             "WHERE (?='' OR a.brand=?) AND (?='' OR a.platform=?) ORDER BY a.brand,a.platform",
             (brand, brand, platform, platform))
         posts = db.query(
-            "SELECT a.brand,a.platform,p.clip_id,p.remote_id,c.title,datetime(COALESCE(p.confirmed_at,p.created_at),'unixepoch') posted, "
-            "x.views,x.likes,x.comments,x.shares,x.error, "
+            "SELECT a.brand,a.platform,p.id attempt_id,p.clip_id,p.remote_id,c.title,datetime(COALESCE(p.confirmed_at,p.created_at),'unixepoch') posted, "
+            "x.views,x.likes,x.comments,x.shares,x.error,x.collected_at, "
             "datetime(x.collected_at,'unixepoch') refreshed FROM post_snapshots x "
             "JOIN social_accounts a ON a.id=x.account_id JOIN publish_attempts p ON p.id=x.attempt_id "
             "JOIN clips c ON c.id=p.clip_id "
@@ -713,7 +714,63 @@ def register(app, core, page, templates) -> None:
             "AND COALESCE(p.confirmed_at,p.created_at)>=? AND (?='' OR a.brand=?) AND (?='' OR a.platform=?) "
             "ORDER BY a.platform,x.views DESC,p.id DESC",
             (since,brand,brand,platform,platform))
+        post_links = {row["attempt_id"]: db.get_kv(f"analytics.permalink.{row['attempt_id']}") for row in posts
+                      if row["platform"] == "instagram"}
+        post_changes = {}
+        trend_days = 7 if period == "7" else 30
+        for post in posts:
+            baseline = post["collected_at"] - trend_days * 86400
+            prior = db.one("SELECT views,likes,comments,shares FROM post_snapshots WHERE attempt_id=? "
+                           "AND collected_at BETWEEN ? AND ? ORDER BY collected_at DESC,id DESC LIMIT 1",
+                           (post["attempt_id"], baseline - 86400, baseline))
+            post_changes[post["attempt_id"]] = {
+                metric: post[metric] - prior[metric] if prior and prior[metric] is not None and post[metric] is not None else None
+                for metric in ("views", "likes", "comments", "shares")
+            }
         audience = [r["audience"] for r in accounts if r["audience"] is not None]
+        audience_by_kind = {
+            "Subscribers": [r["audience"] for r in accounts if r["platform"] == "youtube" and r["audience"] is not None],
+            "Followers": [r["audience"] for r in accounts if r["platform"] != "youtube" and r["audience"] is not None],
+        }
+        delivery = db.one(
+            """SELECT COUNT(DISTINCT CASE WHEN j.status='failed' THEN j.id END) AS failures,
+                      COUNT(DISTINCT p.platform || ':' || p.remote_id) AS published
+               FROM jobs j JOIN social_accounts a ON a.id=json_extract(
+                   CASE WHEN json_valid(j.payload_json) THEN j.payload_json ELSE '{}' END,'$.account_id')
+               LEFT JOIN publish_attempts p ON p.job_id=j.id AND p.status='published'
+                   AND COALESCE(p.confirmed_at,p.created_at)>=?
+               WHERE j.kind='deliver_clip' AND j.updated_at>=?
+                   AND (?='' OR a.brand=?) AND (?='' OR a.platform=?)""",
+            (since, since, brand, brand, platform, platform))
+        report_days = 7 if period == "7" else 30
+        youtube_reports = {}
+        meta_reports = {}
+        for row in accounts:
+            if row["platform"] in ("facebook", "instagram"):
+                key = f"analytics.meta.{row['id']}"
+                report = json.loads(db.get_kv(key) or "{}")
+                meta_reports[row["id"]] = {
+                    "totals": report.get("values", {}).get(str(report_days), {}),
+                    "through": report.get("through"),
+                    "collected": datetime.fromtimestamp(report["collected_at"], timezone.utc).isoformat(timespec="minutes")
+                    if "collected_at" in report else None,
+                    "error": db.get_kv(f"{key}.error"),
+                }
+            if row["platform"] != "youtube":
+                continue
+            key = f"analytics.youtube.{row['id']}"
+            cached = json.loads(db.get_kv(key) or "{}")
+            cutoff = datetime.fromtimestamp(time.time() - report_days * 86400, timezone.utc).date().isoformat()
+            days = [day for day in cached.get("rows", []) if day.get("day", "") >= cutoff]
+            youtube_reports[row["id"]] = {
+                "totals": {metric: sum(day[metric] for day in days) if days and
+                           all(day.get(metric) is not None for day in days) else None
+                           for metric in ("views", "likes", "comments", "shares", "subscribersGained", "subscribersLost")},
+                "through": days[-1]["day"] if days else None,
+                "collected": datetime.fromtimestamp(cached["collected_at"], timezone.utc).isoformat(timespec="minutes")
+                if "collected_at" in cached else None,
+                "error": db.get_kv(f"{key}.error"),
+            }
         trends = {}
         for row in accounts:
             trend = {}
@@ -743,6 +800,9 @@ def register(app, core, page, templates) -> None:
         return page(request, "analytics.html", posts=posts, trends=trends, accounts=accounts, brand=brand,
                     platform=platform, period=period, audience_total=sum(audience) if audience else None,
                     audience_coverage=len(audience), connected=sum(r["status"] == "connected" for r in accounts),
+                    audience_by_kind=audience_by_kind, delivery=delivery,
+                    youtube_reports=youtube_reports, meta_reports=meta_reports, report_days=report_days,
+                    post_links=post_links, post_changes=post_changes,
                     brands=db.query("SELECT key,name FROM brands ORDER BY name"), by_niche=by_niche, views=views, money=money, realised=realised,
                     review_h=review_h, failures=failures, msg=msg, err=err,
                     per_hour=(realised / review_h) if review_h > 0.05 else None,

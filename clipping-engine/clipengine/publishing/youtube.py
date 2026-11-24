@@ -22,6 +22,7 @@ from ..jobs import PermanentError
 from .base import NotConfigured, PublishError
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"]
+ANALYTICS_SCOPES = [SCOPES[0], "https://www.googleapis.com/auth/yt-analytics.readonly"]
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 
 
@@ -38,6 +39,20 @@ class YouTubeClient:
 
     def oauth(self, brand: str) -> GoogleOAuth:
         return GoogleOAuth(self.client_id, self.client_secret, self.store, f"youtube:{brand}", SCOPES, http=self.http)
+
+    def analytics_oauth(self, brand: str) -> GoogleOAuth:
+        return GoogleOAuth(self.client_id, self.client_secret, self.store, f"youtube-analytics:{brand}",
+                           ANALYTICS_SCOPES, http=self.http)
+
+    def connect_analytics(self, account, code: str, redirect_uri: str, verifier: str) -> None:
+        oauth = self.analytics_oauth(account["brand"])
+        token = oauth.exchange(code, redirect_uri, verifier, save=False)
+        if not set(ANALYTICS_SCOPES).issubset(token["scope"].split()):
+            raise PermanentError("Google did not grant the requested read-only analytics permissions.")
+        identities = cx.youtube_identity(self.http, token["access_token"])
+        if {row["id"] for row in identities} != {account["verified_platform_id"]}:
+            raise PermanentError("Select the verified YouTube channel for this brand and try again.")
+        self.store.set(oauth.key, token)
 
     def authorize_url(self, brand: str, redirect_uri: str) -> tuple[str, str, str]:
         if not self.configured:

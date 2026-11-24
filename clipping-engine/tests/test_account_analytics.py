@@ -35,3 +35,37 @@ def test_filtered_analytics_trends(settings):
         response = client.get("/analytics?brand=afterlive&platform=youtube")
         assert response.status_code == 200
         assert "4 / 8" in response.text and "Unavailable" in response.text
+
+
+def test_read_only_analytics_authorisation_routes(settings):
+    app = create_app(settings, start_worker=False)
+    core = app.state.core
+    core.youtube.client_id, core.youtube.client_secret = "google-id", "google-secret"
+    core.facebook.app_id, core.facebook.app_secret, core.facebook.redirect_uri = "meta-id", "meta-secret", "https://example.test/callback"
+    core.db.execute("UPDATE social_accounts SET identity_verified_at=1 WHERE platform='youtube' AND brand='afterlive'")
+    with TestClient(app, follow_redirects=False) as client:
+        youtube = client.get("/connections/youtube/analytics/afterlive")
+        meta = client.get("/connections/facebook/connect?analytics=true")
+    youtube_scopes = httpx.URL(youtube.headers["location"]).params["scope"].split()
+    meta_scopes = httpx.URL(meta.headers["location"]).params["scope"].split(",")
+    assert youtube.status_code == meta.status_code == 303
+    assert {scope.rsplit("/", 1)[-1] for scope in youtube_scopes} == {"youtube.readonly", "yt-analytics.readonly"}
+    assert set(meta_scopes) == {"pages_show_list", "pages_read_engagement", "read_insights",
+                                "instagram_basic", "instagram_manage_insights"}
+
+
+def test_report_collectors_keep_zero_and_omitted_metrics_distinct():
+    def handler(request):
+        assert request.headers["Authorization"] == "Bearer read-only"
+        if request.url.host == "youtubeanalytics.googleapis.com":
+            assert request.url.params["ids"] == "channel==MINE"
+            return httpx.Response(200, json={"columnHeaders": [{"name": "day"}, {"name": "views"}],
+                                             "rows": [["2026-11-22", 0]]})
+        assert request.url.params["metric_type"] == "total_value"
+        return httpx.Response(200, json={"data": [{"name": "views", "total_value": {"value": 0}},
+                                                 {"name": "reach"}]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert analytics.youtube_report(client, "read-only", 1795540000) == [{"day": "2026-11-22", "views": 0}]
+        report = analytics.meta_report(client, "instagram", "123", "read-only", "v23.0", 1795540000)
+    assert report["values"] == {"7": {"views": 0}, "30": {"views": 0}}

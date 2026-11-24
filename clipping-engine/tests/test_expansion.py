@@ -360,6 +360,23 @@ def test_cloud_status_is_honest_about_connection(settings):
     assert svc.status()["label"] == "READY FOR OWNER CONNECTION" and not svc.status()["connected"]
 
 
+def test_rejected_drive_refresh_updates_health_until_reconnected(settings, monkeypatch):
+    db = Database(settings.db_path)
+    svc = _cloud(settings, db, JobQueue(db), FakeDrive())
+    quota = svc.provider.quota
+
+    def rejected_refresh():
+        raise cloud.GoogleReconnectionRequired("Refresh rejected")
+
+    monkeypatch.setattr(svc.provider, "quota", rejected_refresh)
+    with pytest.raises(cloud.GoogleReconnectionRequired):
+        svc.refresh_quota()
+    assert svc.status()["label"] == "Reconnect Google Drive"
+    monkeypatch.setattr(svc.provider, "quota", quota)
+    svc.refresh_quota()
+    assert svc.status()["label"] == "Connected"
+
+
 # ---- raw deletion gates and retention -------------------------------------------------------
 
 @pytest.fixture

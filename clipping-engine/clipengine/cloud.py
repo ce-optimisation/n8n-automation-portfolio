@@ -37,6 +37,10 @@ YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 CHUNK = 8 * 1024 * 1024
 
 
+class GoogleReconnectionRequired(PermanentError):
+    """Google rejected a stored refresh credential."""
+
+
 def md5_file(path: Path) -> str:
     h = hashlib.md5()
     with open(path, "rb") as f:
@@ -74,7 +78,7 @@ class GoogleOAuth:
              "code_challenge": challenge, "code_challenge_method": "S256"}
         return f"{GOOGLE_AUTH}?{urlencode(q)}", state, verifier
 
-    def exchange(self, code: str, redirect_uri: str, verifier: str) -> dict:
+    def exchange(self, code: str, redirect_uri: str, verifier: str, *, save: bool = True) -> dict:
         r = self._client().post(GOOGLE_TOKEN, data={"code": code, "client_id": self.client_id,
                                                     "client_secret": self.client_secret, "redirect_uri": redirect_uri,
                                                     "grant_type": "authorization_code", "code_verifier": verifier})
@@ -85,7 +89,8 @@ class GoogleOAuth:
                "expires_at": time.time() + float(d.get("expires_in", 3600)), "scope": d.get("scope", "")}
         if not tok["refresh_token"]:
             raise PermanentError("Google did not return a refresh token; disconnect and connect again.")
-        self.tokens.set(self.key, tok)
+        if save:
+            self.tokens.set(self.key, tok)
         return tok
 
     def access_token(self) -> str:
@@ -97,7 +102,7 @@ class GoogleOAuth:
         r = self._client().post(GOOGLE_TOKEN, data={"client_id": self.client_id, "client_secret": self.client_secret,
                                                     "refresh_token": tok["refresh_token"], "grant_type": "refresh_token"})
         if r.status_code in (400, 401):
-            raise PermanentError("Google sign-in has expired or was revoked; connect again on the Storage page.")
+            raise GoogleReconnectionRequired("Google sign-in has expired or was revoked; connect again on the Storage page.")
         if r.status_code != 200:
             raise TransientError(f"Google token refresh failed (HTTP {r.status_code})")
         d = r.json()
@@ -277,11 +282,13 @@ class CloudService:
     # ---- status ------------------------------------------------------------------------------
     def status(self) -> dict:
         rows = self.db.query("SELECT state, COUNT(*) n, COALESCE(SUM(size),0) b FROM cloud_objects GROUP BY state")
+        connected = self.provider.connected()
+        reconnect = connected and self.provider.name == "gdrive" and self.db.get_kv("cloud.reconnect_required") == "1"
         st = {"provider": self.provider.name, "configured": self.oauth.configured(),
-              "connected": self.provider.connected(),
+              "connected": connected, "reconnect_required": reconnect,
               "objects": {r["state"]: {"n": r["n"], "gb": r["b"] / 1e9} for r in rows},
               "label": "Not set up" if not self.oauth.configured() else
-              ("Connected" if self.provider.connected() else "READY FOR OWNER CONNECTION")}
+              ("Reconnect Google Drive" if reconnect else "Connected" if connected else "READY FOR OWNER CONNECTION")}
         cached = self.db.get_kv("cloud_quota")
         if cached:
             st["quota"] = json.loads(cached)
@@ -290,7 +297,13 @@ class CloudService:
     def refresh_quota(self) -> dict | None:
         if not self.provider.connected():
             return None
-        q = self.provider.quota()
+        try:
+            q = self.provider.quota()
+        except GoogleReconnectionRequired:
+            self.db.set_kv("cloud.reconnect_required", "1")
+            raise
+        if self.provider.name == "gdrive":
+            self.db.set_kv("cloud.reconnect_required", "0")
         q["checked_at"] = time.time()
         self.db.set_kv("cloud_quota", json.dumps(q))
         return q
@@ -353,6 +366,9 @@ class CloudService:
         import httpx
         try:
             self._run(ctx)
+        except GoogleReconnectionRequired:
+            self.db.set_kv("cloud.reconnect_required", "1")
+            raise
         except httpx.TransportError as e:
             raise TransientError(f"Network problem talking to Google Drive ({type(e).__name__}: {e}); "
                                  "will retry.", retry_after=120) from e
@@ -366,7 +382,7 @@ class CloudService:
             raise PermanentError("Google Drive is not connected (Storage page).")
         try:
             self.refresh_quota()
-        except TransientError:
+        except (TransientError, GoogleReconnectionRequired):
             raise
         except Exception as e:  # noqa: BLE001 - a quota check failure is not fatal for the upload
             ctx.log(f"quota check failed: {e}", "WARNING")

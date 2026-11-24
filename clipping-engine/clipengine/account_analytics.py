@@ -1,7 +1,52 @@
 """Low-frequency read-only account statistics. Never persist platform credentials or API bodies."""
+import json
 import time
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import httpx
+
+
+YOUTUBE_REPORT_METRICS = ("views", "likes", "comments", "shares", "subscribersGained", "subscribersLost")
+
+
+def meta_report(client, platform, identity, token, version, now):
+    end = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    values = {}
+    for days in (7, 30):
+        params = {"period": "day", "since": int((end - timedelta(days=days)).timestamp()),
+                  "until": int(end.timestamp())}
+        if platform == "facebook":
+            params["metric"] = "page_media_view"
+        else:
+            params.update(metric="views,reach,total_interactions", metric_type="total_value")
+        response = client.get(f"https://graph.facebook.com/{version}/{identity}/insights",
+                              params=params, headers={"Authorization": f"Bearer {token}"})
+        response.raise_for_status()
+        values[str(days)] = {}
+        for metric in response.json().get("data", []):
+            if platform == "facebook":
+                daily = [row.get("value") for row in metric.get("values", [])]
+                if len(daily) == days and all(isinstance(value, int) for value in daily):
+                    values[str(days)]["views"] = sum(daily)
+            elif isinstance(metric.get("total_value", {}).get("value"), int):
+                values[str(days)][metric["name"]] = metric["total_value"]["value"]
+    return {"collected_at": now, "through": (end.date() - timedelta(days=1)).isoformat(), "values": values}
+
+
+def youtube_report(client, token, now):
+    end = datetime.fromtimestamp(now, timezone.utc).date() - timedelta(days=1)
+    response = client.get(
+        "https://youtubeanalytics.googleapis.com/v2/reports",
+        params={"ids": "channel==MINE", "startDate": (end - timedelta(days=29)).isoformat(),
+                "endDate": end.isoformat(), "dimensions": "day", "sort": "day",
+                "metrics": ",".join(YOUTUBE_REPORT_METRICS)},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    response.raise_for_status()
+    data = response.json()
+    columns = [header["name"] for header in data["columnHeaders"]]
+    return [dict(zip(columns, row, strict=True)) for row in data.get("rows", [])]
 
 
 def collect(db, youtube, tokens, version):
@@ -55,11 +100,42 @@ def collect(db, youtube, tokens, version):
                 reason = "Account statistics unavailable"
             db.insert("account_snapshots", account_id=account["id"], collected_at=now,
                       audience=audience, views=views, error=reason)
+            if platform == "youtube" and "youtube-report" not in limited and hasattr(youtube, "analytics_oauth"):
+                oauth = youtube.analytics_oauth(account["brand"])
+                if oauth.connected():
+                    key = f"analytics.youtube.{account['id']}"
+                    try:
+                        report = youtube_report(client, oauth.access_token(), now)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code == 429:
+                            limited.add("youtube-report")
+                        db.set_kv(f"{key}.error", f"YouTube report returned HTTP {exc.response.status_code}")
+                    except Exception:
+                        db.set_kv(f"{key}.error", "Could not refresh YouTube report. Check the analytics connection.")
+                    else:
+                        db.set_kv(key, json.dumps({"collected_at": now, "rows": report}))
+                        db.set_kv(f"{key}.error", "")
+            if platform in ("facebook", "instagram") and f"{platform}-report" not in limited:
+                grant = tokens.get(f"{platform}-analytics:{account['brand']}") or {}
+                if grant.get("access_token") and grant.get("identity") == str(account["verified_platform_id"]):
+                    key = f"analytics.meta.{account['id']}"
+                    try:
+                        report = meta_report(client, platform, grant["identity"], grant["access_token"], version, now)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code == 429:
+                            limited.add(f"{platform}-report")
+                        db.set_kv(f"{key}.error", f"Meta Insights returned HTTP {exc.response.status_code}")
+                    except (httpx.RequestError, KeyError, ValueError, TypeError):
+                        db.set_kv(f"{key}.error", "Could not refresh Meta Insights.")
+                    else:
+                        db.set_kv(key, json.dumps(report))
+                        db.set_kv(f"{key}.error", "")
             if reason is None:
                 try:
-                    collect_posts(db, client, account, token, version, now)
-                except httpx.HTTPStatusError:
-                    limited.add(platform)
+                    collect_posts(db, client, account, token, version, now, tokens)
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 429:
+                        limited.add(platform)
 
 
 def published_posts(db, account):
@@ -79,8 +155,9 @@ def published_posts(db, account):
            ORDER BY p.id DESC LIMIT 20""", (account["id"],))
 
 
-def collect_posts(db, client, account, token, version, now):
+def collect_posts(db, client, account, token, version, now, tokens=None):
     platform = account["platform"]
+    grant = (tokens.get(f"{platform}-analytics:{account['brand']}") or {}) if tokens else {}
     for post in published_posts(db, account):
         remote = post["remote_id"]
         metrics = {}
@@ -91,7 +168,7 @@ def collect_posts(db, client, account, token, version, now):
                 params = {"part": "snippet,statistics", "id": remote}
             else:
                 url = f"https://graph.facebook.com/{version}/{remote}"
-                params = {"fields": "id,like_count,comments_count" if platform == "instagram"
+                params = {"fields": "id,like_count,comments_count,permalink" if platform == "instagram"
                           else "id,comments.limit(0).summary(true),likes.limit(0).summary(true)"}
             response = client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
             response.raise_for_status()
@@ -105,9 +182,25 @@ def collect_posts(db, client, account, token, version, now):
             elif data.get("id") == remote:
                 if platform == "instagram":
                     metrics = {"likes": data.get("like_count"), "comments": data.get("comments_count")}
+                    link = urlsplit(data.get("permalink") or "")
+                    if link.scheme == "https" and link.netloc in ("www.instagram.com", "instagram.com"):
+                        db.set_kv(f"analytics.permalink.{post['id']}", link.geturl())
                 else:
                     metrics = {key: data.get(key, {}).get("summary", {}).get("total_count")
                                for key in ("likes", "comments")}
+                if grant.get("identity") == str(account["verified_platform_id"]) and grant.get("access_token"):
+                    edge, requested = ("insights", {"views": "views", "shares": "shares"}) if platform == "instagram" else (
+                        "video_insights", {"fb_reels_total_plays": "views"})
+                    try:
+                        insights = client.get(f"{url}/{edge}", params={"metric": ",".join(requested)},
+                                              headers={"Authorization": f"Bearer {grant['access_token']}"})
+                        insights.raise_for_status()
+                        for row in insights.json().get("data", []):
+                            values = row.get("values") or []
+                            if row.get("name") in requested and values and isinstance(values[0].get("value"), int):
+                                metrics[requested[row["name"]]] = values[0]["value"]
+                    except (httpx.HTTPError, ValueError, TypeError):
+                        error = "Post Insights unavailable"
         except httpx.HTTPStatusError as exc:
             error = f"Platform returned HTTP {exc.response.status_code}"
             if exc.response.status_code in (403, 429):

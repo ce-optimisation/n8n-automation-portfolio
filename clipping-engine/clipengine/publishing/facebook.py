@@ -25,6 +25,7 @@ from .base import NotConfigured, PublishError
 LOGIN_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
 INSTAGRAM_SCOPES = LOGIN_SCOPES + ",instagram_basic,instagram_content_publish"
 USER_KEY = "facebook:user"
+ANALYTICS_SCOPES = "pages_show_list,pages_read_engagement,read_insights,instagram_basic,instagram_manage_insights"
 
 
 class FacebookClient:
@@ -46,12 +47,12 @@ class FacebookClient:
         return [k for k, v in (("META_APP_ID", self.app_id), ("META_APP_SECRET", self.app_secret),
                                ("META_REDIRECT_URI", self.redirect_uri)) if not v]
 
-    def authorize_url(self, include_instagram: bool = False) -> tuple[str, dict]:
+    def authorize_url(self, include_instagram: bool = False, *, analytics: bool = False) -> tuple[str, dict]:
         if not self.configured:
             raise NotConfigured("Facebook is not configured: set " + ", ".join(self.missing_config()) + " in .env")
         state = secrets.token_urlsafe(24)
         q = {"client_id": self.app_id, "redirect_uri": self.redirect_uri, "state": state,
-             "scope": INSTAGRAM_SCOPES if include_instagram else LOGIN_SCOPES,
+             "scope": ANALYTICS_SCOPES if analytics else (INSTAGRAM_SCOPES if include_instagram else LOGIN_SCOPES),
              "response_type": "code"}
         return f"https://www.facebook.com/{self.version}/dialog/oauth?" + urllib.parse.urlencode(q), {"state": state}
 
@@ -65,6 +66,9 @@ class FacebookClient:
 
     def exchange_code(self, code: str) -> None:
         """Code -> long-lived USER token (stored under facebook:user). Page tokens come later, per brand, after id checks."""
+        self.store.set(USER_KEY, self._exchange_user(code))
+
+    def _exchange_user(self, code: str) -> dict:
         short = self._json(self.http.get(f"{self.graph}/oauth/access_token", params={
             "client_id": self.app_id, "redirect_uri": self.redirect_uri, "client_secret": self.app_secret, "code": code}))
         long = self._json(self.http.get(f"{self.graph}/oauth/access_token", params={
@@ -74,15 +78,37 @@ class FacebookClient:
             "access_token": long["access_token"]}))
         granted = sorted({p["permission"] for p in permissions.get("data", [])
                           if p.get("status") == "granted" and p.get("permission")})
-        self.store.set(USER_KEY, {"access_token": long["access_token"], "scope": ",".join(granted)})
+        return {"access_token": long["access_token"], "scope": ",".join(granted)}
+
+    def connect_analytics(self, db, code: str) -> int:
+        user = self._exchange_user(code)
+        scopes = set(user["scope"].split(","))
+        pages = {str(p["id"]): p for p in self.managed_pages(user["access_token"])}
+        saved = 0
+        for account in db.query("SELECT * FROM social_accounts WHERE platform IN ('facebook','instagram') "
+                                "AND identity_verified_at IS NOT NULL"):
+            platform, brand = account["platform"], account["brand"]
+            page_account = account if platform == "facebook" else db.one(
+                "SELECT * FROM social_accounts WHERE platform='facebook' AND brand=? AND identity_verified_at IS NOT NULL",
+                (brand,))
+            page = pages.get(str(page_account["verified_platform_id"]), {}) if page_account else {}
+            identity = page.get("id") if platform == "facebook" else (page.get("instagram_business_account") or {}).get("id")
+            required = {"pages_show_list", "pages_read_engagement"}
+            required.update({"read_insights"} if platform == "facebook" else {"instagram_basic", "instagram_manage_insights"})
+            if str(identity) != str(account["verified_platform_id"]) or not page.get("access_token") or not required <= scopes:
+                continue
+            self.store.set(f"{platform}-analytics:{brand}", {"access_token": page["access_token"],
+                           "scope": user["scope"], "identity": str(identity)})
+            saved += 1
+        return saved
 
     def user_connected(self) -> bool:
         return bool(self.store.get(USER_KEY))
 
     # ---- per-brand adoption (the isolation step) ---------------------------------------------------------------------
-    def managed_pages(self) -> list[dict]:
+    def managed_pages(self, token: str | None = None) -> list[dict]:
         """Pages the login manages, WITH their page tokens (kept in memory only) and linked Instagram account."""
-        tok = (self.store.get(USER_KEY) or {}).get("access_token")
+        tok = token or (self.store.get(USER_KEY) or {}).get("access_token")
         if not tok:
             raise NotConfigured("Facebook login has not been authorised yet.")
         j = self._json(self.http.get(f"{self.graph}/me/accounts", params={

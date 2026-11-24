@@ -1413,12 +1413,26 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     def _connections_callback(platform: str, code: str, st: dict):
         try:
             if platform == "facebook":
+                if st.get("analytics"):
+                    count = core.facebook.connect_analytics(core.db, code)
+                    if not count:
+                        return _conn_redirect(err="No verified Meta destinations granted the required Insights permissions.")
+                    core.db.set_kv("analytics.next_refresh", "0")
+                    return _conn_redirect(msg=f"Read-only Meta analytics connected for {count} verified destinations.")
                 core.facebook.exchange_code(code)
                 res = core.facebook.adopt_pages(core.db)
                 ok = sum(1 for r in res if r["state"] == "VERIFIED")
                 return _conn_redirect(msg=f"Facebook login accepted. {ok} of {len(res)} destinations verified by exact id; "
                                           "any others were NOT connected (see the matrix).")
             brand = st.get("brand")
+            if st.get("analytics"):
+                acct = core.db.one("SELECT * FROM social_accounts WHERE platform='youtube' AND brand=? "
+                                   "AND identity_verified_at IS NOT NULL", (brand,))
+                if not acct:
+                    return _conn_redirect(err="Verify the YouTube channel before connecting analytics.")
+                core.youtube.connect_analytics(acct, code, st["redirect"], st["verifier"])
+                core.db.set_kv("analytics.next_refresh", "0")
+                return _conn_redirect(msg=f"YouTube analytics connected for {brand}.")
             core.youtube.oauth(brand).exchange(code, st["redirect"], st["verifier"])
             acct = core.db.one("SELECT * FROM social_accounts WHERE platform='youtube' AND brand=?", (brand,))
             res = core.youtube.verify(core.db, acct["id"])
@@ -1441,12 +1455,12 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
                     ig_public=settings.instagram_public_publish)
 
     @app.get("/connections/facebook/connect")
-    def connections_facebook_connect(instagram: bool = False):
+    def connections_facebook_connect(instagram: bool = False, analytics: bool = False):
         try:
-            url, state = core.facebook.authorize_url(include_instagram=instagram)
+            url, state = core.facebook.authorize_url(include_instagram=instagram, analytics=analytics)
         except NotConfigured as e:
             return _conn_redirect(err=str(e))
-        core.oauth_put(state["state"], {"platform": "facebook", **state})
+        core.oauth_put(state["state"], {"platform": "facebook", "analytics": analytics, **state})
         return RedirectResponse(url, status_code=303)
 
     @app.get("/connections/youtube/connect/{brand}")
@@ -1460,6 +1474,20 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             return _conn_redirect(err=str(e))
         core.oauth_put(state, {"platform": "youtube", "state": state, "brand": brand, "verifier": verifier,
                                "redirect": _youtube_redirect_uri()})
+        return RedirectResponse(url, status_code=303)
+
+    @app.get("/connections/youtube/analytics/{brand}")
+    def connections_youtube_analytics(brand: str):
+        if not core.db.one("SELECT 1 FROM social_accounts WHERE platform='youtube' AND brand=? "
+                           "AND identity_verified_at IS NOT NULL", (brand,)):
+            raise HTTPException(404)
+        oauth = core.youtube.analytics_oauth(brand)
+        if not oauth.configured():
+            return _conn_redirect(err="Configure Google OAuth before connecting YouTube analytics.")
+        redirect = _youtube_redirect_uri()
+        url, state, verifier = oauth.auth_url(redirect, prompt="select_account consent")
+        core.oauth_put(state, {"platform": "youtube", "brand": brand, "analytics": True,
+                               "verifier": verifier, "redirect": redirect})
         return RedirectResponse(url, status_code=303)
 
     @app.post("/connections/verify/{account_id}")

@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Analytics</h1>
+<p><a href="/connections/facebook/connect?analytics=true">Connect Facebook and Instagram Insights</a></p>
 <p>{{ connected }} connected accounts · {{ posts|length }} published posts with snapshots in this selection</p>
+<p>{% for label, counts in audience_by_kind.items() %}{{ label }}: {{ "{:,}".format(counts|sum) if counts else 'Unavailable' }}{% if counts %} across {{ counts|length }} accounts{% endif %} · {% endfor %}{{ delivery.published }} confirmed posts linked to delivery jobs · {{ delivery.failures }} failed delivery jobs</p>
 <p>Combined followers and subscribers: {% if audience_total is not none %}{{ "{:,}".format(audience_total) }} across {{ audience_coverage }} accounts{% else %}Unavailable — snapshots have no audience counts{% endif %}. People may follow multiple accounts.</p>
 <form method="get" class="row"><label>Brand <select name="brand"><option value="">All brands</option>{% for b in brands %}<option value="{{ b.key }}" {% if brand == b.key %}selected{% endif %}>{{ b.name }}</option>{% endfor %}</select></label>
 <label>Platform <select name="platform"><option value="">All platforms</option>{% for item in ['youtube','facebook','instagram','tiktok'] %}<option {% if platform == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
@@ -9,9 +11,30 @@
 <table class="jobs"><thead><tr><th>Brand / account</th><th>Connection</th><th>Subscribers or followers</th><th>Channel views</th><th>Audience change (7 / 30 days)</th><th>Views change (7 / 30 days)</th><th>Checked (UTC)</th></tr></thead>
 <tbody>{% for row in accounts %}<tr><td>{{ row.brand }} · {{ row.platform }} · {{ row.handle }}</td><td>{{ row.status }}</td><td>{{ row.audience if row.audience is not none else 'Unavailable' }}</td><td>{{ row.views if row.views is not none else 'Unavailable' }}</td>{% for metric in ['audience','views'] %}<td>{% for days in [7,30] %}{{ trends[row.id][days,metric] if trends[row.id][days,metric] is not none else 'Unavailable' }}{% if not loop.last %} / {% endif %}{% endfor %}</td>{% endfor %}<td>{{ row.refreshed or 'Awaiting collection' }} {{ row.error or '' }}</td></tr>{% endfor %}</tbody></table>
 <h2>Published post performance</h2>
+<p>Platforms count views differently. Compare view counts within the same platform. Each row shows the latest cached values and the {{ report_days }}-day change when a baseline exists. Facebook Reel views are lifetime plays, including replays.</p>
 <table class="jobs"><thead><tr><th>Brand and platform</th><th>Clip</th><th>Post ID</th><th>Views</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Checked (UTC)</th></tr></thead><tbody>
-{% for post in posts %}<tr><td>{{ post.brand }} · {{ post.platform }}</td><td><a href="/clips/{{ post.clip_id }}">#{{ post.clip_id }} {{ post.title or '' }}</a><br><small>{{ post.posted }} UTC</small></td><td>{% if post.platform == 'youtube' %}<a href="https://www.youtube.com/watch?v={{ post.remote_id | urlencode }}">Open post</a>{% elif post.platform == 'facebook' and post.remote_id.isdigit() %}<a href="https://www.facebook.com/reel/{{ post.remote_id }}">Open Reel</a>{% else %}{{ post.remote_id }}{% endif %}</td>{% for metric in ['views','likes','comments','shares'] %}<td>{{ post[metric] if post[metric] is not none else 'Unavailable — ' ~ (post.error or 'metric not returned') }}</td>{% endfor %}<td>{{ post.refreshed }} {{ post.error or '' }}</td></tr>{% else %}<tr><td colspan="8">No post statistics collected for this selection.</td></tr>{% endfor %}</tbody></table>
+{% for post in posts %}<tr><td>{{ post.brand }} · {{ post.platform }}</td><td><a href="/clips/{{ post.clip_id }}">#{{ post.clip_id }} {{ post.title or '' }}</a><br><small>{{ post.posted }} UTC</small></td><td>{% if post.platform == 'youtube' %}<a href="https://www.youtube.com/watch?v={{ post.remote_id | urlencode }}">Open post</a>{% elif post.platform == 'facebook' and post.remote_id.isdigit() %}<a href="https://www.facebook.com/reel/{{ post.remote_id }}">Open Reel</a>{% elif post_links.get(post.attempt_id) %}<a href="{{ post_links[post.attempt_id] }}">Open post</a>{% else %}{{ post.remote_id }}{% endif %}</td>{% for metric in ['views','likes','comments','shares'] %}<td>{{ post[metric] if post[metric] is not none else 'Unavailable — ' ~ (post.error or 'metric not returned') }}{% set change = post_changes[post.attempt_id][metric] %}{% if change is not none %}<br><small>{{ '%+d'|format(change) }}</small>{% endif %}</td>{% endfor %}<td>{{ post.refreshed }} {{ post.error or '' }}</td></tr>{% else %}<tr><td colspan="8">No post statistics collected for this selection.</td></tr>{% endfor %}</tbody></table>
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
+{% if youtube_reports %}
+<h2>YouTube Analytics · last {{ report_days }} days</h2>
+<table class="jobs"><thead><tr><th>Brand</th><th>Views</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Subscribers gained</th><th>Subscribers lost</th><th>Data through / refreshed</th></tr></thead>
+<tbody>{% for row in accounts if row.id in youtube_reports %}{% set report = youtube_reports[row.id] %}
+<tr><td>{{ row.brand }}</td>{% for value in report.totals.values() %}<td>{{ value if value is not none else 'Unavailable' }}</td>{% endfor %}
+<td>{% if report.through %}{{ report.through }} / {{ report.collected }}{% endif %}
+{% if report.error %}{{ report.error }}{% endif %}
+{% if not report.through and row.identity_verified_at %}<a href="/connections/youtube/analytics/{{ row.brand }}">Connect YouTube analytics</a>{% endif %}</td></tr>
+{% endfor %}</tbody></table>
+{% endif %}
+{% if meta_reports %}
+<h2>Facebook and Instagram Insights · last {{ report_days }} days</h2>
+<table class="jobs"><thead><tr><th>Brand / account</th><th>Content views</th><th>Reach</th><th>Interactions</th><th>Data through / refreshed</th></tr></thead>
+<tbody>{% for row in accounts if row.id in meta_reports %}{% set report = meta_reports[row.id] %}
+<tr><td>{{ row.brand }} · {{ row.platform }}</td>
+{% for metric in ['views','reach','total_interactions'] %}<td>{{ report.totals.get(metric, 'Unavailable') }}</td>{% endfor %}
+<td>{% if report.through %}{{ report.through }} / {{ report.collected }}{% else %}Awaiting collection{% endif %}
+{{ report.error or '' }}</td></tr>
+{% endfor %}</tbody></table>
+{% endif %}
 <section class="card"><p>Realised net (revenue + sponsor − cost): <b>{{ '%.2f'|format(realised) }}</b> · owner review time {{ '%.1f'|format(review_h) }} h
 · realised per review hour: <b>{{ '%.2f'|format(per_hour) if per_hour is not none else 'not enough data' }}</b> · failed jobs (30 days): {{ failures }}</p>
 <p class="muted"><small>Only figures you enter or import from the platforms' own analytics are shown. Estimates are kept separate from realised money. Nothing here is inferred.</small></p></section>
