@@ -210,6 +210,9 @@ def test_title_route_rerenders_only_unapproved_clips(settings, web):
     c, app = web
     db = Database(settings.db_path)
     cid, pkgs, path = make_clip(settings, db, FakeDrive(), approved=False)
+    source = settings.recordings_dir / "title-test-source.mp4"
+    source.write_bytes(b"source fixture")
+    db.update("recordings", db.clip(cid)["recording_id"], file_path=str(source))
     c.post(f"/clips/{cid}/title", data={"title": "What is *happening* in **town**?"})
     row = db.clip(cid)
     assert row["title"] == "What is *happening* in **town**?" and row["status"] == "pending_render" and row["render_rev"] == 1

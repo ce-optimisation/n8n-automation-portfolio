@@ -23,7 +23,7 @@
   <ul class="list">
   {% for r in recordings %}
     <li><a href="/recordings/{{ r.id }}">{{ r.title }}</a> <span class="badge {{ r.status }}">{{ r.status }}</span>
-      <small class="muted">{{ r.duration|mmss }} · {{ r.created_at|dt }}</small></li>
+  <small class="muted">{% if r.duration is not none %}{{ r.duration|mmss }}{% else %}Duration unavailable{% endif %} · {{ r.created_at|dt }}</small></li>
   {% else %}<li class="muted">Nothing imported yet.</li>{% endfor %}
   </ul>
 </section>

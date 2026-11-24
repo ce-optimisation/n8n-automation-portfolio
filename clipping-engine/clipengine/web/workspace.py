@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import time
+from pathlib import Path
 
 from fastapi import Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -549,9 +550,16 @@ def register(app, core, page, templates) -> None:
         db.update("clips", cid, retain=1 if on == "1" else 0)
         return _go(f"/clips/{cid}", msg="Kept: exempt from automatic expiry." if on == "1" else "Normal retention restored.")
 
+    def _title_needs_render(c):
+        return c["status"] == "ready" and not c["published_at"] and c["video_path"] and not c["local_deleted_at"]
+
+    def _title_source_missing(c):
+        rec = db.recording(c["recording_id"])
+        return not rec or not rec["file_path"] or not Path(rec["file_path"]).is_file()
+
     def _title_saved(c, cid: int, what: str):
         """Re-render so the title appears - but only an unapproved, unpublished clip; an approved one is never silently changed."""
-        if c["status"] == "ready" and not c["published_at"] and c["video_path"] and not c["local_deleted_at"]:
+        if _title_needs_render(c):
             db.update("clips", cid, render_rev=c["render_rev"] + 1, status="pending_render", reviewed_at=None)
             core.pipeline.enqueue_render(cid)
             return _go(f"/clips/{cid}", msg=f"{what}; re-rendering with it.")
@@ -565,6 +573,13 @@ def register(app, core, page, templates) -> None:
         if not c:
             raise HTTPException(404)
         clean = titles.format_title(title, auto_emphasis=False)
+        if _title_needs_render(c):
+            from .. import render
+            if render.has_clean_master(core.pipeline.clip_dir(c)):
+                core.pipeline.request_title(cid, clean)
+                return _go(f"/clips/{cid}", msg="Title saved using the title-free master.")
+            if _title_source_missing(c):
+                return _go(f"/clips/{cid}", err="Restore the original recording or a title-free master before changing this title.")
         db.update("clips", cid, title=clean or None, title_source="owner" if clean else c["title_source"],
                   title_status="approved" if clean else "removed", title_locked=1 if clean else 0)
         return _title_saved(c, cid, "Title saved")
@@ -579,6 +594,8 @@ def register(app, core, page, templates) -> None:
         offered = {x["text"] for x in info.get("candidates", []) if x.get("accepted")}
         if text not in offered:
             return _go(f"/clips/{cid}", err="That wording is not one of the verified suggestions.")
+        if _title_needs_render(c) and _title_source_missing(c):
+            return _go(f"/clips/{cid}", err="Restore the original recording, or save the wording manually if a title-free master exists.")
         db.update("clips", cid, title=text, title_status="proposed", title_source="generated")
         return _title_saved(c, cid, "Alternative chosen")
 
@@ -600,6 +617,12 @@ def register(app, core, page, templates) -> None:
         c = db.clip(cid)
         if not c:
             raise HTTPException(404)
+        if _title_needs_render(c) and _title_source_missing(c):
+            from .. import render
+            if render.has_clean_master(core.pipeline.clip_dir(c)):
+                core.pipeline.remove_clip_title(cid)
+                return _go(f"/clips/{cid}", msg="Title removed using the title-free master.")
+            return _go(f"/clips/{cid}", err="Restore the original recording or a title-free master before removing this title.")
         db.update("clips", cid, title=None, title_status="removed", title_locked=1)
         return _title_saved(c, cid, "Title removed")
 
@@ -610,6 +633,8 @@ def register(app, core, page, templates) -> None:
             raise HTTPException(404)
         if c["title_locked"]:
             return _go(f"/clips/{cid}", err="This title is locked. Unlock it first to regenerate suggestions.")
+        if _title_needs_render(c) and _title_source_missing(c):
+            return _go(f"/clips/{cid}", err="Restore the original recording before generating and applying another title.")
         rec = db.recording(c["recording_id"])
         f = core.pipeline.hook_fields(rec, c["transcript_text"] or "", (c["title_rev"] or 0) + 1)
         db.update("clips", cid, **f)
@@ -668,7 +693,10 @@ def register(app, core, page, templates) -> None:
 
     # ---- analytics & commercial ---------------------------------------------------------------
     @app.get("/analytics", response_class=HTMLResponse)
-    def analytics(request: Request, msg: str = "", err: str = "", brand: str = "", platform: str = ""):
+    def analytics(request: Request, msg: str = "", err: str = "", brand: str = "", platform: str = "",
+                  period: str = "all"):
+        period = period if period in ("7", "30") else "all"
+        since = time.time() - int(period) * 86400 if period != "all" else 0
         accounts = db.query(
             "SELECT a.*, s.audience, s.views, s.error, datetime(s.collected_at,'unixepoch') refreshed "
             "FROM social_accounts a LEFT JOIN account_snapshots s ON s.id=(SELECT id FROM account_snapshots "
@@ -676,12 +704,16 @@ def register(app, core, page, templates) -> None:
             "WHERE (?='' OR a.brand=?) AND (?='' OR a.platform=?) ORDER BY a.brand,a.platform",
             (brand, brand, platform, platform))
         posts = db.query(
-            "SELECT a.brand,a.platform,p.clip_id,p.remote_id,x.views,x.likes,x.comments,x.shares,x.error, "
+            "SELECT a.brand,a.platform,p.clip_id,p.remote_id,c.title,datetime(COALESCE(p.confirmed_at,p.created_at),'unixepoch') posted, "
+            "x.views,x.likes,x.comments,x.shares,x.error, "
             "datetime(x.collected_at,'unixepoch') refreshed FROM post_snapshots x "
             "JOIN social_accounts a ON a.id=x.account_id JOIN publish_attempts p ON p.id=x.attempt_id "
+            "JOIN clips c ON c.id=p.clip_id "
             "WHERE x.id=(SELECT id FROM post_snapshots WHERE attempt_id=p.id ORDER BY collected_at DESC,id DESC LIMIT 1) "
-            "AND (?='' OR a.brand=?) AND (?='' OR a.platform=?) ORDER BY a.platform,x.views DESC,p.id DESC",
-            (brand,brand,platform,platform))
+            "AND COALESCE(p.confirmed_at,p.created_at)>=? AND (?='' OR a.brand=?) AND (?='' OR a.platform=?) "
+            "ORDER BY a.platform,x.views DESC,p.id DESC",
+            (since,brand,brand,platform,platform))
+        audience = [r["audience"] for r in accounts if r["audience"] is not None]
         trends = {}
         for row in accounts:
             trend = {}
@@ -708,7 +740,10 @@ def register(app, core, page, templates) -> None:
                           "ELSE 0 END),2) net FROM commercial_entries WHERE realised=1")["net"] or 0
         review_h = (db.one("SELECT SUM(review_seconds) s FROM clips")["s"] or 0) / 3600
         failures = db.one("SELECT COUNT(*) n FROM jobs WHERE status='failed' AND updated_at > ?", (time.time() - 30 * 86400,))["n"]
-        return page(request, "analytics.html", posts=posts, trends=trends, accounts=accounts, brand=brand, platform=platform, brands=db.query("SELECT key,name FROM brands ORDER BY name"), by_niche=by_niche, views=views, money=money, realised=realised,
+        return page(request, "analytics.html", posts=posts, trends=trends, accounts=accounts, brand=brand,
+                    platform=platform, period=period, audience_total=sum(audience) if audience else None,
+                    audience_coverage=len(audience), connected=sum(r["status"] == "connected" for r in accounts),
+                    brands=db.query("SELECT key,name FROM brands ORDER BY name"), by_niche=by_niche, views=views, money=money, realised=realised,
                     review_h=review_h, failures=failures, msg=msg, err=err,
                     per_hour=(realised / review_h) if review_h > 0.05 else None,
                     niches=db.query("SELECT key, name FROM niches ORDER BY name"),

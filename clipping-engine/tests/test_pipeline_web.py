@@ -20,6 +20,34 @@ from conftest import needs_ffmpeg
 pytestmark = needs_ffmpeg
 
 
+def test_dashboard_accepts_recording_without_duration(settings):
+    db = Database(settings.db_path)
+    db.insert("recordings", title="Awaiting media probe", source_type="upload", status="ready")
+    with TestClient(create_app(settings, start_worker=False)) as client:
+        response = client.get("/")
+    assert response.status_code == 200
+    assert "Awaiting media probe" in response.text
+    assert "Duration unavailable" in response.text
+
+
+def test_manual_title_without_source_preserves_ready_clip(settings):
+    from pathlib import Path
+
+    db = Database(settings.db_path)
+    rid = db.insert("recordings", title="Archived source", source_type="upload", status="ready")
+    video = Path(settings.clips_dir) / "existing.mp4"
+    video.write_bytes(b"fixture")
+    cid = db.insert("clips", recording_id=rid, idx=1, start=0, end=10,
+                    status="ready", title="Old title", video_path=str(video))
+    with TestClient(create_app(settings, start_worker=False)) as client:
+        response = client.post(f"/clips/{cid}/title", data={"title": "New title"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert "Restore+the+original" in response.headers["location"]
+    assert db.clip(cid)["title"] == "Old title"
+    assert db.clip(cid)["status"] == "ready"
+    assert not db.query("SELECT id FROM jobs WHERE clip_id=?", (cid,))
+
+
 @pytest.fixture
 def processed(stub_settings, sample_video):
     db = Database(stub_settings.db_path)
@@ -73,6 +101,23 @@ def test_regenerate_with_new_timestamps_reuses_transcript(processed, monkeypatch
     assert "owner-adjusted" in c2["selection_method"]
     with pytest.raises(ValueError):
         p.adjust_and_regenerate(c["id"], 50, 10)
+
+
+def test_source_caption_override_keeps_subtitle_file(processed):
+    from pathlib import Path
+
+    _, db, q, pipeline, rid = processed
+    clip = db.one("SELECT * FROM clips WHERE recording_id=? ORDER BY id", (rid,))
+    assert "Dialogue:" in Path(clip["ass_path"]).read_text(encoding="utf-8")
+    settings = json.loads(db.recording(rid)["settings_json"])
+    settings["source_has_burned_in_captions"] = True
+    db.update("recordings", rid, settings_json=json.dumps(settings))
+    pipeline.adjust_and_regenerate(clip["id"])
+    q.drain(600)
+    updated = db.clip(clip["id"])
+    assert updated["status"] == "ready"
+    assert "Dialogue:" not in Path(updated["ass_path"]).read_text(encoding="utf-8")
+    assert "-->" in Path(updated["srt_path"]).read_text(encoding="utf-8")
 
 
 def test_plain_regenerate_preserves_owner_description(processed):
