@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .cloud import GoogleReconnectionRequired
+
 
 YOUTUBE_REPORT_METRICS = ("views", "likes", "comments", "shares", "subscribersGained", "subscribersLost")
 
@@ -94,8 +96,11 @@ def collect(db, youtube, tokens, version):
                     audience = int(body[field])
                 if audience is None and views is None:
                     reason = "Metric unavailable"
+            except GoogleReconnectionRequired:
+                reason = "Reconnect account"
             except httpx.HTTPStatusError as err:
-                reason = f"Platform returned HTTP {err.response.status_code}"
+                reason = ("Reconnect account" if err.response.status_code == 401 else
+                          f"Platform returned HTTP {err.response.status_code}")
             except Exception:
                 reason = "Account statistics unavailable"
             db.insert("account_snapshots", account_id=account["id"], collected_at=now,

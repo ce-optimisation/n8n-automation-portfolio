@@ -800,6 +800,7 @@ def register(app, core, page, templates) -> None:
         return page(request, "analytics.html", posts=posts, trends=trends, accounts=accounts, brand=brand,
                     platform=platform, period=period, audience_total=sum(audience) if audience else None,
                     audience_coverage=len(audience), connected=sum(r["status"] == "connected" for r in accounts),
+                    reconnect_count=sum(r["error"] == "Reconnect account" for r in accounts),
                     audience_by_kind=audience_by_kind, delivery=delivery,
                     youtube_reports=youtube_reports, meta_reports=meta_reports, report_days=report_days,
                     post_links=post_links, post_changes=post_changes,

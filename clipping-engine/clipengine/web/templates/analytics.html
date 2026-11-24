@@ -2,7 +2,7 @@
 {% block content %}
 <h1>Analytics</h1>
 <p><a href="/connections/facebook/connect?analytics=true">Connect Facebook and Instagram Insights</a></p>
-<p>{{ connected }} connected accounts · {{ posts|length }} published posts with snapshots in this selection</p>
+<p>{{ connected }} connected accounts · {{ reconnect_count }} accounts with an authentication error · {{ posts|length }} published posts with snapshots in this selection</p>
 <p>{% for label, counts in audience_by_kind.items() %}{{ label }}: {{ "{:,}".format(counts|sum) if counts else 'Unavailable' }}{% if counts %} across {{ counts|length }} accounts{% endif %} · {% endfor %}{{ delivery.published }} confirmed posts linked to delivery jobs · {{ delivery.failures }} failed delivery jobs</p>
 <p>Combined followers and subscribers: {% if audience_total is not none %}{{ "{:,}".format(audience_total) }} across {{ audience_coverage }} accounts{% else %}Unavailable — snapshots have no audience counts{% endif %}. People may follow multiple accounts.</p>
 <form method="get" class="row"><label>Brand <select name="brand"><option value="">All brands</option>{% for b in brands %}<option value="{{ b.key }}" {% if brand == b.key %}selected{% endif %}>{{ b.name }}</option>{% endfor %}</select></label>
