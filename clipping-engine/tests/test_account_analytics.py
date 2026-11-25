@@ -69,3 +69,29 @@ def test_report_collectors_keep_zero_and_omitted_metrics_distinct():
         assert analytics.youtube_report(client, "read-only", 1795540000) == [{"day": "2026-11-22", "views": 0}]
         report = analytics.meta_report(client, "instagram", "123", "read-only", "v23.0", 1795540000)
     assert report["values"] == {"7": {"views": 0}, "30": {"views": 0}}
+
+
+def test_meta_analytics_callback_is_separate_from_publishing(settings, monkeypatch):
+    settings.meta_analytics_redirect_uri = "https://private.example.test/oauth/facebook/callback"
+    app = create_app(settings, start_worker=False)
+    core = app.state.core
+    core.facebook.app_id = "meta-id"
+    core.facebook.app_secret = "fixture"
+    core.facebook.redirect_uri = "http://localhost:8765/oauth/facebook/callback"
+    exchanges = []
+
+    def connect_analytics(db, code, redirect):
+        exchanges.append((code, redirect))
+        return 1
+
+    monkeypatch.setattr(core.facebook, "connect_analytics", connect_analytics)
+    with TestClient(app, follow_redirects=False) as client:
+        start = client.get("/connections/facebook/connect?analytics=true")
+        regular = client.get("/connections/facebook/connect")
+        analytics_params = httpx.URL(start.headers["location"]).params
+        regular_params = httpx.URL(regular.headers["location"]).params
+        assert analytics_params["redirect_uri"] == settings.meta_analytics_redirect_uri
+        assert regular_params["redirect_uri"] == core.facebook.redirect_uri
+        response = client.get("/oauth/facebook/callback", params={"state": analytics_params["state"], "code": "fixture"})
+        assert response.status_code in (200, 303)
+    assert exchanges == [("fixture", settings.meta_analytics_redirect_uri)]

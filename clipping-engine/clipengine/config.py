@@ -215,6 +215,7 @@ class Settings:
     meta_app_id: str = ""
     meta_app_secret: str = ""
     meta_redirect_uri: str = ""
+    meta_analytics_redirect_uri: str = ""
     meta_graph_version: str = "v23.0"
     instagram_auth_mode: str = "facebook"   # facebook (Facebook Login for Business) | instagram (Instagram Login)
     instagram_app_id: str = ""
@@ -380,6 +381,7 @@ def get_settings(**overrides) -> Settings:
         meta_app_id=os.environ.get("META_APP_ID", ""),
         meta_app_secret=os.environ.get("META_APP_SECRET", ""),
         meta_redirect_uri=os.environ.get("META_REDIRECT_URI", ""),
+        meta_analytics_redirect_uri=os.environ.get("META_ANALYTICS_REDIRECT_URI", ""),
         meta_graph_version=os.environ.get("META_GRAPH_VERSION", "v23.0"),
         instagram_auth_mode=(os.environ.get("INSTAGRAM_AUTH_MODE", "facebook") or "facebook").lower(),
         instagram_app_id=os.environ.get("INSTAGRAM_APP_ID", ""),

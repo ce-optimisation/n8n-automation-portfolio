@@ -1414,7 +1414,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         try:
             if platform == "facebook":
                 if st.get("analytics"):
-                    count = core.facebook.connect_analytics(core.db, code)
+                    count = core.facebook.connect_analytics(core.db, code, st.get("redirect"))
                     if not count:
                         return _conn_redirect(err="No verified Meta destinations granted the required Insights permissions.")
                     core.db.set_kv("analytics.next_refresh", "0")
@@ -1457,7 +1457,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/connections/facebook/connect")
     def connections_facebook_connect(instagram: bool = False, analytics: bool = False):
         try:
-            url, state = core.facebook.authorize_url(include_instagram=instagram, analytics=analytics)
+            redirect = settings.meta_analytics_redirect_uri if analytics else None
+            url, state = core.facebook.authorize_url(include_instagram=instagram, analytics=analytics,
+                                                     redirect_uri=redirect)
         except NotConfigured as e:
             return _conn_redirect(err=str(e))
         core.oauth_put(state["state"], {"platform": "facebook", "analytics": analytics, **state})

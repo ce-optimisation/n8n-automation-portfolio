@@ -47,14 +47,17 @@ class FacebookClient:
         return [k for k, v in (("META_APP_ID", self.app_id), ("META_APP_SECRET", self.app_secret),
                                ("META_REDIRECT_URI", self.redirect_uri)) if not v]
 
-    def authorize_url(self, include_instagram: bool = False, *, analytics: bool = False) -> tuple[str, dict]:
+    def authorize_url(self, include_instagram: bool = False, *, analytics: bool = False,
+                      redirect_uri: str | None = None) -> tuple[str, dict]:
         if not self.configured:
             raise NotConfigured("Facebook is not configured: set " + ", ".join(self.missing_config()) + " in .env")
         state = secrets.token_urlsafe(24)
-        q = {"client_id": self.app_id, "redirect_uri": self.redirect_uri, "state": state,
+        redirect = redirect_uri or self.redirect_uri
+        q = {"client_id": self.app_id, "redirect_uri": redirect, "state": state,
              "scope": ANALYTICS_SCOPES if analytics else (INSTAGRAM_SCOPES if include_instagram else LOGIN_SCOPES),
              "response_type": "code"}
-        return f"https://www.facebook.com/{self.version}/dialog/oauth?" + urllib.parse.urlencode(q), {"state": state}
+        return f"https://www.facebook.com/{self.version}/dialog/oauth?" + urllib.parse.urlencode(q), {
+            "state": state, "redirect": redirect}
 
     def _json(self, r: httpx.Response) -> dict:
         body = r.json() if r.content else {}
@@ -68,9 +71,10 @@ class FacebookClient:
         """Code -> long-lived USER token (stored under facebook:user). Page tokens come later, per brand, after id checks."""
         self.store.set(USER_KEY, self._exchange_user(code))
 
-    def _exchange_user(self, code: str) -> dict:
+    def _exchange_user(self, code: str, redirect_uri: str | None = None) -> dict:
         short = self._json(self.http.get(f"{self.graph}/oauth/access_token", params={
-            "client_id": self.app_id, "redirect_uri": self.redirect_uri, "client_secret": self.app_secret, "code": code}))
+            "client_id": self.app_id, "redirect_uri": redirect_uri or self.redirect_uri,
+            "client_secret": self.app_secret, "code": code}))
         long = self._json(self.http.get(f"{self.graph}/oauth/access_token", params={
             "grant_type": "fb_exchange_token", "client_id": self.app_id, "client_secret": self.app_secret,
             "fb_exchange_token": short["access_token"]}))
@@ -80,8 +84,8 @@ class FacebookClient:
                           if p.get("status") == "granted" and p.get("permission")})
         return {"access_token": long["access_token"], "scope": ",".join(granted)}
 
-    def connect_analytics(self, db, code: str) -> int:
-        user = self._exchange_user(code)
+    def connect_analytics(self, db, code: str, redirect_uri: str | None = None) -> int:
+        user = self._exchange_user(code, redirect_uri)
         scopes = set(user["scope"].split(","))
         pages = {str(p["id"]): p for p in self.managed_pages(user["access_token"])}
         saved = 0
