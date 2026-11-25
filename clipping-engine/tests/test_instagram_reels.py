@@ -1,5 +1,6 @@
 """Session 15: Instagram resumable-upload publisher and its gates. TESTED-MOCKED: every HTTP call is a fake; Meta is never contacted."""
 import time
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -74,7 +75,7 @@ def test_uses_the_upload_address_meta_returns_and_reports_rupload_errors(video):
         pub(httpx.Client(transport=httpx.MockTransport(bad))).publish_reel("operator_notes", IG_ID, video, "c")
 
 
-def test_upload_uses_available_user_token_on_first_attempt(video):
+def test_upload_uses_the_same_token_as_container_creation(video):
     seen = []
 
     def h(req):
@@ -82,20 +83,20 @@ def test_upload_uses_available_user_token_on_first_attempt(video):
         if req.method == "GET" and u.split("?")[0].endswith(f"/{IG_ID}"):
             return httpx.Response(200, json={"id": IG_ID, "username": "operatornotes"})
         if u.endswith("/media"):
+            seen.append(parse_qs(req.content.decode())["access_token"][0])
             return httpx.Response(200, json={"id": "CONT1", "uri": "https://rupload.facebook.com/x"})
         if "rupload" in u:
             seen.append(req.headers["authorization"])
-            return httpx.Response(400, json={"debug_info": {"message": "Request processing failed"}}) \
-                if req.headers["authorization"] == "OAuth TOKEN" else httpx.Response(200, json={"success": True})
+            return httpx.Response(200, json={"success": True})
         if req.method == "GET" and "/CONT1" in u:
             return httpx.Response(200, json={"status_code": "FINISHED"})
         if u.endswith("/media_publish"):
             return httpx.Response(200, json={"id": "MEDIA9"})
         return httpx.Response(200, json={"permalink": "p"})
     p = InstagramReelsPublisher(lambda b: "TOKEN", public_enabled=True, http=httpx.Client(transport=httpx.MockTransport(h)),
-                                sleep=lambda s: None, user_token=lambda: "USERTOK")
+                                sleep=lambda s: None)
     assert p.publish_reel("operator_notes", IG_ID, video, "c")["video_id"] == "MEDIA9"
-    assert seen == ["OAuth USERTOK"]
+    assert seen == ["TOKEN", "OAuth TOKEN"]
 
 
 def test_off_by_default_sends_nothing(video):

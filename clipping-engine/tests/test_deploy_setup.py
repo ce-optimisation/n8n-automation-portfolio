@@ -590,7 +590,11 @@ def test_rate_limit_on_download_is_not_reported_as_login_required(tmp_path, monk
         def __init__(self, opts): self.opts = opts
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def extract_info(self, url, download=False): raise DLError(msg["text"])
+        def extract_info(self, url, download=False):
+            assert self.opts["buffersize"] == 64 * 1024 and self.opts["noresizebuffer"]
+            if msg["text"] is None:
+                raise MemoryError()
+            raise DLError(msg["text"])
     fake = types.SimpleNamespace(YoutubeDL=FakeYDL, utils=types.SimpleNamespace(DownloadError=DLError,
                                                                                  DownloadCancelled=Cancelled))
     monkeypatch.setitem(sys.modules, "yt_dlp", fake)
@@ -613,6 +617,9 @@ def test_rate_limit_on_download_is_not_reported_as_login_required(tmp_path, monk
     with pytest.raises(ingest.SourceError) as exc3:
         ingest._download_with_ytdlp(settings, "https://example.org/v", ctx)
     assert exc3.value.code == "extractor_error"
+    msg["text"] = None
+    with pytest.raises(ingest.PermanentError, match="ran out of memory"):
+        ingest._download_with_ytdlp(settings, "https://example.org/v", ctx)
 
 
 def test_low_disk_warns_but_does_not_stop_setup(settings, monkeypatch):

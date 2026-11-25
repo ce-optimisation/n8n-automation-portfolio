@@ -582,6 +582,7 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
         "merge_output_format": "mp4", "noplaylist": True, "quiet": True, "no_warnings": True,
         "progress_hooks": [hook], "restrictfilenames": True, "retries": 5, "fragment_retries": 5,
         "continuedl": True, "socket_timeout": 30, "sleep_interval_requests": 1,
+        "buffersize": 64 * 1024, "noresizebuffer": True,
         "max_filesize": settings.max_upload_mb * 1024 * 1024, "http_headers": {"User-Agent": settings.http_user_agent or USER_AGENT},
     }
     try:
@@ -591,6 +592,8 @@ def _download_with_ytdlp(settings: Settings, url: str, ctx: JobContext) -> tuple
                                             min_height=int(getattr(settings, "live_min_height", 1080)))
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.process_ie_result(info, download=True)
+    except MemoryError as e:
+        raise PermanentError("The downloader ran out of memory. Check available memory before retrying this video.") from e
     except yt_dlp.utils.DownloadCancelled as e:
         raise TransientError("cancelled") from e
     except yt_dlp.utils.DownloadError as e:

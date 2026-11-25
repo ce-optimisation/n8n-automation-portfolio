@@ -28,9 +28,8 @@ class InstagramReelsPublisher:
     platform = "instagram"
 
     def __init__(self, token_for, *, version: str = "v23.0", public_enabled: bool = False, http: httpx.Client | None = None,
-                 sleep=time.sleep, poll_seconds: float = 5.0, max_wait: float = 600.0, user_token=None):
+                 sleep=time.sleep, poll_seconds: float = 5.0, max_wait: float = 600.0):
         self.token_for = token_for                  # callable(brand) -> access token string (never stored here)
-        self.user_token = user_token                # callable() -> the Facebook Login user token, or None (Session 16)
         self.version = version
         self.public_enabled = public_enabled
         self.http = http or httpx.Client(timeout=httpx.Timeout(60.0, read=600.0))
@@ -70,12 +69,9 @@ class InstagramReelsPublisher:
         target = uri if uri.startswith("https://rupload.facebook.com/") else f"{self.rupload}/{container}"
         data = video.read_bytes()
 
-        def upload(token):
-            return self.http.post(target, content=data,
-                                  headers={"Authorization": f"OAuth {token}", "offset": "0", "file_size": str(size)})
-        # Meta accepted the Facebook Login user token for this app's resumable upload.
-        user = self.user_token() if self.user_token else None
-        r = upload(user or tok)
+        # Meta requires the token that created the container for its resumable upload.
+        r = self.http.post(target, content=data,
+                           headers={"Authorization": f"OAuth {tok}", "offset": "0", "file_size": str(size)})
         up = self._json(r, "uploading the video")
         if up.get("success") is False:
             raise PublishError("Instagram did not accept the uploaded video.")

@@ -75,8 +75,7 @@ class App:
         from ..publishing.instagram_reels import InstagramReelsPublisher
         self.instagram_reels = InstagramReelsPublisher(
             lambda brand: (self.tokens.get(f"instagram:{brand}") or {}).get("access_token"),
-            version=settings.meta_graph_version, public_enabled=bool(settings.instagram_public_publish),
-            user_token=lambda: (self.tokens.get("facebook:user") or {}).get("access_token"))
+            version=settings.meta_graph_version, public_enabled=bool(settings.instagram_public_publish))
         self.queue.register(autodeliver.KIND, lambda ctx: autodeliver.handle(
             settings, self.db, {"youtube": self.youtube, "facebook": self.facebook,
                                 "instagram": self.instagram_reels}, ctx))
