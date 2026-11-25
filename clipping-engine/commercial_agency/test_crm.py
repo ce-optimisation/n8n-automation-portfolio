@@ -1,0 +1,79 @@
+from contextlib import closing
+import json
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import unittest
+
+from commercial_agency import crm
+
+
+class CRMTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "agency.sqlite"
+        self.db = crm.connect(self.path, initialize=True)
+        self.addCleanup(self.db.close)
+        self.prospect = crm.add(self.db, "Example Studio", "https://example.test/about")["id"]
+
+    def qualify(self):
+        crm.stage(self.db, self.prospect, "qualified")
+        crm.record_contact(self.db, self.prospect, "https://example.test/contact", "fixture review")
+        return crm.approve(self.db, self.prospect, "fixture owner approval")
+
+    def test_gate_needs_qualification_contact_and_approval(self):
+        self.assertFalse(crm.get(self.db, self.prospect)["outreach_gate"]["ready"])
+        with self.assertRaises(ValueError):
+            crm.approve(self.db, self.prospect, "unqualified")
+        self.assertTrue(self.qualify()["outreach_gate"]["ready"])
+
+    def test_suppression_survives_reopen_and_blocks_approval(self):
+        self.qualify()
+        suppressed = crm.suppress(self.db, self.prospect, "fixture opt-out")
+        self.assertEqual(suppressed["outreach_gate"], {"ready": False, "reasons": ["do_not_contact"]})
+        self.assertIsNone(suppressed["approval_reference"])
+        with closing(crm.connect(self.path)) as db:
+            with self.assertRaises(ValueError):
+                crm.approve(db, self.prospect, "another approval")
+            with self.assertRaises(ValueError):
+                crm.record_contact(db, self.prospect, "https://example.test/contact", "new basis")
+            with self.assertRaises(sqlite3.IntegrityError):
+                crm.add(db, "example   studio", "https://example.test/alt")
+            self.assertEqual(crm.export(db)[0]["suppression_reference"], "fixture opt-out")
+
+    def test_material_contact_and_stage_changes_clear_approval(self):
+        self.qualify()
+        updated = crm.record_contact(self.db, self.prospect, "https://example.test/alt", "changed basis")
+        self.assertFalse(updated["outreach_gate"]["ready"])
+        crm.approve(self.db, self.prospect, "fixture approval")
+        crm.stage(self.db, self.prospect, "closed")
+        reopened = crm.stage(self.db, self.prospect, "qualified")
+        self.assertFalse(reopened["outreach_gate"]["ready"])
+
+    def test_external_database_and_secret_bearing_url_rejected(self):
+        other = self.path.with_name("other.sqlite")
+        with closing(sqlite3.connect(other)) as db:
+            db.execute("CREATE TABLE unrelated (id INTEGER)")
+        with self.assertRaisesRegex(ValueError, "other data"):
+            crm.connect(other, initialize=True)
+        with self.assertRaises(ValueError):
+            crm.add(self.db, "Invalid", "https://secret@example.test/path")
+
+    def test_cli_uses_explicit_db_and_exports_json(self):
+        new_path = self.path.with_name("with spaces.sqlite")
+        command = [sys.executable, "-m", "commercial_agency.crm", "--db", str(new_path)]
+        missing = subprocess.run([*command, "export"], capture_output=True, text=True)
+        self.assertEqual(missing.returncode, 2)
+        self.assertFalse(new_path.exists())
+        subprocess.run([*command, "init"], capture_output=True, text=True, check=True)
+        subprocess.run([*command, "add", "CLI Fixture", "https://example.test"], capture_output=True,
+                       text=True, check=True)
+        result = subprocess.run([*command, "export"], capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(result.stdout)[0]["organization"], "CLI Fixture")
+
+
+if __name__ == "__main__":
+    unittest.main()
