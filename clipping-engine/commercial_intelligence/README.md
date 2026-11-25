@@ -42,3 +42,10 @@ Add `selection_rules` to the same brief:
 The second file is an array with one row per candidate clip and intended destination for this run. Each row has a positive unique `clip_id`, immutable `source_id`, exact `destination`, lifecycle `status`, `safety_status`, and `start_ms`/`end_ms` relative to the source. An optional integer `quality_score` from 0 to 100 orders the review list. An optional `rights` object records a `status` of met, unmet or unknown. Definite rights evidence names `campaign`, `source_id`, `destination`, extracts the covered interval in `start_ms`/`end_ms`, and cites a durable `evidence` reference. Include `expires_at` where known. Use a null end for an explicitly open-ended permission and omit the whole rights object when scope cannot be verified. An acquisition-only licence is not redistribution evidence.
 
 Only ready or approved clips with clear safety status and in-scope rights evidence can be shortlisted. Each excerpt must fit wholly inside a single allowed source window. Unmet checks exclude a candidate. Unknown evidence holds a candidate for review. The result includes the actual rules, destination and rights evidence references needed to trace a decision. It does not change clip approval, alter renders, authorise publication or submit anything. Creative requirements not captured by the standard fields still belong in the brief's named evidence checks.
+## Render, handoff and settlement
+
+    python -m commercial_intelligence.media_check clip.mp4 --width 1080 --height 1920 --min-seconds 15 --max-seconds 60
+    python -m commercial_intelligence.submission brief.json clips.json clip.mp4 --clip-id 41 --destination Instagram:brand --account-id 123
+    python -m commercial_intelligence.reconcile ledger.json
+
+The media check uses FFprobe to inspect the video and audio codecs, dimensions and duration. Creative review and playback are separate acceptance steps. The submission command creates a draft with the selected clip, account ID and file hash for manual verification. Reconciliation takes `earnings` and `settlements` arrays and uses recorded net payments in the stated currency.
