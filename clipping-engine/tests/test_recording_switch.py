@@ -105,6 +105,23 @@ def test_off_does_not_hold_manual_imports(settings):
     assert "Deferred" not in type(e.value).__name__                    # it went on to the normal URL checks
 
 
+def test_recording_on_can_hold_automatic_downloads(env):
+    from clipengine import ingest
+
+    s, db, q, _, _ = env
+    s.auto_discovered_downloads = False
+    recording_switch.set_enabled(db, True)
+    q.register("download_url", lambda ctx: ingest.handle_download_url(s, db, q, ctx))
+    automatic = q.enqueue("download_url", payload={"url": "https://example.test/auto", "source_item_id": 1})
+    manual = q.enqueue("download_url", payload={"url": "ftp://not-allowed.invalid/manual"})
+    assert q.run_one() and q.run_one()
+    held = db.one("SELECT status, attempts, message FROM jobs WHERE id=?", (automatic,))
+    assert held["status"] == "queued" and held["attempts"] == 0
+    assert "held by configuration" in held["message"]
+    assert db.one("SELECT status FROM jobs WHERE id=?", (manual,))["status"] == "failed"
+    assert recording_switch.is_enabled(db)
+
+
 def test_button_toggles_the_switch_and_shows_the_state(settings):
     app = create_app(settings, start_worker=False)
     with TestClient(app) as c:

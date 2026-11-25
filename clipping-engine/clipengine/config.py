@@ -275,6 +275,7 @@ class Settings:
     disk_reserve_gb: float = 1.0
     disk_warn_gb: float = 5.0               # Session 15: dashboard/alert warning level for free space (does not stop anything)
     record_gb_per_hour: float = 1.5         # planning estimate for live capture
+    auto_discovered_downloads: bool = True
     live_expected_hours: float = 4.5        # plan live resolution so a broadcast this long fits on disk
     live_min_height: int = 1080             # owner requirement (16 Nov 2026): never record or download below 1080p
     live_max_height: int = 1080
@@ -429,6 +430,7 @@ def get_settings(**overrides) -> Settings:
         disk_reserve_gb=_float("DISK_RESERVE_GB", 1.0),
         disk_warn_gb=_float("DISK_WARN_GB", 5.0),
         record_gb_per_hour=_float("RECORD_GB_PER_HOUR", 1.5),
+        auto_discovered_downloads=_bool("AUTO_DISCOVERED_DOWNLOADS", True),
         live_expected_hours=_float("LIVE_EXPECTED_HOURS", 4.5),
         live_min_height=_int("LIVE_MIN_HEIGHT", 1080),
         live_max_height=_int("LIVE_MAX_HEIGHT", 1080),

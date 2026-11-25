@@ -636,6 +636,8 @@ def handle_download_url(settings: Settings, db: Database, queue, ctx: JobContext
             # Session 16: a download found automatically (monitor/discovery/backfill) that was queued before Recording was
             # switched OFF must not start while it is OFF. Manual imports are not affected. No attempt is used up.
             raise Deferred("Recording is switched OFF; this automatically found video waits until it is turned back on")
+        if not settings.auto_discovered_downloads:
+            raise Deferred("Automatic downloads are held by configuration; live recording and manual imports are separate")
     decision = classify_url(url, settings, db)
     if decision.code == "unresolvable":
         # No internet for a moment is not a reason to give up on the video: retry later.
