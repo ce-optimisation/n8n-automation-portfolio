@@ -15,7 +15,6 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from clipengine.config import get_settings
-from clipengine.publishing.tokens import TokenStore
 from clipengine.web.app import create_app
 
 
@@ -24,7 +23,7 @@ def run(media):
         os.environ["CLIPENGINE_DATA_DIR"] = tmp
         os.environ["CLIPENGINE_ENV_FILE"] = str(Path(tmp) / "fixture.env")
         settings = get_settings(open_browser=False, dashboard_password="")
-        with patch("clipengine.web.app.TokenStore", lambda directory: TokenStore(directory, use_keyring=False)):
+        with patch("clipengine.publishing.tokens._keyring", return_value=None):
             app = create_app(settings, start_worker=False)
         db = app.state.core.db
         for key in ("recording.enabled", "delivery.enabled"):

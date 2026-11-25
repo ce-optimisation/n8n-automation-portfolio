@@ -33,7 +33,7 @@ def main() -> int:
     from clipengine.publishing.tokens import TokenStore
     s = get_settings()
     db = Database(s.db_path)
-    svc = cloud.CloudService(s, db, JobQueue(db), TokenStore(s.secrets_dir))
+    svc = cloud.CloudService(s, db, JobQueue(db), TokenStore.for_settings(s))
     st = svc.status()
     print(f"Drive status: {st['label']}")
     if not st["connected"]:

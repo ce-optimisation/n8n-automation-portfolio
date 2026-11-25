@@ -84,7 +84,7 @@ def main() -> int:
             from clipengine.jobs import JobQueue
             from clipengine.publishing.tokens import TokenStore
             q = JobQueue(db)
-            lc = lifecycle.Lifecycle(s, db, q, cloud.CloudService(s, db, q, TokenStore(s.secrets_dir)))
+            lc = lifecycle.Lifecycle(s, db, q, cloud.CloudService(s, db, q, TokenStore.for_settings(s)))
             for g in lc.gates(rec["id"]):
                 lines.append(f"9.   gate {g['gate']}: {'PASS' if g['ok'] else 'not yet'} - {g['detail']}")
         except Exception as e:  # noqa: BLE001

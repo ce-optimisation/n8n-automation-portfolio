@@ -262,6 +262,6 @@ def main(settings, record: bool = False, as_json: bool = False) -> int:
     db = Database(settings.db_path)
     if record:
         print("Recorded:", record_directory(db))
-    rows = build_matrix(db, settings, TokenStore(settings.secrets_dir))
+    rows = build_matrix(db, settings, TokenStore.for_settings(settings))
     print(json.dumps(rows, indent=2) if as_json else render_matrix_text(rows))
     return 0

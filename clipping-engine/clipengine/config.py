@@ -282,6 +282,7 @@ class Settings:
 
     # Testing hook: name of a transcriber backend ("whisper" or "stub").
     transcriber_backend: str = "whisper"
+    workspace_id: str | None = None
 
     @property
     def db_path(self) -> Path:
@@ -330,6 +331,7 @@ def get_settings(**overrides) -> Settings:
         port=_int("CLIPENGINE_PORT", 8765),
         dashboard_password=os.environ.get("DASHBOARD_PASSWORD", ""),
         open_browser=_bool("OPEN_BROWSER", True),
+        workspace_id=os.environ.get("CLIPENGINE_WORKSPACE_ID") or None,
         whisper_model=os.environ.get("WHISPER_MODEL", "auto") or "auto",
         whisper_device=os.environ.get("WHISPER_DEVICE", "auto") or "auto",
         whisper_compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "auto") or "auto",

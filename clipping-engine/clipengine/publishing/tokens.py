@@ -44,6 +44,10 @@ class TokenStore:
         self.service = SERVICE if workspace_id is None else f"{SERVICE}:workspace:{workspace_id}"
         self.kr = _keyring() if use_keyring else None
 
+    @classmethod
+    def for_settings(cls, settings, *, use_keyring: bool = True) -> TokenStore:
+        return cls(settings.secrets_dir, use_keyring=use_keyring, workspace_id=settings.workspace_id)
+
     @property
     def backend(self) -> str:
         return "OS credential store (keyring)" if self.kr else f"local file ({self._file()})"

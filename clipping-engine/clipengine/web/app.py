@@ -56,7 +56,7 @@ class App:
         self.db = Database(settings.db_path)
         self.queue = JobQueue(self.db, settings.max_attempts)
         self.pipeline = Pipeline(settings, self.db, self.queue)
-        self.tokens = TokenStore(settings.secrets_dir)
+        self.tokens = TokenStore.for_settings(settings)
         self.tiktok = TikTokClient(settings.tiktok_client_key, settings.tiktok_client_secret,
                                    settings.tiktok_redirect_uri, self.tokens, app_type=settings.tiktok_app_type)
         if settings.instagram_auth_mode == "instagram":

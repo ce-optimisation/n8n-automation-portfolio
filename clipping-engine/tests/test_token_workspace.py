@@ -3,6 +3,8 @@ import json
 import pytest
 
 from clipengine.publishing import tokens
+from clipengine.config import get_settings
+from clipengine.web.app import create_app
 
 
 class MemoryKeyring:
@@ -57,3 +59,30 @@ def test_workspace_credentials_are_distinct_and_legacy_readable(tmp_path, isolat
 def test_workspace_credentials_reject_invalid_identifiers(tmp_path, workspace_id):
     with pytest.raises(ValueError, match="Workspace ID"):
         tokens.TokenStore(tmp_path, use_keyring=False, workspace_id=workspace_id)
+
+
+def test_engine_and_cli_store_factory_use_the_configured_namespace(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPENGINE_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.delenv("CLIPENGINE_WORKSPACE_ID", raising=False)
+    account = "youtube:example"
+    legacy = get_settings(data_dir=tmp_path / "legacy")
+    legacy_store = tokens.TokenStore.for_settings(legacy)
+    legacy_store.set(account, {"access_token": "legacy"})
+    assert legacy.workspace_id is None
+    assert legacy_store.service == tokens.SERVICE
+
+    monkeypatch.setenv("CLIPENGINE_WORKSPACE_ID", "customer-one")
+    first = get_settings(data_dir=tmp_path / "first")
+    first_store = create_app(first, start_worker=False).state.core.tokens
+    assert first_store.get(account) is None
+    first_store.set(account, {"access_token": "first"})
+
+    monkeypatch.setenv("CLIPENGINE_WORKSPACE_ID", "customer-two")
+    second = get_settings(data_dir=tmp_path / "second")
+    second_store = create_app(second, start_worker=False).state.core.tokens
+    assert second_store.get(account) is None
+    second_store.set(account, {"access_token": "second"})
+
+    for settings, expected in ((legacy, "legacy"), (first, "first"), (second, "second")):
+        store = tokens.TokenStore.for_settings(settings)
+        assert store.get(account) == {"access_token": expected}
