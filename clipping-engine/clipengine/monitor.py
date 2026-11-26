@@ -701,6 +701,17 @@ class SourceMonitor:
                     p.wait(timeout=15)
                 self.procs.pop(iid, None)
                 self._finalize(iid)
+            # Session 21: on 26 Nov 2026 a live recorder exited at 14:07 while a full poll cycle (18 sources with 30 s
+            # lookup timeouts) took ~19 minutes, so supervise() did not notice for most of a cycle and the rest of the
+            # broadcast went unrecorded. Exited recorders are now handled here, every GUARD_INTERVAL, without polling.
+            for iid, p in list(self.procs.items()):
+                if p.poll() is None:
+                    continue
+                it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+                self.procs.pop(iid, None)
+                if it:
+                    self._after_recorder_exit(iid, it, p.returncode)
+            self._recheck_unsure()
 
     def _start_guard_thread(self) -> None:
         def loop():
@@ -1043,6 +1054,27 @@ class SourceMonitor:
             return bool(listed[0]["live"])
         return False if not listed else None
 
+    def _stream_live_bounded(self, src, it) -> bool | None:
+        """_stream_live with a wall-clock limit, so a hung site lookup cannot stall the recorder guard.
+        A timeout means "cannot tell", which keeps re-checking instead of finishing the recording."""
+        try:
+            return _call_with_timeout(self._stream_live, 2.5 * self.PROBE_TIMEOUT, src, it)
+        except TimeoutError:
+            log.warning("source item %s: live check timed out; treating the stream state as unknown", it["id"])
+            return None
+
+    def _recheck_unsure(self) -> None:
+        for iid, (since, last) in list(self._unsure.items()):
+            if iid in self.procs:                 # a check (or poll) already restarted the recorder
+                self._unsure.pop(iid, None)
+                continue
+            it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
+            if not it or it["state"] != "recording":
+                self._unsure.pop(iid, None)
+                continue
+            if time.time() - last >= self.LIVE_UNSURE_RECHECK:
+                self._after_recorder_exit(iid, it, "earlier")
+
     LIVE_UNSURE_GRACE = 15 * 60      # how long to keep re-checking a stream whose state cannot be read
     LIVE_UNSURE_RECHECK = 60         # seconds between those re-checks
 
@@ -1050,7 +1082,7 @@ class SourceMonitor:
         """The recorder process is gone: start a new segment if the stream is still live, finish the
         recording if it has ended, and keep re-checking (without finishing) while that is unknown."""
         src = self.db.one("SELECT * FROM sources WHERE id=?", (it["source_id"],))
-        live = self._stream_live(src, it) if src and src["enabled"] else False
+        live = self._stream_live_bounded(src, it) if src and src["enabled"] else False
         now = time.time()
         if live is None:
             first = iid not in self._unsure
@@ -1082,16 +1114,7 @@ class SourceMonitor:
             self._supervise_locked()
 
     def _supervise_locked(self) -> None:
-        for iid, (since, last) in list(self._unsure.items()):
-            if iid in self.procs:                 # a check (or poll) already restarted the recorder
-                self._unsure.pop(iid, None)
-                continue
-            it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
-            if not it or it["state"] != "recording":
-                self._unsure.pop(iid, None)
-                continue
-            if time.time() - last >= self.LIVE_UNSURE_RECHECK:
-                self._after_recorder_exit(iid, it, "earlier")
+        self._recheck_unsure()
         for iid, p in list(self.procs.items()):
             it = self.db.one("SELECT * FROM source_items WHERE id=?", (iid,))
             if not it:

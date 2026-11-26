@@ -127,3 +127,53 @@ def test_a_fast_lookup_still_resolves(settings):
     mon.prober = lambda s, url: {"live_status": "is_live", "title": "Live now"}
     out = mon._resolve_unknown(src, [{"key": "v1", "url": "https://example.test/v1", "live": None, "title": ""}], first_poll=False)
     assert out and out[0]["live"] is True and out[0]["title"] == "Live now"
+
+
+class ExitedProc(FakeProc):
+    returncode = 1
+
+    def poll(self):
+        return 1
+
+
+def test_guard_restarts_an_exited_recorder_while_live_without_polling(settings, monkeypatch):
+    """Session 21 (26 Nov 2026): a recorder died mid-broadcast and went unnoticed for most of a ~19 minute poll cycle."""
+    db, mon = _mon(settings)
+    iid = _item(db)
+    mon.procs[iid] = ExitedProc()
+    started = []
+    monkeypatch.setattr(livestore, "must_stop", lambda s, n, free=None: False)
+    monkeypatch.setattr(mon, "_stream_live", lambda src, it: True)
+    monkeypatch.setattr(mon, "_start_segment", lambda src, it, method=None: started.append(it["id"]))
+    monkeypatch.setattr(mon, "poll", lambda sid: (_ for _ in ()).throw(AssertionError("no polling")))
+    mon.guard_once()
+    assert started == [iid] and iid not in mon.procs
+    assert db.one("SELECT restarts FROM source_items WHERE id=?", (iid,))["restarts"] == 1
+
+
+def test_guard_finalises_an_exited_recorder_when_stream_ended(settings, monkeypatch):
+    db, mon = _mon(settings)
+    iid = _item(db)
+    mon.procs[iid] = ExitedProc()
+    finalised = []
+    monkeypatch.setattr(livestore, "must_stop", lambda s, n, free=None: False)
+    monkeypatch.setattr(mon, "_stream_live", lambda src, it: False)
+    monkeypatch.setattr(mon, "_finalize", lambda i: finalised.append(i))
+    mon.guard_once()
+    assert finalised == [iid]
+
+
+def test_hung_live_check_is_bounded_and_treated_as_unknown(settings, monkeypatch):
+    db, mon = _mon(settings)
+    iid = _item(db)
+    mon.procs[iid] = ExitedProc()
+    release = threading.Event()
+    finalised = []
+    monkeypatch.setattr(livestore, "must_stop", lambda s, n, free=None: False)
+    monkeypatch.setattr(mon, "_stream_live", lambda src, it: release.wait(30))
+    monkeypatch.setattr(mon, "_finalize", lambda i: finalised.append(i))
+    mon.PROBE_TIMEOUT = 0.1
+    t0 = time.time()
+    mon.guard_once()
+    assert time.time() - t0 < 3 and finalised == [] and iid in mon._unsure   # keeps re-checking, never finishes early
+    release.set()
