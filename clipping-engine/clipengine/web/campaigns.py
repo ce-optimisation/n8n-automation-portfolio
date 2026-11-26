@@ -9,7 +9,7 @@ from fastapi import Form, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 
 from commercial_intelligence.assess import assess
-from commercial_intelligence.interpret_brief import interpret
+from commercial_intelligence.brief_engine import analyse
 from .. import campaign_render
 from ..jobs import PermanentError
 from ..publishing.base import RIGHTS_OK
@@ -135,8 +135,10 @@ def register(app, core, page):
         raw = brief.encode('utf-8')
         if not source_ref or len(source_ref) > 500 or not brief.strip() or len(raw) > 65_536:
             raise HTTPException(422, 'Provide a source reference of up to 500 characters and a brief of up to 64 KiB.')
-        result = interpret(raw, source_ref=source_ref)
-        if len(result['evidence']['Source window']) > 30:
+        result = analyse(raw, source_ref=source_ref, reference_year=datetime.now(timezone.utc).year,
+                         observed_at=datetime.now(timezone.utc).isoformat())
+        windows = (result.get('selection_rules') or result.get('proposed_selection_rules') or {}).get('source_windows', [])
+        if len(result['evidence']['Source window']) > 30 or len(windows) > 30:
             raise HTTPException(422, 'A brief may contain up to 30 source windows.')
         digest = result['source_sha256']
         db.execute('INSERT INTO campaign_briefs (source_ref,source_sha256,original_text,interpretation,created_at) '
@@ -144,6 +146,32 @@ def register(app, core, page):
                    (source_ref, digest, brief, json.dumps(result), time.time()))
         row = db.one('SELECT id FROM campaign_briefs WHERE source_ref=? AND source_sha256=?', (source_ref, digest))
         return RedirectResponse(f"/campaigns/{row['id']}", status_code=303)
+
+    @app.post('/campaigns/{brief_id}/confirm-rules')
+    def confirm_rules(brief_id: int, confirm: bool = Form(False)):
+        """Owner confirms rules proposed from a free-form brief. Never authorises publication."""
+        row = db.one('SELECT interpretation FROM campaign_briefs WHERE id=?', (brief_id,))
+        if row is None:
+            raise HTTPException(404)
+        result = json.loads(row['interpretation'])
+        proposed = result.get('proposed_selection_rules')
+        if not confirm:
+            raise HTTPException(422, 'Tick the confirmation after checking the rules against the original brief.')
+        if result.get('selection_rules'):
+            raise HTTPException(409, 'This brief version already has confirmed rules.')
+        if not proposed or not proposed.get('submission_deadline') or not proposed.get('source_windows'):
+            raise HTTPException(422, 'Rules need a stated deadline and at least one source before confirmation.')
+        if result.get('injection_flags'):
+            raise HTTPException(422, 'This brief contains flagged text. Import a cleaned copy from the original source.')
+        if any(h.get('field') in ('duration', 'submission_deadline') for h in result.get('holds', [])):
+            raise HTTPException(422, 'Resolve duration and deadline holds before confirming.')
+        rules = {k: v for k, v in proposed.items() if k != 'requires_owner_confirmation'}
+        rules['evidence'] = f"{result['source_ref']}#sha256={result['source_sha256']}"
+        rules['confirmed_by_owner_at'] = datetime.now(timezone.utc).isoformat()
+        result['selection_rules'] = rules
+        result['publication_authorized'] = False
+        db.execute('UPDATE campaign_briefs SET interpretation=? WHERE id=?', (json.dumps(result), brief_id))
+        return RedirectResponse(f'/campaigns/{brief_id}', status_code=303)
 
     @app.post('/campaigns/{brief_id}/assessment')
     def record_assessment(brief_id: int, details: str = Form(...)):

@@ -5,7 +5,22 @@
 <p><a href="/campaigns">All campaign briefs</a></p>
 <h2>{{ result.get('campaign') or brief.source_ref }}</h2>
 <p>{{ 'Needs review' if result.holds else 'Rules extracted for review' }}</p>
-{% if result.holds %}<ul>{% for hold in result.holds %}<li>{{ hold.get('field', 'Brief') }} — {{ hold.reason }}{% if hold.source_text %} <small>Line {{ hold.line }} · {{ hold.source_text }}</small>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if result.holds %}<ul>{% for hold in result.holds %}<li>{{ hold.get('field', 'Brief') }} — {{ hold.reason }}{% if hold.source_text %} <small>Line {{ hold.line }} · {{ hold.source_text }}</small>{% elif hold.quote %} <small>Line {{ hold.line }} · “{{ hold.quote }}”</small>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if result.injection_flags %}<div class="card"><h3>Flagged text (not followed)</h3><ul>{% for f in result.injection_flags %}<li>{{ f.reason }}{% if f.quote %} <small>Line {{ f.line }} · “{{ f.quote }}”</small>{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+{% if result.get('production_profile') %}
+<div class="card"><h3>Interpreted brief</h3>
+<p>Profile: aspect {{ result.production_profile.aspect_ratio or 'not stated' }} · captions {{ result.production_profile.captions }} · music {{ result.production_profile.music_policy }} · AI {{ result.production_profile.ai_policy }}{% if result.production_profile.logo_overlay_required %} · logo required{% endif %}{% if result.production_profile.sponsor_graphic_required %} · sponsor graphic required{% endif %}</p>
+<p>Economics: {% if result.economics.cpm %}{{ result.economics.currency }} {{ result.economics.cpm }} per 1,000 views{% else %}rate not stated{% endif %}{% if result.economics.get('min_views') %} · minimum {{ result.economics.min_views }} views{% endif %}{% if result.economics.get('max_payout') %} · max {{ result.economics.max_payout }}{% endif %}{% if result.economics.get('budget') %} · budget {{ result.economics.budget }}{% endif %}</p>
+<p>Platforms allowed: {{ result.platforms.allowed|join(', ') or 'not stated' }}{% if result.platforms.prohibited %} · prohibited: {{ result.platforms.prohibited|join(', ') }}{% endif %}</p>
+<p>Required tags: {{ (result.metadata_requirements.disclosure_tags + result.metadata_requirements.hashtags + result.metadata_requirements.mentions)|join(' ') or 'none stated' }}</p>
+{% if result.not_stated %}<p><small>Not stated in brief: {{ result.not_stated|join(', ') }}</small></p>{% endif %}
+<details><summary>{{ result.requirements|length }} evidence-linked requirements</summary><ul>{% for q in result.requirements %}<li>{{ q.category }} ({{ q.modality }}) — <small>Line {{ q.line }} · “{{ q.quote }}”</small></li>{% endfor %}</ul></details>
+{% if result.proposed_selection_rules and not result.selection_rules %}
+<form method="post" action="/campaigns/{{ brief.id }}/confirm-rules">
+<p>Proposed: {{ (result.proposed_selection_rules.minimum_duration_ms/1000)|round(1) }}–{{ (result.proposed_selection_rules.maximum_duration_ms/1000)|round(1) }}s, deadline {{ result.proposed_selection_rules.submission_deadline or 'not stated' }}, {{ result.proposed_selection_rules.source_windows|length }} source window(s).</p>
+<label><input type="checkbox" name="confirm" value="true"> I checked these rules against the original brief. This does not approve publication.</label>
+<button type="submit">Confirm selection rules</button></form>{% endif %}
+</div>{% endif %}
 <p>Source reference <strong>{{ brief.source_ref }}</strong></p>
 <p>Version <code>{{ brief.source_sha256 }}</code></p>
 {% if result.selection_rules %}
