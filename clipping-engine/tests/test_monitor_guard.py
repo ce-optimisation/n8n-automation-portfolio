@@ -177,3 +177,36 @@ def test_hung_live_check_is_bounded_and_treated_as_unknown(settings, monkeypatch
     mon.guard_once()
     assert time.time() - t0 < 3 and finalised == [] and iid in mon._unsure   # keeps re-checking, never finishes early
     release.set()
+
+
+def test_hung_lookup_process_is_killed_and_leaves_no_thread(settings, monkeypatch):
+    """Session 21: abandoned in-process lookups grew engine memory to 13.4 GB. Lookups now run in a killable child."""
+    import subprocess
+    import sys
+    monkeypatch.setattr(monitor, "PROBE_PROCESS_TIMEOUT", 1.0)
+    monkeypatch.setattr(monitor, "_probe_cmd", lambda url, ua: [sys.executable, "-c", "import time; time.sleep(60)"])
+    before = threading.active_count()
+    spawned = []
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(real_popen(*a, **k)) or spawned[-1])
+    t0 = time.time()
+    try:
+        monitor.probe_entry_isolated(settings, "https://example.test/v")
+        raise AssertionError("expected a timeout")
+    except TimeoutError:
+        pass
+    assert time.time() - t0 < 15
+    assert spawned and spawned[0].poll() is not None          # child is dead, memory returned to the OS
+    assert threading.active_count() <= before
+
+
+def test_isolated_lookup_returns_child_result(settings, monkeypatch):
+    import sys
+    payload = '{"title": "Live now", "live_status": "is_live", "published": ""}'
+    monkeypatch.setattr(monitor, "_probe_cmd", lambda url, ua: [sys.executable, "-c", f"print({payload!r})"])
+    assert monitor.probe_entry_isolated(settings, "https://example.test/v")["live_status"] == "is_live"
+
+
+def test_monitor_uses_the_isolated_prober_by_default(settings):
+    _, mon = _mon(settings)
+    assert mon.prober is monitor.probe_entry_isolated

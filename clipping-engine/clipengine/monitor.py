@@ -23,6 +23,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -435,6 +436,41 @@ def probe_entry(settings: Settings, url: str) -> dict:
             "published": str(info.get("upload_date") or info.get("timestamp") or "")}
 
 
+PROBE_PROCESS_TIMEOUT = 30.0
+
+
+def _probe_cmd(url: str, agent: str) -> list[str]:
+    return [sys.executable, "-m", "clipengine.probe_child", url, agent]
+
+
+def _kill_tree(proc) -> None:
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=15)
+    else:
+        proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def probe_entry_isolated(settings: Settings, url: str) -> dict:
+    """probe_entry in a killable child process (Session 21 memory fix). A lookup that does not answer within
+    PROBE_PROCESS_TIMEOUT is killed with its whole process tree, so nothing is left running in the engine."""
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    proc = subprocess.Popen(_probe_cmd(url, settings.http_user_agent),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
+    try:
+        out, err = proc.communicate(timeout=PROBE_PROCESS_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        raise TimeoutError(f"no answer within {PROBE_PROCESS_TIMEOUT:.0f} s")
+    if proc.returncode != 0:
+        tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-1:] or ["lookup failed"]
+        raise RuntimeError(tail[0][:300])
+    return json.loads(out.decode("utf-8"))
+
+
 def hls_state(text: str) -> dict:
     """Minimal HLS inspection: is it a playlist, does it have media, has it ended?"""
     if "#EXTM3U" not in text:
@@ -579,7 +615,7 @@ class SourceMonitor:
         self._guard_lock = threading.RLock()          # serialises supervise() and the independent guard thread
         self._t: threading.Thread | None = None
         self.lister = list_channel           # replaceable in tests (MOCK)
-        self.prober = probe_entry            # replaceable in tests (MOCK)
+        self.prober = probe_entry_isolated   # replaceable in tests (MOCK); killable child process, see probe_child.py
         # item id -> [first time, last time] the stream's state could not be checked after the
         # recorder stopped (typically the same network drop that stopped it)
         self._unsure: dict[int, list[float]] = {}
