@@ -35,6 +35,15 @@ Save the rubric as a local JSON file. Run init once again on an existing agency 
 
 The ranking includes researched and qualified prospects sorted by decreasing score. It excludes opted-out and closed prospects. The full export preserves suppression and recorded scores. Scores aid prioritisation and do not change anyone’s outreach gate.
 
+### Import organisation-level research
+
+Each JSON batch entry contains exactly the organisation name, public source URL, next research action, and the five criterion scores. See the dated evidence file for the shortlist. Use an explicit private database path. The database, ranked exports and any later operational data belong outside source control.
+
+    python -m commercial_agency.crm --db ./agency-test.sqlite import-research ./commercial_agency/prospect_research_2026-11-26.json
+    python -m commercial_agency.crm --db ./agency-test.sqlite rank
+
+Import validates the batch before writing, skips existing organisation names, and never changes an existing lead or its suppression record. New entries begin as researched, with no contact basis or approval. Public company sites substantiate research scores, not buying intent or permission to contact.
+
 ## Synthetic client onboarding and private handoff
 
 Use an existing private scratch folder on a local filesystem. On non-Windows systems the filesystem must support hard links. The following creates only fixture workspaces and handoffs. After onboarding, place a synthetic file named clip.mp4 in the workspace inbox for the example.

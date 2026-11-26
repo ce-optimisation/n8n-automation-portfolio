@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -372,6 +372,35 @@ CREATE TABLE IF NOT EXISTS metrics (
     watch_seconds REAL, avg_view_pct REAL, followers_delta INTEGER, incidents INTEGER,
     source TEXT NOT NULL DEFAULT 'manual',  -- manual | csv | api (never estimated)
     created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS campaign_briefs (
+    id INTEGER PRIMARY KEY,
+    source_ref TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    original_text TEXT NOT NULL,
+    interpretation TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE (source_ref, source_sha256)
+);
+CREATE TABLE IF NOT EXISTS campaign_submissions (
+    id INTEGER PRIMARY KEY,
+    brief_id INTEGER NOT NULL REFERENCES campaign_briefs(id),
+    clip_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('submitted','approved','rejected')),
+    evidence TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(brief_id,url)
+);
+CREATE TABLE IF NOT EXISTS campaign_receipts (
+    id INTEGER PRIMARY KEY,
+    submission_id INTEGER NOT NULL REFERENCES campaign_submissions(id),
+    reference TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    gross_minor INTEGER NOT NULL CHECK (gross_minor>0),
+    fee_minor INTEGER NOT NULL CHECK (fee_minor BETWEEN 0 AND gross_minor),
+    recorded_at REAL NOT NULL,
+    UNIQUE(currency,reference)
 );
 CREATE TABLE IF NOT EXISTS commercial_entries (
     id INTEGER PRIMARY KEY,

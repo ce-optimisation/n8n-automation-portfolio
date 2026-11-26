@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from commercial_product.release_store import ReleaseStore
 from commercial_product.workspace_preflight import Workspace, preflight
 
 
@@ -90,7 +91,7 @@ def launch(
             raise ValueError("The optional tools path must be a directory.")
     _require_free_port(workspace.port)
     process = subprocess.Popen(
-        [str(interpreter), "-E", "-s", "-m", "clipengine", "--no-browser"],
+        [str(interpreter), "-B", "-E", "-s", "-m", "clipengine", "--no-browser"],
         cwd=release_root,
         env=child_environment(workspace, interpreter, tools_dir),
         stdin=subprocess.DEVNULL,
@@ -113,7 +114,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("descriptor", type=Path)
     parser.add_argument("workspace_id")
-    parser.add_argument("--release-root", required=True, type=Path)
+    release = parser.add_mutually_exclusive_group(required=True)
+    release.add_argument("--release-root", type=Path)
+    release.add_argument("--release-store", type=Path)
     parser.add_argument("--python", required=True, type=Path)
     parser.add_argument("--tools-dir", type=Path)
     args = parser.parse_args(argv)
@@ -121,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
         workspace = next((entry for entry in preflight(args.descriptor) if entry.workspace_id == args.workspace_id), None)
         if workspace is None:
             raise ValueError("The requested workspace ID is not in the descriptor.")
-        process = launch(workspace, args.release_root, args.python, tools_dir=args.tools_dir)
+        release_root = ReleaseStore(args.release_store).current() if args.release_store else args.release_root
+        process = launch(workspace, release_root, args.python, tools_dir=args.tools_dir)
     except (OSError, ValueError, RuntimeError) as error:
         print(f"Workspace launch failed: {error}", file=sys.stderr)
         return 1

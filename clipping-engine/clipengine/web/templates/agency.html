@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Agency prospects</h1>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+{% if added is defined and added is not none %}
+<p role="status">{{ added }} added. {{ skipped }} already in the register.</p>
+{% endif %}
+{% if prospects %}
+<p><a href="/agency/export">Download prospect register</a></p>
+{% for prospect in prospects %}
+<article class="card">
+  <h2>{{ prospect.organization }}</h2>
+  <p>{{ prospect.stage | capitalize }} · {% if prospect.score is none %}Unscored{% else %}{{ prospect.score }}/10{% endif %}
+     · {% if prospect.outreach_gate.ready %}Outreach approved{% else %}Outreach blocked{% endif %}</p>
+  {% if prospect.next_action %}<p>{{ prospect.next_action }}</p>{% endif %}
+  <details>
+    <summary>Research evidence</summary>
+    <p><a href="{{ prospect.source_url }}" rel="noreferrer">Primary source</a></p>
+    {% if prospect.criteria %}
+    <ul>{% for criterion, item in prospect.criteria.items() %}
+      <li>{{ criterion | replace("_", " ") | capitalize }} ({{ item.points }}/2)
+        {% if item.evidence %}{{ item.evidence }}{% else %}Evidence unavailable{% endif %}
+      </li>
+    {% endfor %}</ul>
+    {% endif %}
+  </details>
+</article>
+{% endfor %}
+{% elif not error %}
+<p>The register is empty.</p>
+{% endif %}
+<form method="post" action="/agency/import">
+  <label for="agency-research">Research JSON</label>
+  <p id="agency-research-help">Paste a research batch to add prospect records. Existing records are preserved.</p>
+  <textarea id="agency-research" name="research" aria-describedby="agency-research-help" rows="5" required></textarea>
+  <button type="submit">Import research</button>
+</form>
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Campaign briefs</h1>
+{% if brief %}
+<p><a href="/campaigns">All campaign briefs</a></p>
+<h2>{{ result.get('campaign') or brief.source_ref }}</h2>
+<p>{{ 'Needs review' if result.holds else 'Rules extracted for review' }}</p>
+{% if result.holds %}<ul>{% for hold in result.holds %}<li>{{ hold.get('field', 'Brief') }} — {{ hold.reason }}</li>{% endfor %}</ul>{% endif %}
+<p>Source reference <strong>{{ brief.source_ref }}</strong></p>
+<p>Version <code>{{ brief.source_sha256 }}</code></p>
+{% if result.selection_rules %}
+<h3>Extracted requirements</h3>
+<ul>{% for field, clauses in result.evidence.items() %}{% for clause in clauses %}<li>Line {{ clause.line }} · {{ clause.source_text }}</li>{% endfor %}{% endfor %}</ul>
+<h3>Matching recordings</h3>
+{% for source, recordings in matches.items() %}<p>{{ source }}</p><ul>{% for recording in recordings %}<li><a href="/recordings/{{ recording.id }}">{{ recording.title }}</a></li>{% else %}<li>No exact source match.</li>{% endfor %}</ul>{% endfor %}
+<h3>Existing clips within the stated time and duration limits</h3>
+{% if expired %}<p>The submission deadline has passed.</p>{% else %}
+<ul>{% for clip in candidates %}<li><a href="/clips/{{ clip.id }}">Clip #{{ clip.id }}</a> · {{ '%.1f'|format(clip.end-clip.start) }} seconds</li>{% else %}<li>No matching reviewable render.</li>{% endfor %}</ul>
+{% endif %}
+<p>Account eligibility and redistribution rights still need evidence. These results do not grant publishing approval.</p>
+{% endif %}
+<details><summary>Original wording</summary><pre style="white-space:pre-wrap">{{ brief.original_text }}</pre></details>
+<h3>Versions for this reference</h3>
+<ul>{% for version in versions %}<li><a href="/campaigns/{{ version.id }}">{{ version.source_sha256[:12] }}</a></li>{% endfor %}</ul>
+<h3>Submission records</h3>
+<p>Record the outcome from the campaign provider. This form sends nothing to the provider.</p>
+<ul>{% for submission in submissions %}<li>#{{ submission.id }} · Clip #{{ submission.clip_id }} · {{ submission.status }} · {{ submission.url }} · {{ submission.evidence }}</li>{% else %}<li>No submission evidence recorded.</li>{% endfor %}</ul>
+<form method="post" action="/campaigns/{{ brief.id }}/submission" class="card">
+  <label>Clip ID <input name="clip_id" type="number" min="1" required></label>
+  <label>Published URL <input name="url" type="url" required></label>
+  <label>Status <select name="status"><option>submitted</option><option>approved</option><option>rejected</option></select></label>
+  <label>Evidence or rejection reason <input name="evidence" required maxlength="2000"></label>
+  <button type="submit">Record submission</button>
+</form>
+<h3>Actual receipts</h3>
+<ul>{% for receipt in receipts %}<li>{{ receipt.reference }} · {{ receipt.currency }} {{ receipt.gross_minor-receipt.fee_minor }} minor units net</li>{% else %}<li>No payments recorded.</li>{% endfor %}</ul>
+{% if submissions %}<form method="post" action="/campaigns/{{ brief.id }}/receipt" class="card">
+  <label>Submission <select name="submission_id">{% for submission in submissions %}<option value="{{ submission.id }}">#{{ submission.id }} · Clip #{{ submission.clip_id }}</option>{% endfor %}</select></label>
+  <label>Payment reference <input name="reference" required maxlength="200"></label>
+  <label>Currency <input name="currency" required maxlength="3"></label>
+  <label>Gross in minor units <input name="gross_minor" type="number" min="1" required></label>
+  <label>Fee in minor units <input name="fee_minor" type="number" min="0" required></label>
+  <button type="submit">Record receipt</button>
+</form>{% endif %}
+{% else %}
+<h2>Recorded campaign receipts</h2>
+<ul>{% for total in totals %}<li>{{ total.currency }} {{ total.net_minor }} minor units net</li>{% else %}<li>No payments recorded.</li>{% endfor %}</ul>
+<form method="post" action="/campaigns" class="card">
+  <label>Source reference <input name="source_ref" required maxlength="500"></label>
+  <label>Brief text <textarea name="brief" rows="9" required></textarea></label>
+  <button type="submit">Import brief</button>
+</form>
+<ul>{% for row, interpretation in rows %}<li><a href="/campaigns/{{ row.id }}">{{ interpretation.get('campaign') or row.source_ref }}</a> · {{ 'Needs review' if interpretation.holds else 'Rules extracted for review' }}</li>{% else %}<li>No campaign briefs imported.</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}

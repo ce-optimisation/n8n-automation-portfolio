@@ -1,4 +1,5 @@
 import http.client
+import hashlib
 import json
 import os
 import socket
@@ -8,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from commercial_product.release_store import ReleaseStore
 from commercial_product.workspace_launcher import launch, stop
 from commercial_product.workspace_preflight import preflight
 
@@ -120,3 +122,24 @@ class WorkspaceLauncherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unavailable"):
                 launch(workspace, self.release, self.interpreter)
             self.assertFalse((workspace.data_dir / "fixture.txt").exists())
+
+    def test_selected_release_stays_verified_after_workspace_start(self):
+        bundle_file = self.release / "clipengine" / "__main__.py"
+        manifest = self.root / "manifest.json"
+        raw = json.dumps({"version": 1, "files": [{
+            "path": "clipengine/__main__.py",
+            "sha256": hashlib.sha256(bundle_file.read_bytes()).hexdigest(),
+        }]}).encode()
+        manifest.write_bytes(raw)
+        store_root = self.root / "release_store"
+        store_root.mkdir()
+        store = ReleaseStore(store_root)
+        release_id = store.stage(self.release, manifest, hashlib.sha256(raw).hexdigest())
+        selected = store.activate(release_id)
+        with socket.socket() as port_probe:
+            port_probe.bind(("127.0.0.1", 0))
+            workspace, = self.workspaces([port_probe.getsockname()[1]])
+        child = launch(workspace, store.current(), self.interpreter, timeout=8)
+        self.addCleanup(stop, child)
+        self.assertTrue((workspace.data_dir / "fixture.txt").exists())
+        self.assertEqual(store.current(), selected)

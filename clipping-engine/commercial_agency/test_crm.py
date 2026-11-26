@@ -114,6 +114,31 @@ class CRMTests(unittest.TestCase):
             self.assertEqual(crm.get(db, self.prospect)["organization"], "Example Studio")
             self.assertEqual(crm.score_prospect(db, self.prospect, self.fixture_criteria(1))["score"], 5)
 
+    def research_entry(self, name):
+        return {"organization": name, "source_url": "https://example.test",
+                "next_action": "Review synthetic evidence", "criteria": self.fixture_criteria(1)}
+
+    def test_research_import_is_idempotent_and_never_changes_suppression(self):
+        crm.suppress(self.db, self.prospect, "fixture opt-out")
+        batch = [self.research_entry("Example Studio"), self.research_entry("New Fixture")]
+        result = crm.import_research(self.db, batch)
+        self.assertEqual(result["skipped_existing"], ["Example Studio"])
+        self.assertEqual(result["added"][0]["organization"], "New Fixture")
+        self.assertEqual(crm.import_research(self.db, batch)["added"], [])
+        ranked = crm.rank_prospects(self.db)
+        self.assertEqual([item["organization"] for item in ranked], ["New Fixture"])
+        self.assertEqual(ranked[0]["stage"], "researched")
+        self.assertFalse(ranked[0]["outreach_gate"]["ready"])
+        self.assertIsNone(ranked[0]["public_contact_url"])
+        self.assertEqual(crm.export(self.db)[0]["suppression_reference"], "fixture opt-out")
+
+    def test_invalid_research_batch_creates_no_records(self):
+        first, second = self.research_entry("First Fixture"), self.research_entry("Second Fixture")
+        second["criteria"]["editorial_fit"]["points"] = 3
+        with self.assertRaises(ValueError):
+            crm.import_research(self.db, [first, second])
+        self.assertEqual(len(crm.export(self.db)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

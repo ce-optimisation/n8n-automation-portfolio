@@ -165,7 +165,7 @@ def export(db: sqlite3.Connection) -> list[dict]:
     return [_scored_record(row) for row in rows]
 
 
-def score_prospect(db: sqlite3.Connection, prospect_id: int, criteria: dict) -> dict:
+def _score_criteria(criteria: dict) -> tuple[int, dict]:
     if not isinstance(criteria, dict) or set(criteria) != set(SCORE_CRITERIA):
         raise ValueError("provide exactly these criteria: " + ", ".join(SCORE_CRITERIA))
     evidence = {}
@@ -181,7 +181,11 @@ def score_prospect(db: sqlite3.Connection, prospect_id: int, criteria: dict) -> 
         if points and reference is None:
             raise ValueError(f"{name} requires evidence for a positive score")
         evidence[name] = {"points": points, "evidence": reference.strip() if reference is not None else None}
-    total = sum(entry["points"] for entry in evidence.values())
+    return sum(entry["points"] for entry in evidence.values()), evidence
+
+
+def score_prospect(db: sqlite3.Connection, prospect_id: int, criteria: dict) -> dict:
+    total, evidence = _score_criteria(criteria)
     with db:
         cursor = db.execute(
             """INSERT INTO prospect_scores(prospect_id,score,evidence_json)
@@ -192,6 +196,45 @@ def score_prospect(db: sqlite3.Connection, prospect_id: int, criteria: dict) -> 
         if cursor.rowcount != 1:
             raise ValueError("unknown or suppressed prospect")
     return {"id": prospect_id, "score": total, "criteria": evidence}
+
+
+def import_research(db: sqlite3.Connection, prospects: list) -> dict:
+    """Add researched organisations and scores without changing any existing CRM records."""
+    if not isinstance(prospects, list) or not prospects:
+        raise ValueError("research import requires a non-empty array")
+    records = []
+    keys = set()
+    for item in prospects:
+        if not isinstance(item, dict) or set(item) != {"organization", "source_url", "next_action", "criteria"}:
+            raise ValueError("each research entry requires organization, source_url, next_action and criteria")
+        if any(not isinstance(item[name], str) for name in ("organization", "source_url", "next_action")):
+            raise ValueError("organization, source_url and next_action must be strings")
+        organization = " ".join(_required(item["organization"], "organization").split())
+        key = organization.casefold()
+        if key in keys:
+            raise ValueError("research batch contains duplicate organisations")
+        keys.add(key)
+        source_url = _public_url(item["source_url"], "source_url")
+        next_action = _required(item["next_action"], "next_action")
+        total, evidence = _score_criteria(item["criteria"])
+        records.append((organization, key, source_url, next_action, total, evidence))
+
+    added, skipped = [], []
+    with db:
+        for organization, key, source_url, next_action, total, evidence in records:
+            cursor = db.execute(
+                """INSERT INTO prospects(organization,organization_key,source_url,next_action) VALUES(?,?,?,?)
+                   ON CONFLICT(organization_key) DO NOTHING""",
+                (organization, key, source_url, next_action),
+            )
+            if not cursor.rowcount:
+                skipped.append(organization)
+                continue
+            prospect_id = cursor.lastrowid
+            db.execute("INSERT INTO prospect_scores(prospect_id,score,evidence_json) VALUES(?,?,?)",
+                       (prospect_id, total, json.dumps(evidence)))
+            added.append({"id": prospect_id, "organization": organization, "score": total})
+    return {"added": added, "skipped_existing": skipped}
 
 
 def rank_prospects(db: sqlite3.Connection) -> list[dict]:
@@ -221,6 +264,8 @@ def main() -> int:
     score = commands.add_parser("score")
     score.add_argument("id", type=int)
     score.add_argument("criteria_json", type=Path)
+    research = commands.add_parser("import-research")
+    research.add_argument("research_json", type=Path)
     create = commands.add_parser("add")
     create.add_argument("organization")
     create.add_argument("source_url")
@@ -246,6 +291,7 @@ def main() -> int:
         "export": export,
         "rank": rank_prospects,
         "score": lambda db: score_prospect(db, args.id, json.loads(args.criteria_json.read_text(encoding="utf-8-sig"))),
+        "import-research": lambda db: import_research(db, json.loads(args.research_json.read_text(encoding="utf-8-sig"))),
         "add": lambda db: add(db, args.organization, args.source_url, args.next_action),
         "stage": lambda db: stage(db, args.id, args.stage, args.next_action),
         "contact": lambda db: record_contact(db, args.id, args.contact_url, args.basis),

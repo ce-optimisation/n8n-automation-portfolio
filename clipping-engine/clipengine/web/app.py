@@ -1569,6 +1569,9 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
         return _back(request, cid, msg=f"{platform}: upload queued. Progress appears below; it continues in the "
                                        "background and resumes after a restart.")
 
-    from . import workspace
+    from . import campaigns, workspace
+    from commercial_agency import web as agency_web
+    campaigns.register(app, core.db, page)
+    agency_web.register(app, settings, page)
     workspace.register(app, core, page, templates)
     return app
