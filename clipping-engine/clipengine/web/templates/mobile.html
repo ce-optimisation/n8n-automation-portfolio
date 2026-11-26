@@ -41,7 +41,7 @@
 {% if rejected_id %}{% include "_rejection_feedback.html" %}
 {% elif msg %}<div class="flash">{{ msg }}</div>{% endif %}
 {% if c %}
-  <video controls playsinline preload="metadata" poster="/clips/{{ c.id }}/thumb" src="/clips/{{ c.id }}/video"></video>
+  <video controls playsinline preload="none" poster="/clips/{{ c.id }}/thumb" src="/clips/{{ c.id }}/video"></video>
   <h1>{{ c.title or "Untitled clip" }}</h1>
   <p class="muted">{{ brand }}{% if creator %} · {{ creator }}{% endif %} · {{ duration }}s{% if c.score is not none %} · score {{ "%.2f"|format(c.score) }}{% endif %}</p>
   {% set sst = (c.safety_status or "unchecked") %}{% set rst = (c.rights_status or "unreviewed") %}

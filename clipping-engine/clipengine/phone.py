@@ -17,8 +17,7 @@ from pathlib import Path
 
 import httpx
 
-from .publishing.autodeliver import derive_rights
-from .publishing.delivery import clip_brand
+from .portfolio import creator_permitted
 
 log = logging.getLogger("clipengine.phone")
 
@@ -54,12 +53,15 @@ def phone_queue(db) -> list:
     (Afterlive makes about 70% of the clips) cannot bury the others. Brands go in order of how long their oldest clip has
     waited; within a brand the highest-scoring clip comes first, then the oldest."""
     by_brand: dict[str, list] = {}
-    for c in db.query("SELECT * FROM clips WHERE status='ready' AND safety_status='clear' AND video_path IS NOT NULL "
-                      "ORDER BY id"):
-        if not c["video_path"] or not Path(c["video_path"]).is_file():
-            continue
-        brand = clip_brand(db, c)
-        if not brand or not derive_rights(db, c):
+    for c in db.query(
+        "SELECT c.*, COALESCE(NULLIF(cr.brand_key,''), (SELECT b.key FROM brands b "
+        "WHERE b.niche_key=COALESCE(r.niche_key,c.niche_key) LIMIT 1)) AS phone_brand, "
+        "cr.permission_json FROM clips c LEFT JOIN recordings r ON r.id=c.recording_id "
+        "LEFT JOIN creators cr ON cr.id=r.creator_id "
+        "WHERE c.status='ready' AND c.safety_status='clear' AND c.video_path IS NOT NULL ORDER BY c.id"
+    ):
+        brand = c["phone_brand"]
+        if not brand or not c["video_path"] or not Path(c["video_path"]).is_file() or not creator_permitted(c):
             continue
         by_brand.setdefault(brand, []).append(c)
     for clips in by_brand.values():
@@ -73,11 +75,12 @@ def phone_queue(db) -> list:
     return out
 
 
-def queue_counts(db) -> list[tuple[str, int]]:
+def queue_counts(db, queue=None) -> list[tuple[str, int]]:
     """(brand name, waiting clips) for the header of the review page, biggest first."""
     counts: dict[str, int] = {}
-    for c in phone_queue(db):
-        counts[clip_brand(db, c)] = counts.get(clip_brand(db, c), 0) + 1
+    for c in phone_queue(db) if queue is None else queue:
+        brand = c["phone_brand"]
+        counts[brand] = counts.get(brand, 0) + 1
     names = {r["key"]: r["name"] for r in db.query("SELECT key, name FROM brands")}
     return sorted(((names.get(k, k), n) for k, n in counts.items()), key=lambda x: -x[1])
 
