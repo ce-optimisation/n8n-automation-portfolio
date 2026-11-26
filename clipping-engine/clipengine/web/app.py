@@ -238,10 +238,11 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/m", response_class=HTMLResponse)
     def mobile_review(request: Request, skip: str = "", msg: str = "", *, rejected_id: int | None = None):
         skipped = {int(x) for x in skip.split(",") if x.strip().isdigit()}
-        rest = [c for c in phone.phone_queue(core.db) if c["id"] not in skipped]
+        queue = phone.phone_queue(core.db)
+        rest = [c for c in queue if c["id"] not in skipped]
         c = rest[0] if rest else None
         ctx = {"c": c, "left": len(rest), "skip": skip, "msg": msg[:200], "dests": [], "manual": [], "creator": "", "brand": "",
-               "counts": phone.queue_counts(core.db), "rejected_id": rejected_id,
+               "counts": phone.queue_counts(core.db, queue), "rejected_id": rejected_id,
                "rejection_reasons": rejection_reasons}
         if c:
             if not c["review_opened_at"]:
@@ -281,11 +282,18 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
     @app.get("/m/results", response_class=HTMLResponse)
     def mobile_results(request: Request):
         """What happened to recently approved clips, per destination (published, private, failed, waiting)."""
-        rows = []
-        for c in core.db.query("SELECT * FROM clips WHERE status IN ('approved','published') ORDER BY reviewed_at DESC LIMIT 15"):
-            atts = core.db.query("SELECT platform, status, detail FROM publish_attempts WHERE clip_id=? ORDER BY id", (c["id"],))
-            jobs = core.db.query("SELECT status, message FROM jobs WHERE kind='deliver_clip' AND clip_id=?", (c["id"],))
-            rows.append({"c": c, "attempts": atts, "jobs": jobs})
+        clips = core.db.query("SELECT * FROM clips WHERE status IN ('approved','published') "
+                              "ORDER BY reviewed_at DESC LIMIT 15")
+        rows = {clip["id"]: {"c": clip, "attempts": [], "jobs": []} for clip in clips}
+        if rows:
+            placeholders = ",".join("?" for _ in rows)
+            for attempt in core.db.query("SELECT clip_id, platform, status, detail FROM publish_attempts "
+                                         f"WHERE clip_id IN ({placeholders}) ORDER BY id", tuple(rows)):
+                rows[attempt["clip_id"]]["attempts"].append(attempt)
+            for job in core.db.query("SELECT clip_id, status, message FROM jobs WHERE kind='deliver_clip' "
+                                     f"AND clip_id IN ({placeholders})", tuple(rows)):
+                rows[job["clip_id"]]["jobs"].append(job)
+        rows = list(rows.values())
         return templates.TemplateResponse(request, "mobile_results.html", {"rows": rows})
 
     @app.post("/m/{cid}/approve")
