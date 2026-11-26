@@ -67,3 +67,23 @@ def test_agency_and_campaign_routes_use_dashboard_auth(settings):
         for url in ('/campaigns', '/agency', '/agency/export'):
             assert client.get(url).status_code == 200
         assert client.post('/agency/import', data={'research':'[]'}, headers={'Origin':'https://foreign.test'}).status_code == 403
+
+
+def test_customer_workspace_starts_empty_and_supports_own_brand(settings):
+    settings.workspace_id = 'customer-demo'
+    app = create_app(settings, start_worker=False)
+    core = app.state.core
+    assert not core.db.query('SELECT key FROM brands')
+    assert not core.db.query('SELECT id FROM creators')
+    assert not core.db.query('SELECT id FROM social_accounts')
+    assert core.db.get_kv('recording.enabled') == '0'
+    assert core.db.get_kv('delivery.enabled') == '0'
+    niche = core.db.one('SELECT key FROM niches ORDER BY key')['key']
+    with TestClient(app, follow_redirects=False) as client:
+        assert client.post('/creators/brand', data={'key':'studio-demo','name':'Demo Studio','niche':niche}).status_code == 303
+        creator = client.post('/creators', data={'name':'Demo Creator'})
+        assert creator.status_code == 303
+        assert 'Demo Studio' in client.get(creator.headers['location']).text
+        assert client.post(creator.headers['location'].split('?')[0], data={'brand_key':'studio-demo'}).status_code == 303
+        assert core.db.one('SELECT brand_key FROM creators')['brand_key'] == 'studio-demo'
+        assert 'Demo Studio' in client.get('/accounts').text

@@ -53,7 +53,8 @@ class DiscoverySupervisor:
     # ---- lifecycle (state lives in SQLite, so a restart simply carries on) ----------------------
     def start(self) -> None:
         portfolio.seed(self.db, self.settings)
-        events.seed_events(self.db)
+        if not self.settings.workspace_id:
+            events.seed_events(self.db)
 
         def loop():
             while not self._stop.wait(self.interval):

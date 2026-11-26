@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+{% if customer_workspace %}<form method="post" action="/creators/brand" class="card">
+  <label>Brand name <input name="name" required maxlength="120"></label>
+  <label>Brand key <input name="key" required maxlength="48"></label>
+  <label>Niche <select name="niche">{% for niche in niches %}<option value="{{ niche.key }}">{{ niche.name }}</option>{% endfor %}</select></label>
+  <button type="submit">Add brand</button>
+</form>{% endif %}
 <h1>Creators</h1>
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}{% if err %}<p class="err">{{ err }}</p>{% endif %}
 <section class="card muted"><b>Research</b> and <b>shortlisted</b> creators are candidates only: nothing is retrieved for them.

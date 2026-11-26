@@ -17,6 +17,7 @@
 </section>
 <form method="post" class="card stack">
   <h2>Editorial profile and operation</h2>
+  {% if workspace_brands %}<label>Brand <select name="brand_key"><option value="">Unassigned</option>{% for brand in workspace_brands %}<option value="{{ brand.key }}" {% if c.brand_key == brand.key %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>{% endif %}
   <div class="row">
     <label>Status <select name="status">{% for s in ['research','shortlisted','needs_authorisation','active','paused','blocked'] %}<option {% if c.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
     <label>Queue priority <input name="priority" type="number" value="{{ c.priority }}" style="width:5em"></label>

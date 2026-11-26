@@ -68,3 +68,14 @@ The inventory reads distribution metadata without importing target packages. It 
 `runtime-evidence-20261126.json` records a read-only snapshot of the existing Windows Python environment and the two FFmpeg tools located on PATH. It contains 62 distributions under CPython 3.10.4, with 36 licence expressions and 26 legacy indicators. This is evidence about the inspected machine. Build a fresh inventory for the exact customer artifacts, including wheel and binary hashes, licence texts, notices, source obligations, fonts and models. A signed release, authoritative product bill of materials and redistribution clearance remain open.
 
 Three synthetic inventory tests passed. The combined commercial-product suite passed 19 tests on Windows. No binary was executed to generate the inventory, and no production files were modified.
+
+## Portable presentation preferences
+
+Export a verified JSON bundle from a workspace database, then restore it to a new workspace directory. Keep the printed SHA-256 somewhere you trust and pass it separately on restore.
+
+```powershell
+python commercial_product/workspace_preferences.py export C:/customer-a/data/clipengine.sqlite3 C:/transfer/preferences.json
+python commercial_product/workspace_preferences.py restore C:/transfer/preferences.json C:/customer-b --sha256 <trusted-sha256>
+```
+
+The bundle contains a fixed selection of global caption and title preferences. It excludes credentials, free-text values, account records, recording history, media, per-brand settings, and the source environment file. The restored database starts with recording and delivery switched off. It contains a preferences table for the engine to initialize on first launch, and the new environment file is a blank configuration template. Configure the new workspace and its connections separately. Use the operator's existing backup process for full operational recovery.

@@ -88,14 +88,18 @@ class App:
         self.queue.recording_active = self.monitor.recording_active
         self.queue.defer_heavy_while_recording = settings.defer_heavy_while_recording
         editorial.seed_presets(self.db)
-        try:
-            portfolio.seed(self.db, settings)
-            events.seed_events(self.db)
-            roster_import.reconcile(settings, self.db)
-        except Exception:  # noqa: BLE001 - the portfolio must never stop the engine
-            log.exception("portfolio could not be seeded")
+        if settings.workspace_id:
+            for key in (recording_switch.KEY, recording_switch.DELIVERY_KEY):
+                self.db.execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?, '0')", (key,))
+        else:
+            try:
+                portfolio.seed(self.db, settings)
+                events.seed_events(self.db)
+                roster_import.reconcile(settings, self.db)
+            except Exception:  # noqa: BLE001 - the portfolio must never stop the engine
+                log.exception("portfolio could not be seeded")
         research_file = Path(__file__).resolve().parents[2] / "research" / "research_dataset.json"
-        if research_file.is_file() and self.db.get_kv("research_loaded") != str(research_file.stat().st_mtime):
+        if not settings.workspace_id and research_file.is_file() and self.db.get_kv("research_loaded") != str(research_file.stat().st_mtime):
             try:
                 from .. import research
                 research.load_dataset(self.db, research_file)

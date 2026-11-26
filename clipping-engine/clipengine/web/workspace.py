@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,7 +118,22 @@ def register(app, core, page, templates) -> None:
         srcs = {r["creator_id"]: r for r in db.query("SELECT * FROM sources WHERE creator_id IS NOT NULL")}
         return page(request, "creators.html", rows=rows, srcs=srcs, msg=msg, err=err,
                     f={"status": status, "niche": niche, "platform": platform, "sort": sort},
-                    niches=db.query("SELECT key, name FROM niches ORDER BY name"), platforms=list(platforms.ADAPTERS))
+                    niches=db.query("SELECT key, name FROM niches ORDER BY name"), platforms=list(platforms.ADAPTERS),
+                    customer_workspace=bool(settings.workspace_id))
+
+    @app.post("/creators/brand")
+    def create_workspace_brand(name: str = Form(...), key: str = Form(...), niche: str = Form(...)):
+        if not settings.workspace_id:
+            raise HTTPException(404)
+        name, key = name.strip(), key.strip()
+        if not name or len(name) > 120 or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", key):
+            return _go("/creators", err="Enter a brand name and a lowercase brand key.")
+        if not db.one("SELECT key FROM niches WHERE key=?", (niche,)):
+            return _go("/creators", err="Choose an existing niche.")
+        now = time.time()
+        changed = db.execute("INSERT INTO brands(key,name,niche_key,created_at,updated_at) VALUES (?,?,?,?,?) "
+                             "ON CONFLICT(key) DO NOTHING", (key, name, niche, now, now))
+        return _go("/creators", **({"msg": "Brand added."} if changed else {"err": "That brand key already exists."}))
 
     @app.post("/creators")
     def creator_add(name: str = Form(...), url: str = Form(""), niches: str = Form(""), status: str = Form("research"),
@@ -147,6 +163,7 @@ def register(app, core, page, templates) -> None:
                     stats=json.loads(c["stats_json"] or "{}"), cites=json.loads(c["sources_json"] or "[]"),
                     niches=db.query("SELECT key, name FROM niches ORDER BY name"),
                     cniches=json.loads(c["niches_json"] or "[]"), content_types=list(editorial.CONTENT_TYPES),
+                    workspace_brands=db.query("SELECT key,name FROM brands ORDER BY name") if settings.workspace_id else [],
                     sources=db.query("SELECT * FROM sources WHERE creator_id=?", (cid,)),
                     all_sources=db.query("SELECT id, name, url FROM sources WHERE creator_id IS NULL"),
                     caps=platforms.capability_matrix(settings).get(c["platform"] or "", {}))
@@ -178,8 +195,13 @@ def register(app, core, page, templates) -> None:
                                                "before marking a creator active. Research does not authorise retrieval.")
         if perm.get("expires") and perm["expires"] < time.strftime("%Y-%m-%d") and status == "active":
             status = "needs_authorisation"
+        brand = c["brand_key"]
+        if settings.workspace_id and "brand_key" in form:
+            brand = str(form["brand_key"]) or None
+            if brand and not db.one("SELECT key FROM brands WHERE key=?", (brand,)):
+                return _go(f"/creators/{cid}", err="Choose a brand registered in this workspace.")
         from dataclasses import asdict
-        db.update("creators", cid, status=status, priority=int(form.get("priority") or c["priority"]),
+        db.update("creators", cid, brand_key=brand, status=status, priority=int(form.get("priority") or c["priority"]),
                   niches_json=json.dumps([n for n in form.getlist("niches")]),
                   profile_json=json.dumps(asdict(prof)), permission_json=json.dumps(perm),
                   schedule=str(form.get("schedule") or "")[:300], attribution=str(form.get("attribution") or "")[:300],
@@ -254,7 +276,7 @@ def register(app, core, page, templates) -> None:
         yt = {r["id"]: core.packages.youtube_oauth(r["id"]).connected() for r in rows if r["platform"] == "youtube"}
         return page(request, "accounts.html", rows=rows, yt=yt, msg=msg, err=err,
                     niches=db.query("SELECT key, name FROM niches ORDER BY name"),
-                    brand_names=[(k, b["name"]) for k, b in portfolio.BRANDS.items()],
+                    brand_names=[(r["key"], r["name"]) for r in db.query("SELECT key,name FROM brands ORDER BY name")],
                     google_ready=bool(settings.google_client_id and settings.google_client_secret))
 
     @app.post("/accounts")

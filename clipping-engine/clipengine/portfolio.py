@@ -156,6 +156,8 @@ def seed(db, settings=None) -> dict:
     """Idempotent. Returns counts. Safe to run on every start."""
     t = _now()
     out = {"brands": 0, "creators_added": 0, "creators_adopted": 0, "sources_added": 0, "sources_updated": 0}
+    if getattr(settings, "workspace_id", None):
+        return out
     for key, b in BRANDS.items():
         row = db.one("SELECT * FROM brands WHERE key=?", (key,))
         if not row:
