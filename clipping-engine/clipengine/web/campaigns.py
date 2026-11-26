@@ -1,6 +1,7 @@
 """Campaign brief intake and version history inside the editorial workspace."""
 import hashlib
 import json
+import re
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from commercial_intelligence.assess import assess
 from commercial_intelligence.brief_engine import analyse
+from commercial_intelligence.profitability import report as profitability_report, validate_cost
 from .. import campaign_render
 from ..jobs import PermanentError
 from ..publishing.base import RIGHTS_OK
@@ -87,8 +89,13 @@ def register(app, core, page):
                               'LEFT JOIN clips c ON c.id=s.clip_id LEFT JOIN recordings rec ON rec.id=c.recording_id '
                               'LEFT JOIN creators cr ON cr.id=rec.creator_id LEFT JOIN brands b ON b.key=cr.brand_key '
                               'GROUP BY r.currency,s.clip_id,cr.name,b.name ORDER BY r.currency,net_minor DESC LIMIT 50')
+        conn = db.connect()
+        try:
+            profit = profitability_report(conn)
+        finally:
+            conn.close()
         return page(request, 'campaigns.html', rows=[(r, json.loads(r['interpretation'])) for r in rows],
-                    totals=totals, outcomes=outcomes, attributed=attributed)
+                    totals=totals, outcomes=outcomes, attributed=attributed, profit=profit)
 
     @app.get('/campaigns/{brief_id}')
     def campaign(request: Request, brief_id: int):
@@ -171,6 +178,29 @@ def register(app, core, page):
         result['selection_rules'] = rules
         result['publication_authorized'] = False
         db.execute('UPDATE campaign_briefs SET interpretation=? WHERE id=?', (json.dumps(result), brief_id))
+        return RedirectResponse(f'/campaigns/{brief_id}', status_code=303)
+
+    @app.post('/campaigns/{brief_id}/cost')
+    def record_cost(brief_id: int, kind: str = Form(...), note: str = Form(...), currency: str = Form(''),
+                    amount: str = Form(''), minutes: str = Form(''), clip_id: str = Form('')):
+        """Record an actual expense or time spent. Never mixes with receipts or estimates."""
+        if db.one('SELECT id FROM campaign_briefs WHERE id=?', (brief_id,)) is None:
+            raise HTTPException(404)
+        try:
+            amount_minor = None
+            if kind == 'expense':
+                if not re.fullmatch(r'[0-9]{1,9}(\.[0-9]{1,2})?', amount.strip()):
+                    raise ValueError('Enter the amount like 12.50.')
+                major, _, minor = amount.strip().partition('.')
+                amount_minor = int(major) * 100 + int((minor or '0').ljust(2, '0'))
+            mins = float(minutes) if kind != 'expense' and minutes.strip() else None
+            cur = (currency.strip().upper() or None) if kind == 'expense' else None
+            validate_cost(kind, currency=cur, amount_minor=amount_minor, minutes=mins, note=note)
+            clip = int(clip_id) if clip_id.strip() else None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        db.execute('INSERT INTO campaign_costs (brief_id,clip_id,kind,currency,amount_minor,minutes,note,recorded_at) '
+                   'VALUES (?,?,?,?,?,?,?,?)', (brief_id, clip, kind, cur, amount_minor, mins, note.strip(), time.time()))
         return RedirectResponse(f'/campaigns/{brief_id}', status_code=303)
 
     @app.post('/campaigns/{brief_id}/assessment')

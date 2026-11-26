@@ -60,7 +60,8 @@ def test_commercial_migration_preserves_existing_recording_and_backup(settings):
     with closing(sqlite3.connect(settings.db_path)) as old, old:
         old.executescript("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version','8'); CREATE TABLE legacy_fixture(note TEXT); INSERT INTO legacy_fixture VALUES ('retained');")
     db = Database(settings.db_path)
-    assert db.get_kv('schema_version') == '9'
+    from clipengine.db import SCHEMA_VERSION
+    assert db.get_kv('schema_version') == str(SCHEMA_VERSION)
     assert db.one('SELECT note FROM legacy_fixture')['note'] == 'retained'
     assert not db.query('SELECT id FROM campaign_briefs')
     backups = list((settings.data_dir / 'backups').glob('*.sqlite*'))
@@ -198,3 +199,24 @@ def test_state_changing_requests_refuse_cross_site_fetch_metadata(settings):
         assert client.post('/campaigns', data=data, headers={'Sec-Fetch-Site': 'cross-site'}).status_code == 403
         assert client.post('/campaigns', data=data, headers={'Origin': 'https://evil.example'}).status_code == 403
         assert client.post('/campaigns', data=data, headers={'Sec-Fetch-Site': 'same-origin'}).status_code == 303
+
+
+def test_costs_are_recorded_separately_and_shown_with_profitability(settings):
+    app = create_app(settings, start_worker=False)
+    db = app.state.core.db
+    brief = ('Campaign: Costed\nDuration: 10-20 seconds\nSource window: https://example.test/c | 00:00:00 | end of source\n'
+             'Destination: tiktok:fixture\nSubmission deadline: 2099-01-01T00:00:00Z')
+    with TestClient(app, follow_redirects=False) as client:
+        loc = client.post('/campaigns', data={'source_ref': 'Costed', 'brief': brief}).headers['location']
+        assert client.post(loc + '/cost', data={'kind': 'expense', 'currency': 'gbp', 'amount': '4.50',
+                                                'note': 'Caption font licence'}).status_code == 303
+        assert client.post(loc + '/cost', data={'kind': 'owner_minutes', 'minutes': '15', 'note': 'Review'}).status_code == 303
+        assert client.post(loc + '/cost', data={'kind': 'expense', 'currency': 'GBP', 'amount': 'lots',
+                                                'note': 'x'}).status_code == 422
+        assert client.post(loc + '/cost', data={'kind': 'owner_minutes', 'minutes': '5', 'currency': 'GBP',
+                                                'note': 'time has no currency'}).status_code == 303
+        rows = db.query('SELECT kind, currency, amount_minor, minutes FROM campaign_costs ORDER BY id')
+        assert [tuple(r) for r in rows] == [('expense', 'GBP', 450, None), ('owner_minutes', None, None, 15.0),
+                                            ('owner_minutes', None, None, 5.0)]
+        dash = client.get('/campaigns').text
+        assert 'Profitability (actual receipts and recorded costs only)' in dash and '450' in dash

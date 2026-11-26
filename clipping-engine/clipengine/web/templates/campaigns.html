@@ -53,7 +53,10 @@
 <ul>{% for scenario in assessment.profitability_estimate.scenarios %}<li>{{ scenario.approved_views }} approved views · estimated net contribution {{ scenario.estimated_contribution_minor }}</li>{% endfor %}</ul>
 {% else %}<p>{{ assessment.profitability_estimate.reason }}</p>{% endif %}
 {% endif %}
-<form method="post" action="/campaigns/{{ brief.id }}/assessment" class="card">
+<form method="post" action="/campaigns/{{ brief.id }}/cost" class="card"><h3>Record a cost or time</h3>
+<select name="kind"><option value="owner_minutes">Owner minutes</option><option value="processing_minutes">Processing minutes</option><option value="expense">Expense</option></select>
+<input name="minutes" placeholder="Minutes"> <input name="currency" placeholder="GBP" maxlength="3"> <input name="amount" placeholder="12.50"> <input name="clip_id" placeholder="Clip # (optional)"> <input name="note" placeholder="What was it?" required>
+<button type="submit">Record</button></form><form method="post" action="/campaigns/{{ brief.id }}/assessment" class="card">
   <label>Structured assessment JSON <textarea name="details" rows="5" required></textarea></label>
   <button type="submit">Record assessment</button>
 </form>{% endif %}
@@ -81,7 +84,10 @@
 <h2>Recorded campaign receipts</h2>
 <ul>{% for total in totals %}<li>{{ total.currency }} {{ total.net_minor }} minor units net</li>{% else %}<li>No payments recorded.</li>{% endfor %}</ul>
 {% if outcomes %}<p>Submission outcomes: {% for outcome in outcomes %}{{ outcome.total }} {{ outcome.status }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
-{% if attributed %}<table class="jobs"><thead><tr><th>Clip</th><th>Creator</th><th>Brand</th><th>Net received</th></tr></thead>
+{% if profit and profit.campaigns %}<h3>Profitability (actual receipts and recorded costs only)</h3>
+<table class="jobs"><thead><tr><th>Brief</th><th>Currency</th><th>Net received</th><th>Expenses</th><th>Cash profit</th><th>Approved, unpaid</th><th>Owner minutes</th></tr></thead><tbody>
+{% for bid, c in profit.campaigns.items() %}{% for cur, m in c.by_currency.items() %}<tr><td><a href="/campaigns/{{ bid }}">#{{ bid }}</a></td><td>{{ cur }}</td><td>{{ m.net_receipts_minor }}</td><td>{{ m.expenses_minor }}</td><td>{{ m.cash_profit_minor }}</td><td>{{ c.approved_pending_payment }}</td><td>{{ c.owner_minutes }}</td></tr>{% else %}<tr><td><a href="/campaigns/{{ bid }}">#{{ bid }}</a></td><td colspan="4">No money recorded</td><td>{{ c.approved_pending_payment }}</td><td>{{ c.owner_minutes }}</td></tr>{% endfor %}{% endfor %}
+</tbody></table><p><small>Amounts in minor units. Approved but unpaid submissions are counted, never valued.</small></p>{% endif %}{% if attributed %}<table class="jobs"><thead><tr><th>Clip</th><th>Creator</th><th>Brand</th><th>Net received</th></tr></thead>
 <tbody>{% for row in attributed %}<tr><td>#{{ row.clip_id }}</td><td>{{ row.creator }}</td><td>{{ row.brand }}</td><td>{{ row.currency }} {{ row.net_minor }} minor units</td></tr>{% endfor %}</tbody></table>{% endif %}
 <form method="post" action="/campaigns" class="card">
   <label>Source reference <input name="source_ref" required maxlength="500"></label>

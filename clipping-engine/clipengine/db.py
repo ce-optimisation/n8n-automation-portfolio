@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -411,8 +411,20 @@ CREATE TABLE IF NOT EXISTS campaign_receipts (
     recorded_at REAL NOT NULL,
     UNIQUE(currency,reference)
 );
-CREATE TABLE IF NOT EXISTS commercial_entries (
+CREATE TABLE IF NOT EXISTS campaign_costs (
     id INTEGER PRIMARY KEY,
+    brief_id INTEGER REFERENCES campaign_briefs(id),
+    clip_id INTEGER,
+    kind TEXT NOT NULL CHECK (kind IN ('expense','owner_minutes','processing_minutes')),
+    currency TEXT CHECK (currency IS NULL OR length(currency)=3),
+    amount_minor INTEGER CHECK (amount_minor IS NULL OR amount_minor>=0),
+    minutes REAL CHECK (minutes IS NULL OR minutes>=0),
+    note TEXT NOT NULL,
+    recorded_at REAL NOT NULL,
+    CHECK ((kind='expense' AND currency IS NOT NULL AND amount_minor IS NOT NULL AND minutes IS NULL)
+        OR (kind<>'expense' AND minutes IS NOT NULL AND amount_minor IS NULL))
+);
+CREATE TABLE IF NOT EXISTS commercial_entries (    id INTEGER PRIMARY KEY,
     model TEXT NOT NULL DEFAULT 'B',        -- A = creator-authorised service, B = owner-operated channel
     kind TEXT NOT NULL,                     -- revenue | cost | affiliate_click | conversion | sponsor | review_minutes
     amount REAL NOT NULL DEFAULT 0,
