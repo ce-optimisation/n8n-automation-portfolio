@@ -5,7 +5,7 @@
 <p><a href="/campaigns">All campaign briefs</a></p>
 <h2>{{ result.get('campaign') or brief.source_ref }}</h2>
 <p>{{ 'Needs review' if result.holds else 'Rules extracted for review' }}</p>
-{% if result.holds %}<ul>{% for hold in result.holds %}<li>{{ hold.get('field', 'Brief') }} — {{ hold.reason }}</li>{% endfor %}</ul>{% endif %}
+{% if result.holds %}<ul>{% for hold in result.holds %}<li>{{ hold.get('field', 'Brief') }} — {{ hold.reason }}{% if hold.source_text %} <small>Line {{ hold.line }} · {{ hold.source_text }}</small>{% endif %}</li>{% endfor %}</ul>{% endif %}
 <p>Source reference <strong>{{ brief.source_ref }}</strong></p>
 <p>Version <code>{{ brief.source_sha256 }}</code></p>
 {% if result.selection_rules %}

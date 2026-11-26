@@ -52,6 +52,15 @@ class InterpretationTests(unittest.TestCase):
         missing = parse(SOURCE.replace("00:00:50.000", ""))
         self.assertIsNone(missing["selection_rules"])
 
+    def test_qualitative_terms_kept_as_evidence_without_approving_selection(self):
+        result = parse(SOURCE.replace("Duration:", "duration:") +
+                       "AI use: No generated voices\nAdvertising disclosure: Include #ad\n")
+        self.assertIsNone(result["selection_rules"])
+        self.assertFalse(result["publication_authorized"])
+        self.assertEqual([row["field"] for row in result["holds"]], ["AI use", "Advertising disclosure"])
+        self.assertEqual(result["holds"][0]["source_text"], "AI use: No generated voices")
+        self.assertIn("#line=6;", result["holds"][0]["evidence"])
+
     def test_extraction_can_feed_selector_with_independent_verified_checks(self):
         value = campaign()
         extraction = parse()

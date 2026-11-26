@@ -14,6 +14,13 @@ from .select_candidates import _utc
 
 _FIELDS = ("Campaign", "Duration", "Source window", "Destination", "Submission deadline")
 _REPEATABLE = {"Source window", "Destination"}
+_MANUAL_RULES = (
+    "Eligible creator", "Eligible account", "Country eligibility", "Required topics", "Prohibited topics",
+    "Visual assets", "Captions", "Editing restrictions", "AI use", "Audio and music", "Description",
+    "Hashtags", "Mentions", "Advertising disclosure", "Payout terms", "Campaign deadline",
+    "Ownership", "Exclusivity",
+)
+_LABELS = {field.casefold(): field for field in (*_FIELDS, *_MANUAL_RULES)}
 _CLOCK = re.compile(r"([0-9]+):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]{1,3}))?")
 _DURATION = re.compile(r"([0-9]+)\s*(?:-|–|to)\s*([0-9]+)\s+seconds?", re.IGNORECASE)
 _DESTINATION = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_@.-]+")
@@ -71,11 +78,16 @@ def interpret(raw: bytes, *, source_ref: str) -> dict:
             continue
         label, sep, value = original.strip().partition(":")
         record = {"line": line_no, "source_text": original}
-        if not sep or label.strip() not in fields:
+        canonical = _LABELS.get(label.strip().casefold())
+        if not sep or canonical is None:
             holds.append({**record, "reason": "Unrecognized brief clause. Review it before using these rules."})
             continue
-        label = label.strip()
+        label = canonical
         evidence = f"{source_ref}#line={line_no};sha256={document_hash}"
+        if label in _MANUAL_RULES:
+            holds.append({**record, "field": label, "evidence": evidence,
+                          "reason": "Confirm this requirement against the original campaign terms."})
+            continue
         try:
             parsed = _parse_field(label, value, evidence)
         except ValueError as exc:
