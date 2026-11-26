@@ -16,8 +16,30 @@ Create a dedicated directory for each customer. Each directory needs an existing
 
 From the project root, run `python -m commercial_product.workspace_preflight workspaces.json`. Exit code 0 prints the non-secret environment overrides for each instance. Exit code 1 reports invalid configuration. Validation requires unique identifiers, non-overlapping canonical roots, distinct loopback ports, paths contained under each workspace root and physically distinct configuration files. The output fixes the host at `127.0.0.1`.
 
-A future launcher must apply these overrides to a clean child environment and use the staged engine that supports `CLIPENGINE_WORKSPACE_ID`. The current preflight does not reserve ports, start processes, audit media-tree links, or enforce operating-system access control. Workspaces running under one OS account still share that account's permissions.
+## Opt-in foreground launcher
+
+After preflight, a controlled local developer test can start one prepared workspace:
+
+```text
+python -m commercial_product.workspace_launcher workspaces.json customer-one --release-root C:/TestRelease --python C:/TestPython/python.exe
+```
+
+Run the command in a separate terminal for each workspace. If required, point `--tools-dir` at the verified local FFmpeg binaries. Use a trusted test release with `CLIPENGINE_WORKSPACE_ID` support. Supply its dependencies separately. The launcher passes the workspace overrides and a small allowlist of system variables, with an explicit tool path. Ordinary inherited API keys, provider secrets and Python import overrides are omitted. It checks that the intended loopback port is free and waits for the worker health endpoint there. Ctrl+C stops the immediate launched process. The synthetic fixture has no descendants.
+
+The launcher has been exercised with a synthetic engine only. A port check cannot reserve the address across process startup. The launcher does not manage Windows services, independently prove the responding worker's identity, control an entire Windows process tree, or enforce a security boundary between workspaces under the same OS account. Before customer release, verify real dependency packaging, process-tree shutdown, bind failures, workspace access controls and the full provider-free installed workflow.
 
 ## Verification
 
 Ran `python -m unittest -v commercial_product.test_workspace_preflight` on Windows against synthetic temporary roots. Five tests passed, covering two separate configurations, distinct namespace and port output, overlapping roots, shared configuration hard links, invalid settings, and an absent configuration. No existing customer or production data was modified.
+
+The combined preflight and launcher run passed seven tests. Two synthetic workers ran concurrently. Each responded on its own loopback port with its own process ID, config marker and data marker. The launcher rejected an occupied port before starting a process, omitted synthetic inherited provider secrets and stopped both fixture processes. No real engine, provider connection or installer was used.
+
+## Release manifest verification
+
+`python -m commercial_product.release_manifest RELEASE_DIRECTORY MANIFEST_FILE --manifest-sha256 TRUSTED_SHA256`
+
+Give the verifier an already unpacked directory and a version 1 JSON manifest stored outside that directory. The manifest format is `{"version":1,"files":[{"path":"clipengine/version.py","sha256":"<64 lowercase hexadecimal characters>"}]}`. Get the SHA-256 of the manifest itself through a separately authenticated release channel. A hash published alongside an untrusted bundle does not establish authenticity.
+
+The verifier checks that the manifest digest matches, that every ordinary file under the release root is listed exactly once, and that all file digests match. It rejects traversal, absolute and Windows alternate-stream paths, case aliases, hard links, symbolic links and Windows reparse points. Keep the checked tree under trusted write control throughout verification and any later use. The verifier does not install, unpack, sign, publish or bind the release to the launcher. Signed distribution, safe extraction, package provenance and a real update/rollback test are separate release gates.
+
+Five synthetic Windows manifest tests passed, covering a valid exact bundle, file and manifest tampering, missing and undeclared files, path escape and alias inputs, and an external hard link.

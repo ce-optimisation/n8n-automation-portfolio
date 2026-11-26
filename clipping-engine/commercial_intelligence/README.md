@@ -22,6 +22,22 @@ Fixed CPM accepts optional minimum_payout_minor, maximum_payout_minor and remain
 
 The output always distinguishes estimated contribution from actual earnings, which remain null, and publication authorization, which remains false. Invalid input produces a JSON error on stderr with exit status 2.
 
+## Traceable rule extraction
+
+    python -m commercial_intelligence.interpret_brief campaign.txt --source-ref campaign:example-snapshot
+
+The local UTF-8 text importer supports these exact clause labels:
+
+    Campaign: Example
+    Duration: 5 to 20 seconds
+    Source window: recording-52 | 00:00:10.000 | 00:00:50.000
+    Destination: Instagram:brand
+    Submission deadline: 2026-11-30T12:00:00Z
+
+Repeat source windows and destinations if the brief explicitly allows them. Use `end of source` only when its permission is explicit. The importer preserves the submitted wording, original line numbers and source-byte hash. It holds the entire rule set if anything is missing, ambiguous, conflicting, or unsupported. Unknown text remains inert evidence. The importer never opens a source reference or executes any clause.
+
+After reviewing the extraction against the official source, the resulting `selection_rules` object can feed the selector alongside separately verified campaign checks, rights evidence, and economics. This constrained parser does not interpret arbitrary prose, fill absent rules, or treat any text as licence or publication approval.
+
 ## Candidate selection and rights preflight
 
     python -m commercial_intelligence.select_candidates path/to/brief.json path/to/clips.json

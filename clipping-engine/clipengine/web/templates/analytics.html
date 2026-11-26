@@ -41,8 +41,10 @@
 {{ report.error or '' }}</td></tr>
 {% endfor %}</tbody></table>
 {% endif %}
-<section class="card"><p>Realised net (revenue + sponsor − cost): <b>{{ '%.2f'|format(realised) }}</b> · owner review time {{ '%.1f'|format(review_h) }} h
-· realised per review hour: <b>{{ '%.2f'|format(per_hour) if per_hour is not none else 'not enough data' }}</b> · failed jobs (30 days): {{ failures }}</p>
+<section class="card"><p>Owner review time {{ '%.1f'|format(review_h) }} h · failed jobs (30 days): {{ failures }}</p>
+<p>Realised net (revenue + sponsor − cost)</p>
+{% if realised %}<ul>{% for entry in realised %}<li><b>{{ entry.currency }} {{ '%.2f'|format(entry.net) }}</b>{% if review_h > 0.05 %} · {{ entry.currency }} {{ '%.2f'|format(entry.net / review_h) }} per review hour{% endif %}</li>{% endfor %}</ul>
+{% else %}<p>No realised money recorded.</p>{% endif %}
 <p class="muted"><small>Only figures you enter or import from the platforms' own analytics are shown. Estimates are kept separate from realised money. Nothing here is inferred.</small></p></section>
 <section class="card"><h2>By niche</h2><table class="jobs"><thead><tr><th>Niche</th><th>Clips</th><th>Approved</th><th>Published</th><th>Review min</th><th>Views</th><th>Followers +</th><th>Incidents</th></tr></thead><tbody>
 {% for r in by_niche %}{% set v = views.get(r.niche) %}<tr><td>{{ r.niche }}</td><td>{{ r.clips }}</td><td>{{ r.approved }}</td><td>{{ r.published }}</td><td>{{ r.review_min }}</td>

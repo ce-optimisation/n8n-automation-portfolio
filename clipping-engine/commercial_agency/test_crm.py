@@ -74,6 +74,46 @@ class CRMTests(unittest.TestCase):
         result = subprocess.run([*command, "export"], capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(result.stdout)[0]["organization"], "CLI Fixture")
 
+    @staticmethod
+    def fixture_criteria(points):
+        return {name: {"points": points, "evidence": f"fixture:{name}"}
+                for name in crm.SCORE_CRITERIA}
+
+    def test_ranking_uses_evidence_without_authorizing_outreach(self):
+        another = crm.add(self.db, "Another Fixture", "https://example.test/about")["id"]
+        first = self.fixture_criteria(1)
+        first["editing_gap"] = {"points": 0, "evidence": None}
+        self.assertEqual(crm.score_prospect(self.db, self.prospect, first)["score"], 4)
+        crm.score_prospect(self.db, another, self.fixture_criteria(2))
+        with closing(crm.connect(self.path)) as db:
+            ranked = crm.rank_prospects(db)
+            self.assertEqual([p["id"] for p in ranked], [another, self.prospect])
+            self.assertEqual(ranked[1]["criteria"], first)
+            self.assertFalse(any(p["outreach_gate"]["ready"] for p in ranked))
+            self.assertEqual(crm.export(db)[0]["score"], 4)
+        crm.suppress(self.db, another, "fixture opt-out")
+        self.assertEqual([p["id"] for p in crm.rank_prospects(self.db)], [self.prospect])
+        with self.assertRaisesRegex(ValueError, "suppressed"):
+            crm.score_prospect(self.db, another, self.fixture_criteria(2))
+        self.assertEqual(len(crm.export(self.db)), 2)
+
+    def test_positive_points_need_evidence_and_all_criteria(self):
+        invalid = self.fixture_criteria(1)
+        invalid["editing_gap"] = {"points": 2, "evidence": None}
+        with self.assertRaisesRegex(ValueError, "requires evidence"):
+            crm.score_prospect(self.db, self.prospect, invalid)
+        del invalid["editing_gap"]
+        with self.assertRaisesRegex(ValueError, "exactly"):
+            crm.score_prospect(self.db, self.prospect, invalid)
+        self.assertEqual(crm.rank_prospects(self.db), [])
+
+    def test_repeat_init_migrates_existing_database_without_losing_data(self):
+        with self.db:
+            self.db.execute("DROP TABLE prospect_scores")
+        with closing(crm.connect(self.path, initialize=True)) as db:
+            self.assertEqual(crm.get(db, self.prospect)["organization"], "Example Studio")
+            self.assertEqual(crm.score_prospect(db, self.prospect, self.fixture_criteria(1))["score"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

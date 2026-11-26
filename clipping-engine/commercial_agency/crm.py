@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 STAGES = ("researched", "qualified", "contacted", "discovery", "proposal", "won", "closed")
 APPLICATION_ID = 0x4147434D
+SCORE_CRITERIA = ("repeatable_source", "offer_fit", "editorial_fit", "corporate_route", "editing_gap")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS prospects (
@@ -27,6 +28,11 @@ CREATE TABLE IF NOT EXISTS prospects (
     suppression_reference TEXT,
     CHECK (suppression_reference IS NULL OR approval_reference IS NULL)
 );
+CREATE TABLE IF NOT EXISTS prospect_scores (
+    prospect_id INTEGER PRIMARY KEY REFERENCES prospects(id),
+    score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 10),
+    evidence_json TEXT NOT NULL
+);
 """
 
 
@@ -36,6 +42,7 @@ def connect(path: Path, *, initialize: bool = False) -> sqlite3.Connection:
     connection = sqlite3.connect(f"{path.as_uri()}?mode={'rwc' if initialize else 'rw'}", uri=True)
     connection.row_factory = sqlite3.Row
     try:
+        connection.execute("PRAGMA foreign_keys = ON")
         application_id = connection.execute("PRAGMA application_id").fetchone()[0]
         if initialize and application_id == 0:
             if connection.execute("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone():
@@ -43,6 +50,8 @@ def connect(path: Path, *, initialize: bool = False) -> sqlite3.Connection:
             connection.executescript(f"BEGIN IMMEDIATE;{SCHEMA}PRAGMA application_id = {APPLICATION_ID};COMMIT;")
         elif application_id != APPLICATION_ID:
             raise ValueError("path does not point to an agency CRM database")
+        elif initialize:
+            connection.executescript(f"BEGIN IMMEDIATE;{SCHEMA}COMMIT;")
     except Exception:
         connection.close()
         raise
@@ -149,7 +158,57 @@ def suppress(db: sqlite3.Connection, prospect_id: int, reference: str) -> dict:
 
 
 def export(db: sqlite3.Connection) -> list[dict]:
-    return [_record(row) for row in db.execute("SELECT * FROM prospects ORDER BY id")]
+    rows = db.execute(
+        """SELECT p.*,s.score,s.evidence_json FROM prospects p LEFT JOIN prospect_scores s ON s.prospect_id=p.id
+           ORDER BY p.id"""
+    )
+    return [_scored_record(row) for row in rows]
+
+
+def score_prospect(db: sqlite3.Connection, prospect_id: int, criteria: dict) -> dict:
+    if not isinstance(criteria, dict) or set(criteria) != set(SCORE_CRITERIA):
+        raise ValueError("provide exactly these criteria: " + ", ".join(SCORE_CRITERIA))
+    evidence = {}
+    for name in SCORE_CRITERIA:
+        entry = criteria[name]
+        if not isinstance(entry, dict) or set(entry) != {"points", "evidence"}:
+            raise ValueError(f"{name} requires points and evidence")
+        points, reference = entry["points"], entry["evidence"]
+        if type(points) is not int or not 0 <= points <= 2:
+            raise ValueError(f"{name} points must be an integer from 0 to 2")
+        if reference is not None and (not isinstance(reference, str) or not reference.strip()):
+            raise ValueError(f"{name} evidence must be a non-empty reference or null")
+        if points and reference is None:
+            raise ValueError(f"{name} requires evidence for a positive score")
+        evidence[name] = {"points": points, "evidence": reference.strip() if reference is not None else None}
+    total = sum(entry["points"] for entry in evidence.values())
+    with db:
+        cursor = db.execute(
+            """INSERT INTO prospect_scores(prospect_id,score,evidence_json)
+               SELECT id,?,? FROM prospects WHERE id=? AND suppression_reference IS NULL
+               ON CONFLICT(prospect_id) DO UPDATE SET score=excluded.score,evidence_json=excluded.evidence_json""",
+            (total, json.dumps(evidence), prospect_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("unknown or suppressed prospect")
+    return {"id": prospect_id, "score": total, "criteria": evidence}
+
+
+def rank_prospects(db: sqlite3.Connection) -> list[dict]:
+    """Rank scored, open prospects and retain their independent outreach gates."""
+    rows = db.execute(
+        """SELECT p.*, s.score, s.evidence_json FROM prospects p JOIN prospect_scores s ON s.prospect_id=p.id
+           WHERE p.suppression_reference IS NULL AND p.stage IN ('researched','qualified')
+           ORDER BY s.score DESC, p.id"""
+    )
+    return [_scored_record(row) for row in rows]
+
+
+def _scored_record(row: sqlite3.Row) -> dict:
+    prospect = _record(row)
+    evidence = prospect.pop("evidence_json")
+    prospect["criteria"] = json.loads(evidence) if evidence is not None else None
+    return prospect
 
 
 def main() -> int:
@@ -158,6 +217,10 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
     commands.add_parser("export")
+    commands.add_parser("rank")
+    score = commands.add_parser("score")
+    score.add_argument("id", type=int)
+    score.add_argument("criteria_json", type=Path)
     create = commands.add_parser("add")
     create.add_argument("organization")
     create.add_argument("source_url")
@@ -181,6 +244,8 @@ def main() -> int:
     handlers = {
         "init": lambda db: {"initialized": True, "path": str(args.db.resolve())},
         "export": export,
+        "rank": rank_prospects,
+        "score": lambda db: score_prospect(db, args.id, json.loads(args.criteria_json.read_text(encoding="utf-8-sig"))),
         "add": lambda db: add(db, args.organization, args.source_url, args.next_action),
         "stage": lambda db: stage(db, args.id, args.stage, args.next_action),
         "contact": lambda db: record_contact(db, args.id, args.contact_url, args.basis),
@@ -191,7 +256,7 @@ def main() -> int:
     try:
         with closing(connect(args.db, initialize=args.command == "init")) as db:
             result = handlers[args.command](db)
-    except (sqlite3.Error, ValueError) as exc:
+    except (OSError, sqlite3.Error, ValueError) as exc:
         parser.exit(2, json.dumps({"error": str(exc)}) + "\n")
     print(json.dumps(result, indent=2))
     return 0

@@ -16,6 +16,25 @@ The gate requires qualification, a public contact page, a recorded contact basis
 
 Use an environment with appropriate local access controls before handling business records. Keep the SQLite file, its backups and JSON exports out of source control. Store only the references needed to document approval, basis and suppression. No real contacts are bundled.
 
+### Evidence-based prospect ranking
+
+Use the same five criteria as the agency preparation report. Record 0, 1 or 2 points for each criterion. A positive score needs a source reference or a dated reviewer note. Use 0 and null if evidence is unavailable. Rescore when the evidence changes.
+
+    {
+      "repeatable_source": {"points": 2, "evidence": "fixture:release schedule"},
+      "offer_fit": {"points": 1, "evidence": "fixture:clip requirements"},
+      "editorial_fit": {"points": 1, "evidence": "fixture:subject fit"},
+      "corporate_route": {"points": 1, "evidence": "fixture:verified contact page"},
+      "editing_gap": {"points": 0, "evidence": null}
+    }
+
+Save the rubric as a local JSON file. Run init once again on an existing agency database to create the scoring table, then run:
+
+    python -m commercial_agency.crm --db ./agency-test.sqlite score 1 ./criteria.json
+    python -m commercial_agency.crm --db ./agency-test.sqlite rank
+
+The ranking includes researched and qualified prospects sorted by decreasing score. It excludes opted-out and closed prospects. The full export preserves suppression and recorded scores. Scores aid prioritisation and do not change anyone’s outreach gate.
+
 ## Synthetic client onboarding and private handoff
 
 Use an existing private scratch folder on a local filesystem. On non-Windows systems the filesystem must support hard links. The following creates only fixture workspaces and handoffs. After onboarding, place a synthetic file named clip.mp4 in the workspace inbox for the example.

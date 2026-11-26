@@ -803,8 +803,10 @@ def register(app, core, page, templates) -> None:
             "SUM(followers_delta) followers, SUM(incidents) incidents FROM metrics GROUP BY 1")}
         money = db.query("SELECT COALESCE(niche_key,'(none)') niche, model, kind, realised, currency, ROUND(SUM(amount),2) total "
                          "FROM commercial_entries GROUP BY 1,2,3,4,5 ORDER BY 1")
-        realised = db.one("SELECT ROUND(SUM(CASE WHEN kind IN ('revenue','sponsor') THEN amount WHEN kind='cost' THEN -amount "
-                          "ELSE 0 END),2) net FROM commercial_entries WHERE realised=1")["net"] or 0
+        realised = db.query(
+            "SELECT currency, ROUND(SUM(CASE WHEN kind='cost' THEN -amount ELSE amount END),2) net "
+            "FROM commercial_entries WHERE realised=1 AND kind IN ('revenue','sponsor','cost') "
+            "GROUP BY currency ORDER BY currency")
         review_h = (db.one("SELECT SUM(review_seconds) s FROM clips")["s"] or 0) / 3600
         failures = db.one("SELECT COUNT(*) n FROM jobs WHERE status='failed' AND updated_at > ?", (time.time() - 30 * 86400,))["n"]
         return page(request, "analytics.html", posts=posts, trends=trends, accounts=accounts, brand=brand,
@@ -816,7 +818,6 @@ def register(app, core, page, templates) -> None:
                     post_links=post_links, post_changes=post_changes, post_totals=post_totals,
                     brands=db.query("SELECT key,name FROM brands ORDER BY name"), by_niche=by_niche, views=views, money=money, realised=realised,
                     review_h=review_h, failures=failures, msg=msg, err=err,
-                    per_hour=(realised / review_h) if review_h > 0.05 else None,
                     niches=db.query("SELECT key, name FROM niches ORDER BY name"),
                     scores=db.query("SELECT s.*, n.name FROM niche_scores s LEFT JOIN niches n ON n.key=s.key ORDER BY overall DESC"),
                     entries=db.query("SELECT * FROM commercial_entries ORDER BY date DESC, id DESC LIMIT 50"))

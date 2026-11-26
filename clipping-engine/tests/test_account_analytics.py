@@ -95,3 +95,22 @@ def test_meta_analytics_callback_is_separate_from_publishing(settings, monkeypat
         response = client.get("/oauth/facebook/callback", params={"state": analytics_params["state"], "code": "fixture"})
         assert response.status_code in (200, 303)
     assert exchanges == [("fixture", settings.meta_analytics_redirect_uri)]
+
+
+def test_commercial_summary_keeps_currencies_and_estimates_separate(settings):
+    app = create_app(settings, start_worker=False)
+    db = app.state.core.db
+    with TestClient(app) as client:
+        empty = client.get("/analytics")
+        assert empty.status_code == 200
+        assert "No realised money recorded." in empty.text
+        for kind, amount, currency, realised in (("revenue", 10, "GBP", 1), ("cost", 2, "GBP", 1),
+                                                  ("sponsor", 5, "USD", 1), ("revenue", 100, "USD", 0),
+                                                  ("affiliate_click", 1_000, "GBP", 1)):
+            db.insert("commercial_entries", kind=kind, amount=amount, currency=currency,
+                      realised=realised, date="2026-11-25")
+        page = client.get("/analytics")
+        assert page.status_code == 200
+        assert "<b>GBP 8.00</b>" in page.text
+        assert "<b>USD 5.00</b>" in page.text
+        assert "<b>USD 105.00</b>" not in page.text
