@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .. import connections as cx
 from .base import PublishError, editorial_gate
+from .instagram_reels import InstagramBinaryUploadError
 
 
 MODES = ("draft", "public")
@@ -111,6 +112,10 @@ def deliver_draft(db, clients: dict, clip_id: int, account_id: int, *, owner_com
                 detail = "Facebook accepted the Reel for publishing. Check the Page for its public visibility."
             else:
                 status, detail = "delivered_draft", "Created as a Facebook Reel DRAFT (not published). Finish it on the Page yourself."
+    except InstagramBinaryUploadError as exc:
+        db.update("publish_attempts", aid, status="failed", detail=str(exc)[:500], stage="binary_upload",
+                  container_id=exc.container_id, updated_at=time.time())
+        raise
     except Exception as e:                                              # noqa: BLE001
         db.update("publish_attempts", aid, status="failed", detail=str(e)[:500], updated_at=time.time())
         raise

@@ -16,12 +16,19 @@ Status: IMPLEMENTED and TESTED-MOCKED only. Never run against Meta. Nothing here
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 import httpx
 
 from .base import PublishError
+
+
+class InstagramBinaryUploadError(PublishError):
+    def __init__(self, message: str, container_id: str):
+        super().__init__(message)
+        self.container_id = container_id
 
 
 class InstagramReelsPublisher:
@@ -72,9 +79,12 @@ class InstagramReelsPublisher:
         # Meta requires the token that created the container for its resumable upload.
         r = self.http.post(target, content=data,
                            headers={"Authorization": f"OAuth {tok}", "offset": "0", "file_size": str(size)})
-        up = self._json(r, "uploading the video")
+        try:
+            up = self._json(r, "uploading the video")
+        except PublishError as exc:
+            raise InstagramBinaryUploadError(str(exc), container) from exc
         if up.get("success") is False:
-            raise PublishError("Instagram did not accept the uploaded video.")
+            raise InstagramBinaryUploadError("Instagram did not accept the uploaded video.", container)
         self._wait_finished(container, tok)
         pub = self._json(self.http.post(f"{self.graph}/{ig_user_id}/media_publish",
                                         data={"creation_id": container, "access_token": tok}), "publishing")
@@ -120,8 +130,12 @@ class InstagramReelsPublisher:
             body = {}
         if r.status_code >= 400 or "error" in body:
             err = (body.get("error") or {}) if isinstance(body, dict) else {}
-            dbg = (body.get("debug_info") or {}) if isinstance(body, dict) else {}       # rupload's error format
+            dbg = body.get("debug_info") if isinstance(body, dict) else None
+            dbg = dbg if isinstance(dbg, dict) else {}
             msg = (err.get("message") if isinstance(err, dict) else str(err)) or dbg.get("message") or ""
+            provider_type = dbg.get("type")
+            if isinstance(provider_type, str) and re.fullmatch(r"[A-Za-z0-9_]{1,64}", provider_type):
+                msg = f"{msg} [{provider_type}]".strip()
             if not msg:
                 msg = (r.text or "")[:300].replace("\n", " ")             # never lose the platform's own reason
             raise PublishError(f"Instagram refused {what}: HTTP {r.status_code} {msg}".strip())

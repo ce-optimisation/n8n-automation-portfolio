@@ -202,3 +202,26 @@ def test_instagram_is_only_a_destination_when_enabled_verified_and_public(settin
     delivery.set_mode(db, acct["id"], "public")
     assert [a["platform"] for a in autodeliver.destinations_for(db, clip)] == ["instagram"]
     assert "instagram" not in autodeliver.manual_platforms(db, clip)
+
+
+def test_delivery_preserves_failed_instagram_container_without_publishing(settings, db):
+    cid, acct = _clip(settings, db), _ig_account(db)
+    delivery.set_mode(db, acct["id"], "public")
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": IG_ID})
+        if request.url.path.endswith("/media"):
+            return httpx.Response(200, json={"id": "CONT9"})
+        assert request.url.host == "rupload.facebook.com"
+        return httpx.Response(400, json={"debug_info": {"type": "ProcessingFailedError",
+                                                      "message": "Request processing failed"}})
+
+    publisher = pub(httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(PublishError, match="ProcessingFailedError"):
+        delivery.deliver_draft(db, {"instagram": publisher}, cid, acct["id"], owner_command=True)
+    row = db.one("SELECT status, stage, container_id, remote_id FROM publish_attempts WHERE clip_id=?", (cid,))
+    assert tuple(row) == ("failed", "binary_upload", "CONT9", None)
+    assert len(calls) == 3 and all(not call.endswith("/media_publish") for call in calls)
