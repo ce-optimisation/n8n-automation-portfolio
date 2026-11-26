@@ -98,7 +98,9 @@ def native_components() -> list[dict]:
 def asset_components(root: Path, models_dir: Path | None) -> list[dict]:
     out = []
     for font in sorted(root.rglob("*.ttf")) + sorted(root.rglob("*.otf")):
-        notice = any((font.parent / n).exists() for n in ("OFL.txt", "LICENSE", "LICENSE.txt"))
+        stem = font.stem.split("-")[0]
+        notice = any((folder / n).exists() for folder in (font.parent, font.parent.parent)
+                     for n in ("OFL.txt", "LICENSE", "LICENSE.txt", f"{stem}-OFL.txt"))
         out.append({"type": "file", "name": font.name, "hashes": [{"alg": "SHA-256", "content": _sha256(font)}],
                     "licenses": [{"license": {"name": "OFL-1.1 (expected)" if "Anton" in font.name else "UNKNOWN"}}],
                     "properties": [{"name": "clipengine:licence_class", "value": "permissive" if "Anton" in font.name else "unknown"},
