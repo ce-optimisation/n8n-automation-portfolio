@@ -437,9 +437,13 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
             return PlainTextResponse("This dashboard has no password, so it only accepts connections addressed "
                                      "to localhost. Set DASHBOARD_PASSWORD in .env to use it from another device.",
                                      status_code=403)
-        if request.method == "POST":
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin") or request.headers.get("referer")
             if origin and urlparse(origin).netloc != request.headers.get("host"):
+                return PlainTextResponse("Cross-origin request refused", status_code=403)
+            # Browsers send Sec-Fetch-Site even when a page suppresses Origin/Referer.
+            if request.headers.get("sec-fetch-site") in ("cross-site", "same-site") and \
+                    not (path.startswith("/oauth/") or path == "/google/oauth/callback"):
                 return PlainTextResponse("Cross-origin request refused", status_code=403)
         if settings.dashboard_password and not (path.startswith("/static") or path in ("/login", "/healthz")
                                                 or path.startswith("/oauth/") or path == "/google/oauth/callback"):
