@@ -314,6 +314,14 @@ def list_channel(settings: Settings, url: str, limit: int = 15) -> list[dict]:
             info = ydl.extract_info(url, download=False)
     except _ListingCapReached:
         info = {"_type": "playlist", "entries": []}
+    except yt_dlp.utils.DownloadError as exc:
+        page = urlparse(url)
+        host = (page.hostname or "").lower()
+        if (host in {"twitch.tv", "www.twitch.tv", "kick.com", "www.kick.com"}
+                and re.fullmatch(r"/[A-Za-z0-9_-]+/?", page.path)
+                and str(exc).strip().lower().endswith(": the channel is not currently live")):
+            return []  # Confirmed offline; keep the normal poll interval.
+        raise
     if info.get("_type") == "playlist" or "entries" in info:
         entries = list(info.get("entries") or [])
         if not entries:

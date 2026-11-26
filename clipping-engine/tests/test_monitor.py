@@ -733,3 +733,24 @@ def test_live_capture_to_verified_cloud_copy_then_safe_raw_deletion(env, sample_
     assert rec2["engine_owned"] == 1 and rec2["file_path"] and Path(rec2["file_path"]).is_file()   # … raw kept
     assert not rec2["raw_deleted_at"]
     assert "cloud_verified" in lc.check_recording(rec2["id"])["reason"]
+
+
+@pytest.mark.parametrize("url,message,offline", [
+    ("https://www.twitch.tv/streamer", "The channel is not currently live", True),
+    ("https://kick.com/streamer/", "The channel is not currently live", True),
+    ("https://www.twitch.tv/videos/123", "The channel is not currently live", False),
+    ("https://example.test/streamer", "The channel is not currently live", False),
+    ("https://kick.com/streamer", "HTTP Error 429: Too Many Requests", False),
+])
+def test_channel_listing_distinguishes_confirmed_offline_from_errors(settings, monkeypatch, url, message, offline):
+    import yt_dlp
+
+    def fail(*_args, **_kwargs):
+        raise yt_dlp.utils.DownloadError(f"ERROR: [extractor] streamer: {message}")
+
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", fail)
+    if offline:
+        assert monitor.list_channel(settings, url) == []
+    else:
+        with pytest.raises(yt_dlp.utils.DownloadError):
+            monitor.list_channel(settings, url)
