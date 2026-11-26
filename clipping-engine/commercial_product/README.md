@@ -79,3 +79,21 @@ python commercial_product/workspace_preferences.py restore C:/transfer/preferenc
 ```
 
 The bundle contains a fixed selection of global caption and title preferences. It excludes credentials, free-text values, account records, recording history, media, per-brand settings, and the source environment file. The restored database starts with recording and delivery switched off. It contains a preferences table for the engine to initialize on first launch, and the new environment file is a blank configuration template. Configure the new workspace and its connections separately. Use the operator's existing backup process for full operational recovery.
+
+## Local licence verification
+
+`licence.resolve` verifies an Ed25519 signature over the exact bytes of a version 1 JSON snapshot. The trusted publisher key and trusted OpenSSL executable have explicit absolute paths. The issuer keeps the signing key outside the customer installation. The snapshot binds the entitlement to its account and supplies signed Unix-second values for issuance, expiry, and the end of offline grace.
+
+An active licence can use the signed offline allowance for up to three days after expiry. Trials end at expiry. A signed past-due, cancellation, or refund state denies access immediately. The caller supplies a trusted clock and can reject older snapshots using its greatest known issuance timestamp. The standalone verifier does not persist that watermark or obtain revocation updates. An offline device can keep using its last valid active snapshot until it receives a newer state or reaches the allowance deadline.
+
+These policies are staging defaults. Before installer or billing integration, establish a publisher key distribution and rotation process, a verified issuance and renewal service, protected clock and issuance state, and an engine enforcement point. No billing account, payment, webhook, or installation is involved. The Windows tests use a temporary Ed25519 keypair. Set `CLIPENGINE_TEST_OPENSSL` to the tested OpenSSL binary to run them.
+
+## Stripe sandbox webhook verification
+
+`stripe_test_webhook.verify_test_event` checks Stripe's `t` and `v1` signature fields over the untouched request body, accepts signatures during key rotation, and allows five minutes of clock skew. It only accepts authenticated sandbox snapshot events. It performs no network requests or billing changes.
+
+A future billing service should use an isolated Stripe Sandbox destination with its own signing secret and use the endpoint-specific secret for authentication. Only the service should hold the secret. A separate least-privilege sandbox API key is needed if the service reconciles subscription and refund records. For a hosted service, validate with Stripe's SDK, enforce durable event idempotency, and reconcile current provider state because deliveries can repeat or arrive out of order. [Stripe webhook verification and delivery guidance](https://docs.stripe.com/events/manage-webhook-endpoints)
+
+Treat a scheduled end-of-period cancellation as pending while paid access remains active. Reconcile the actual termination before issuing a cancelled snapshot. An invoice payment failure calls for checking current subscription state before assigning the staging `past_due` policy. A refund requires mapping the charge to the correct subscription and paid period. Keep access unchanged for unrelated or partial refunds unless the approved commercial policy says otherwise, and distinguish pending or failed refunds from a confirmed full refund. Refunds and subscription cancellation are separate operations. [Stripe subscription events](https://docs.stripe.com/billing/subscriptions/webhooks)
+
+This verifier changes no entitlement itself. Live billing, a hosted destination, reconciliation and signing service, and end-to-end sandbox delivery require separate integration. The local tests use synthetic signed events only.

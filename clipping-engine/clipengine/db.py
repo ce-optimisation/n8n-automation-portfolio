@@ -382,6 +382,15 @@ CREATE TABLE IF NOT EXISTS campaign_briefs (
     created_at REAL NOT NULL,
     UNIQUE (source_ref, source_sha256)
 );
+CREATE TABLE IF NOT EXISTS campaign_assessments (
+    id INTEGER PRIMARY KEY,
+    brief_id INTEGER NOT NULL REFERENCES campaign_briefs(id),
+    input_sha256 TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    evaluation TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(brief_id,input_sha256)
+);
 CREATE TABLE IF NOT EXISTS campaign_submissions (
     id INTEGER PRIMARY KEY,
     brief_id INTEGER NOT NULL REFERENCES campaign_briefs(id),

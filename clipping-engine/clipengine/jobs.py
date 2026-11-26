@@ -72,7 +72,7 @@ Handler = Callable[[JobContext], None]
 
 # Resource-intensive work: one at a time, held while a live recording is being captured (so the
 # recording never competes with transcription for disk and CPU), and paused by the owner's Pause.
-HEAVY_KINDS = ("download_url", "process_recording", "render_clip")
+HEAVY_KINDS = ("download_url", "process_recording", "render_clip", "campaign_preview")
 PRIORITY_LIVE = 100        # a finished live capture is processed before back-catalogue work
 PRIORITY_DEFAULT = 50
 PRIORITY_BACKFILL = 10

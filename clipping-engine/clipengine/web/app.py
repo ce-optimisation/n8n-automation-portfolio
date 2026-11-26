@@ -1575,7 +1575,7 @@ def create_app(settings: Settings, start_worker: bool = True) -> FastAPI:
 
     from . import campaigns, workspace
     from commercial_agency import web as agency_web
-    campaigns.register(app, core.db, page)
+    campaigns.register(app, core, page)
     agency_web.register(app, settings, page)
     workspace.register(app, core, page, templates)
     return app

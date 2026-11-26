@@ -18,10 +18,30 @@
 <ul>{% for clip in candidates %}<li><a href="/clips/{{ clip.id }}">Clip #{{ clip.id }}</a> · {{ '%.1f'|format(clip.end-clip.start) }} seconds</li>{% else %}<li>No matching reviewable render.</li>{% endfor %}</ul>
 {% endif %}
 <p>Account eligibility and redistribution rights still need evidence. These results do not grant publishing approval.</p>
+{% if preview_candidates %}<form method="post" action="/campaigns/{{ brief.id }}/preview" class="card">
+  <label>Approved clip <select name="clip_id">{% for clip in preview_candidates %}<option value="{{ clip.id }}">#{{ clip.id }}</option>{% endfor %}</select></label>
+  <label>Profile <select name="profile"><option value="vertical_720">Vertical 720p</option><option value="vertical_1080">Vertical 1080p</option></select></label>
+  <label><input type="checkbox" name="captions_on" value="true"> Add captions when the source has none</label>
+  <button type="submit">Queue private preview</button>
+</form>{% endif %}
+{% for preview in previews %}<p>Preview #{{ preview.id }} · clip #{{ preview.clip_id }} · {{ preview.status }}{% if preview.status == 'done' %} · <a href="/campaigns/preview/{{ preview.id }}/video">Play or save preview</a>{% else %} · {{ preview.message }}{% endif %}</p>{% endfor %}
 {% endif %}
 <details><summary>Original wording</summary><pre style="white-space:pre-wrap">{{ brief.original_text }}</pre></details>
 <h3>Versions for this reference</h3>
 <ul>{% for version in versions %}<li><a href="/campaigns/{{ version.id }}">{{ version.source_sha256[:12] }}</a></li>{% endfor %}</ul>
+{% if result.campaign %}<h3>Opportunity assessment</h3>
+{% if assessment %}
+<p>Evidence checks: {{ assessment.eligibility.status|replace('_', ' ') }}.</p>
+<ul>{% for check in assessment.eligibility.checks %}<li>{{ check.name|replace('_', ' ') }} · {{ check.status }}{% if check.evidence %} · {{ check.evidence }}{% endif %}</li>{% endfor %}</ul>
+{% if assessment.profitability_estimate.status == 'scenario_only' %}
+<p>Scenarios in {{ assessment.profitability_estimate.currency }} minor units</p>
+<ul>{% for scenario in assessment.profitability_estimate.scenarios %}<li>{{ scenario.approved_views }} approved views · estimated net contribution {{ scenario.estimated_contribution_minor }}</li>{% endfor %}</ul>
+{% else %}<p>{{ assessment.profitability_estimate.reason }}</p>{% endif %}
+{% endif %}
+<form method="post" action="/campaigns/{{ brief.id }}/assessment" class="card">
+  <label>Structured assessment JSON <textarea name="details" rows="5" required></textarea></label>
+  <button type="submit">Record assessment</button>
+</form>{% endif %}
 <h3>Submission records</h3>
 <p>Record the outcome from the campaign provider. This form sends nothing to the provider.</p>
 <ul>{% for submission in submissions %}<li>#{{ submission.id }} · Clip #{{ submission.clip_id }} · {{ submission.status }} · {{ submission.url }} · {{ submission.evidence }}</li>{% else %}<li>No submission evidence recorded.</li>{% endfor %}</ul>
@@ -45,6 +65,9 @@
 {% else %}
 <h2>Recorded campaign receipts</h2>
 <ul>{% for total in totals %}<li>{{ total.currency }} {{ total.net_minor }} minor units net</li>{% else %}<li>No payments recorded.</li>{% endfor %}</ul>
+{% if outcomes %}<p>Submission outcomes: {% for outcome in outcomes %}{{ outcome.total }} {{ outcome.status }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+{% if attributed %}<table class="jobs"><thead><tr><th>Clip</th><th>Creator</th><th>Brand</th><th>Net received</th></tr></thead>
+<tbody>{% for row in attributed %}<tr><td>#{{ row.clip_id }}</td><td>{{ row.creator }}</td><td>{{ row.brand }}</td><td>{{ row.currency }} {{ row.net_minor }} minor units</td></tr>{% endfor %}</tbody></table>{% endif %}
 <form method="post" action="/campaigns" class="card">
   <label>Source reference <input name="source_ref" required maxlength="500"></label>
   <label>Brief text <textarea name="brief" rows="9" required></textarea></label>
