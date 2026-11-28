@@ -20,7 +20,7 @@
 <header><span><b>Results</b></span><a href="/m">Back to review</a></header>
 {% for r in rows %}
   <div class="card">
-    <b>{{ r.c.title or "Untitled clip" }}</b> <span class="muted">clip {{ r.c.id }}</span>
+    {% with c = r.c %}{% include "_fav.html" %}{% endwith %} <b>{{ r.c.title or "Untitled clip" }}</b> <span class="muted">clip {{ r.c.id }}</span>
     <ul>
       {% for a in r.attempts %}
         <li>{{ a.platform|capitalize }}:

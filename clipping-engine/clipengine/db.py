@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -410,6 +410,24 @@ CREATE TABLE IF NOT EXISTS campaign_receipts (
     fee_minor INTEGER NOT NULL CHECK (fee_minor BETWEEN 0 AND gross_minor),
     recorded_at REAL NOT NULL,
     UNIQUE(currency,reference)
+);
+CREATE TABLE IF NOT EXISTS clip_favourites (
+    clip_id INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+    favourited_at REAL NOT NULL,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    featured INTEGER NOT NULL DEFAULT 0,
+    promo_rights TEXT NOT NULL DEFAULT 'unknown' CHECK (promo_rights IN ('unknown','cleared','not_cleared')),
+    promo_rights_evidence TEXT,
+    portfolio_selected INTEGER NOT NULL DEFAULT 0,
+    collection TEXT,
+    note TEXT
+);
+CREATE TABLE IF NOT EXISTS favourite_events (
+    id INTEGER PRIMARY KEY,
+    clip_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS campaign_costs (
     id INTEGER PRIMARY KEY,

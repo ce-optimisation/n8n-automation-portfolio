@@ -31,7 +31,7 @@
     {% if pubsum %}<p class="pubrow">{% for plat, st in pubsum.items() %}<span class="badge pub-{{ st.status }}" title="{{ st.detail or '' }}">{{ 'TikTok' if plat == 'tiktok' else 'Instagram' }}: {{ st.label }}</span> {% endfor %}</p>{% endif %}
     {% if c.error %}<p class="err">{{ c.error[:300] }}</p>{% endif %}
     <div class="buttons">
-      <form method="post" action="/clips/{{ c.id }}/approve"><button class="btn good">Approve</button></form>
+      {% include "_fav.html" %}<form method="post" action="/clips/{{ c.id }}/approve"><button class="btn good">Approve</button></form>
       <form method="post" action="/clips/{{ c.id }}/reject" hx-on::before-request="const video = this.closest('article').querySelector('video'); if (video) { video.pause(); video.removeAttribute('src'); video.load(); }" hx-post="/clips/{{ c.id }}/reject" hx-target="closest article" hx-swap="outerHTML"><button type="submit" class="btn bad">Reject &amp; delete</button></form>
       <form method="post" action="/clips/{{ c.id }}/regenerate"><button class="btn">Regenerate</button></form>
       {% if c.video_path %}<a class="btn" href="/clips/{{ c.id }}/download">Download MP4</a>{% endif %}

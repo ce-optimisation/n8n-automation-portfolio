@@ -72,7 +72,7 @@
   </div>
   <a class="skip" href="/m?skip={{ (skip ~ ',' ~ c.id) if skip else c.id }}">Skip for now</a>
   <div class="bar">
-    <form method="post" action="/m/{{ c.id }}/reject" hx-on::before-request="const video = this.closest('#review-queue').querySelector('video'); if (video) { video.pause(); video.removeAttribute('src'); video.load(); }" hx-post="/m/{{ c.id }}/reject" hx-target="#review-queue" hx-select="#review-queue" hx-swap="outerHTML"><input type="hidden" name="skip" value="{{ skip }}"><button type="submit" class="no">Reject &amp; delete</button></form>
+    {% include "_fav.html" %}<form method="post" action="/m/{{ c.id }}/reject" hx-on::before-request="const video = this.closest('#review-queue').querySelector('video'); if (video) { video.pause(); video.removeAttribute('src'); video.load(); }" hx-post="/m/{{ c.id }}/reject" hx-target="#review-queue" hx-select="#review-queue" hx-swap="outerHTML"><input type="hidden" name="skip" value="{{ skip }}"><button type="submit" class="no">Reject &amp; delete</button></form>
     <form method="post" action="/m/{{ c.id }}/approve"><input type="hidden" name="skip" value="{{ skip }}"><button class="yes">{% if any_public %}Approve &amp; Publish{% elif dests %}Approve &amp; send{% else %}Approve{% endif %}</button></form>
   </div>
 {% else %}

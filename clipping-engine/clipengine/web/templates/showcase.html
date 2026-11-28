@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Showcase</h1>
+<p class="muted">Favourites are private. Starring a clip never publishes, approves or shares it. Only clips with
+<strong>cleared promotional rights</strong> that you select here can go into the external portfolio, and nothing is
+exported until you build and publish it.</p>
+<form method="get" action="/showcase" class="card">
+<select name="brand"><option value="">All brands</option>{% for b in brands %}<option value="{{ b.key }}" {% if f.brand == b.key %}selected{% endif %}>{{ b.name }}</option>{% endfor %}</select>
+<select name="creator"><option value="">All creators</option>{% for cr in creators %}<option {% if f.creator == cr %}selected{% endif %}>{{ cr }}</option>{% endfor %}</select>
+<select name="rights"><option value="">Any rights status</option>{% for r in ("unknown","cleared","not_cleared") %}<option value="{{ r }}" {% if f.rights == r %}selected{% endif %}>{{ r.replace("_"," ") }}</option>{% endfor %}</select>
+<button type="submit">Filter</button> <a href="/showcase/manifest.json">Export manifest ({{ selected }} selected)</a>
+</form>
+{% for r in rows %}
+<article class="card" id="fav-{{ r.clip_id }}">
+<h3>{% if r.featured %}★ {% endif %}{{ r.title or ("Clip #" ~ r.clip_id) }} <small class="muted">#{{ r.clip_id }} · {{ r.brand or "No brand" }} · {{ r.creator or "Unknown creator" }} · {{ r.duration }}s · {{ r.status }}</small></h3>
+{% if r.local %}<video src="/showcase/{{ r.clip_id }}/media" controls preload="none" playsinline style="max-height:360px"></video>
+<p><a class="btn" href="/showcase/{{ r.clip_id }}/media" download>Download MP4</a></p>
+{% elif r.cloud_id %}<p>Local file removed; a verified Google Drive copy exists.</p>
+<form method="post" action="/showcase/{{ r.clip_id }}/recover"><button class="btn">Recover from Drive (checksum verified)</button></form>
+{% else %}<p class="bad">No local or verified cloud media. This clip cannot be used in the portfolio.</p>{% endif %}
+<form method="post" action="/showcase/{{ r.clip_id }}/rights">
+<label>Promotional-use rights
+<select name="status">{% for s in ("unknown","cleared","not_cleared") %}<option value="{{ s }}" {% if r.promo_rights == s %}selected{% endif %}>{{ s.replace("_"," ") }}</option>{% endfor %}</select></label>
+<input name="evidence" value="{{ r.promo_rights_evidence or "" }}" placeholder="Where is the written permission? (document, email, date)" size="50">
+<button type="submit">Save rights</button></form>
+<form method="post" action="/showcase/{{ r.clip_id }}/select">
+<label><input type="checkbox" name="selected" value="true" {% if r.portfolio_selected %}checked{% endif %} {% if r.promo_rights != "cleared" %}disabled{% endif %}> Include in external portfolio</label>
+<input name="collection" value="{{ r.collection or "" }}" placeholder="Collection (e.g. business-podcasts)">
+<button type="submit" {% if r.promo_rights != "cleared" %}disabled{% endif %}>Save selection</button>
+{% if r.promo_rights != "cleared" %}<small class="muted">Clear promotional rights first.</small>{% endif %}</form>
+<form method="post" action="/showcase/{{ r.clip_id }}/arrange">
+<label>Order <input name="order" type="number" value="{{ r.display_order }}" style="width:5em"></label>
+<label><input type="checkbox" name="featured" value="true" {% if r.featured %}checked{% endif %}> Featured</label>
+<button type="submit">Save order</button></form>
+{% with c = {"id": r.clip_id} %}{% include "_fav.html" %}{% endwith %}
+</article>
+{% else %}
+<p>No favourites yet. Tap ☆ Favourite while reviewing clips on the phone or desktop.</p>
+{% endfor %}
+{% endblock %}
