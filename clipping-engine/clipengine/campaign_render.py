@@ -31,6 +31,12 @@ def create_preview(settings, db, recording, clip, target, profile, captions_on, 
     storage.require_space(settings, duration * storage.CLIP_BYTES_PER_S * 1.3, 'rendering a campaign preview')
     width, height = PROFILES[profile]
     dimensions = media.probe(source)
+    creator = db.one('SELECT brand_key FROM creators WHERE id=?', (recording['creator_id'],)) \
+        if recording['creator_id'] else None
+    brand = creator['brand_key'] if creator else None
+    if captions_on and captions.captions_blocked_by_policy(db, brand):
+        raise PermanentError(f'This campaign asks for captions, but generated captions are off for {brand} by owner '
+                             'policy. Approve a caption exception for this brand (with an accuracy review) first.')
     style = captions.style_for(db, None)
     source_settings = json.loads(recording['settings_json'] or '{}')
     style = replace(style, enabled=captions_on and not source_settings.get('source_has_burned_in_captions', False))

@@ -196,12 +196,42 @@ def set_brand_active_word(db, brand_key: str, enabled: bool) -> None:
     db.set_kv("caption_active_brands", json.dumps(sorted(cur)))
 
 
+# Owner decision, Session 21 (28 Nov 2026): automatically generated captions are not burned into new clips for the
+# owner's six media brands. Transcription, transcript-led selection and titles continue; the caption renderer stays
+# available for customer workspaces and for brands/campaigns the owner approves as an explicit exception.
+OWNER_BRANDS_CAPTIONS_OFF = ("afterlive", "america_first_monitor", "operator_notes", "spec_edit", "dial_study",
+                             "open_floor")
+
+
+def caption_exceptions(db) -> set[str]:
+    """Brands the owner has explicitly approved for burned-in captions (meta key caption_exception_brands)."""
+    raw = db.get_kv("caption_exception_brands")
+    try:
+        return set(json.loads(raw)) if raw else set()
+    except ValueError:
+        return set()
+
+
+def set_caption_exception(db, brand_key: str, allowed: bool) -> None:
+    """Owner-approved exception to the captions-off policy. Only call after explicit owner approval."""
+    cur = caption_exceptions(db)
+    (cur.add if allowed else cur.discard)(brand_key)
+    db.set_kv("caption_exception_brands", json.dumps(sorted(cur)))
+
+
+def captions_blocked_by_policy(db, brand_key: str | None) -> bool:
+    return bool(brand_key) and brand_key in OWNER_BRANDS_CAPTIONS_OFF and brand_key not in caption_exceptions(db)
+
+
 def style_for(db, brand_key: str | None) -> CaptionStyle:
     """The caption style a brand's clips are rendered with: the saved style, switched to active_word for brands
-    the owner has approved it for (America First Monitor by default)."""
+    the owner has approved it for (America First Monitor by default). Owner brands render without generated
+    captions unless the owner approved an exception (see OWNER_BRANDS_CAPTIONS_OFF)."""
     st = load_style(db)
     if brand_key and st.mode == "phrase" and brand_key in _active_brands(db):
         st.mode = "active_word"
+    if captions_blocked_by_policy(db, brand_key):
+        st.enabled = False
     return st
 
 
