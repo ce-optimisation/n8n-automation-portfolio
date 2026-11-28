@@ -50,6 +50,23 @@ def favourite_ids(db) -> set[int]:
     return {r["clip_id"] for r in db.query("SELECT clip_id FROM clip_favourites")}
 
 
+class _FavCache:
+    """One query per page render instead of one per star (the mobile results list showed 15 extra reads).
+    Toggling invalidates immediately; the short TTL only covers changes made outside this process."""
+    TTL = 2.0
+
+    def __init__(self, db):
+        self.db, self.ids, self.at = db, set(), 0.0
+
+    def __call__(self, cid) -> bool:
+        if time.monotonic() - self.at > self.TTL:
+            self.ids, self.at = favourite_ids(self.db), time.monotonic()
+        return cid in self.ids
+
+    def invalidate(self) -> None:
+        self.at = 0.0
+
+
 def portfolio_rows(db, brand: str = "", creator: str = "", rights: str = "") -> list[dict]:
     sql = ("SELECT f.*, c.title, c.status, c.start, c.end, c.video_path, c.recording_id, "
            "cr.name AS creator, cr.brand_key AS brand_key, b.name AS brand, "
@@ -90,7 +107,9 @@ def export_manifest(db) -> dict:
 def register(app, core, page, templates=None) -> None:
     db = core.db
     if templates is not None:
-        templates.env.globals["is_favourite"] = lambda cid: is_favourite(db, cid)
+        cache = _FavCache(db)
+        templates.env.globals["is_favourite"] = cache
+        app.state.favourite_cache = cache
 
     def clip_or_404(cid: int):
         c = db.one("SELECT * FROM clips WHERE id=?", (cid,))
@@ -120,6 +139,8 @@ def register(app, core, page, templates=None) -> None:
                        (cid, time.time(), order))
             _event(db, cid, "favourited")
             on = True
+        if getattr(app.state, "favourite_cache", None):
+            app.state.favourite_cache.invalidate()
         if request.headers.get("HX-Request") == "true":
             return star(cid, on)
         back = request.headers.get("referer") or "/showcase"
